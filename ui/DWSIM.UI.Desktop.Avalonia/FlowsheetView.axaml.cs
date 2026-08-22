@@ -1250,6 +1250,12 @@ public partial class FlowsheetView : UserControl
                                     xmldoc!.Save(tmpfile);
                                     sheet.LoadRGF(tmpfile);
                                     System.IO.File.Delete(tmpfile);
+
+                                    // LoadRGF resets the worksheet ScaleFactor to 1.0 (the
+                                    // Avalonia ReoGrid build hardcodes GetDPI()=96), so a sheet
+                                    // loaded from a saved simulation comes back tiny. Restore the
+                                    // interface scaling factor after every load.
+                                    sheet.ScaleFactor = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
                                 }
                                 catch { }
                             }
