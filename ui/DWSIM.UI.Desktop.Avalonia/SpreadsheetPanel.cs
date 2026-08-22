@@ -50,7 +50,19 @@ public sealed class SpreadsheetPanel
         // screens the worksheet text, row heights and column widths never scale
         // with the rest of the UI. Scale the whole worksheet to match the
         // interface scaling factor instead (UI-layer change, survives upstream).
-        Grid.CurrentWorksheet.ScaleFactor = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
+        // ScaleFactor is per-worksheet, so every worksheet a simulation load or a
+        // user 'Add Sheet' creates must be scaled too.
+        var sf = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
+        foreach (var ws in Grid.Worksheets) ws.ScaleFactor = sf;
+        Grid.WorksheetCreated += (_, e) => e.Worksheet.ScaleFactor = sf;
+        Grid.WorksheetInserted += (_, e) => e.Worksheet.ScaleFactor = sf;
+
+        // DWSIM writes GETPROPVAL/SETPROPVAL formulas with commas; force the
+        // ReoGrid parameter separator to commas regardless of the current locale
+        // (zh-CN uses a comma, but under some European locales ListSeparator is a
+        // semicolon, which would break the DWSIM formulas).
+        FormulaExtension.ParameterSeparator = ",";
+        FormulaExtension.NumberDecimalSeparator = ".";
 
         RegisterCustomFunctions();
 
