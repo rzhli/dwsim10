@@ -81,6 +81,9 @@
     <Style Selector="ContextMenu">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
     </Style>
+    <Style Selector="ToolTip">
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
+    </Style>
 
     <Style Selector="Window">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
