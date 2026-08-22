@@ -1,0 +1,42 @@
+name: Sync fork from upstream
+
+# 自动把上游 DanWBR/dwsim10 的 master 同步到这个 fork。
+#
+# 触发方式：
+#   1. 定时：每小时整点自动运行
+#   2. 手动：Actions 页面 → Sync fork from upstream → Run workflow
+#   3. 需要同步时命令行：gh workflow run sync-fork.yml --repo rzhli/dwsim10
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Merge upstream master into fork master
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # GitHub 官方的 fork 同步端点：把上游(父仓库)master 合并进 fork 的 master。
+          # fast-forward 成功返回 200；若上游改动与 fork 冲突则返回 409，此时需要手动处理。
+          echo "Syncing rzhli/dwsim10 master <- DanWBR/dwsim10 master ..."
+          gh api \
+            --method POST \
+            repos/rzhli/dwsim10/merge-upstream \
+            -f branch=master \
+            --jq '{status: .merge_method, base: .base_sha, head: .head_sha}'
+
+      - name: Report the merge result
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Sync failed. Possible causes:"
+          echo "  - upstream changes conflict with fork-local commits on master"
+          echo "  - API rate limit"
+          echo "Fix conflicts manually, or run the workflow again later."
