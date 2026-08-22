@@ -46,6 +46,12 @@ public sealed class SpreadsheetPanel
         Grid = new ReoGridControl();
         Grid.CurrentWorksheet.Name = "MAIN";
 
+        // The Avalonia ReoGrid build hardcodes GetDPI() = 96, so on HiDPI/Linux
+        // screens the worksheet text, row heights and column widths never scale
+        // with the rest of the UI. Scale the whole worksheet to match the
+        // interface scaling factor instead (UI-layer change, survives upstream).
+        Grid.CurrentWorksheet.ScaleFactor = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
+
         RegisterCustomFunctions();
 
         // Wire up the flowsheet callback so the engine can reach the grid.

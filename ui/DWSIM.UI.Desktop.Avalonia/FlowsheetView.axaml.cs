@@ -252,6 +252,10 @@ public partial class FlowsheetView : UserControl
         MaterialStreamsPanel = new MaterialStreamListPanel();
         LogList = new LogPanel();
         SpreadsheetGrid = new ReoGridControl();
+        // Scale the spreadsheet with the interface scaling factor (the Avalonia ReoGrid
+        // build hardcodes DPI = 96 and never scales on HiDPI/Linux).
+        if (SpreadsheetGrid.CurrentWorksheet != null)
+            SpreadsheetGrid.CurrentWorksheet.ScaleFactor = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
         DynManagerPanel = new DynamicsManagerPanel();
         IntegratorPanel = new DynamicsIntegratorPanel();
         IntegratorPanel.OnIntegratorStep = () => { Canvas.Refresh(); UpdateResultsPanel(); };
