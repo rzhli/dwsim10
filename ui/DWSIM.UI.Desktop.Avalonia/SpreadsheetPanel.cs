@@ -43,6 +43,13 @@ public sealed class SpreadsheetPanel
     public SpreadsheetPanel(IFlowsheet flowsheet)
     {
         _flowsheet = flowsheet;
+
+        // The bottom sheet-tab / scrollbar band is hard-coded at 18 DIPs; scale it with
+        // the interface factor so it keeps pace with scaled fonts and stops clipping the
+        // last worksheet row when Preferences → Scaling is above 100%. Must be set before
+        // the control is constructed (UI-layer setting only, the engine is untouched).
+        unvell.ReoGrid.ReoGridControl.ScrollBarScale = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
+
         Grid = new ReoGridControl();
         Grid.CurrentWorksheet.Name = "MAIN";
 
