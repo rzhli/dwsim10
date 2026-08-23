@@ -43,6 +43,17 @@ public sealed class SpreadsheetPanel
     public SpreadsheetPanel(IFlowsheet flowsheet)
     {
         _flowsheet = flowsheet;
+
+        var sf = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
+
+        // The sheet tab strip is laid out from a fixed 18px height, while its tabs are plain
+        // ContentControls inheriting the themed font size that ApplyUIScaling multiplies. Past ~1.2
+        // the labels outgrow the strip, which clips to its own bounds, and "Sheet1" gets cut off
+        // top and bottom. Scale the strip by the same factor so the labels keep growing with the
+        // rest of the UI. The scroll bars keep their own thickness. Has to be set before the
+        // control is constructed.
+        ReoGridControl.SheetTabScale = sf;
+
         Grid = new ReoGridControl();
         Grid.CurrentWorksheet.Name = "MAIN";
 
@@ -52,7 +63,6 @@ public sealed class SpreadsheetPanel
         // interface scaling factor instead (UI-layer change, survives upstream).
         // ScaleFactor is per-worksheet, so every worksheet a simulation load or a
         // user 'Add Sheet' creates must be scaled too.
-        var sf = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
         foreach (var ws in Grid.Worksheets) ws.ScaleFactor = sf;
         Grid.WorksheetCreated += (_, e) => e.Worksheet.ScaleFactor = sf;
         Grid.WorksheetInserted += (_, e) => e.Worksheet.ScaleFactor = sf;

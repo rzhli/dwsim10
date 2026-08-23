@@ -832,8 +832,8 @@ public partial class FlowsheetView : UserControl
             SimulationName = fs.Options?.SimulationName
                              ?? Path.GetFileNameWithoutExtension(path);
             SetStatus("Ready");
-            _surface.Center((int)(Canvas.Bounds.Width * GlobalSettings.Settings.DpiScale), (int)(Canvas.Bounds.Height * GlobalSettings.Settings.DpiScale));
-            _surface.ZoomAll((int)(Canvas.Bounds.Width * GlobalSettings.Settings.DpiScale), (int)(Canvas.Bounds.Height * GlobalSettings.Settings.DpiScale));
+            _surface.Center(Canvas.DeviceWidth, Canvas.DeviceHeight);
+            _surface.ZoomAll(Canvas.DeviceWidth, Canvas.DeviceHeight);
             Canvas.Refresh();
             UpdateResultsPanel();
             LoadFlowsheetExtensions();
@@ -1149,7 +1149,9 @@ public partial class FlowsheetView : UserControl
         PaintCallback = (surf, _) =>
         {
             SyncSurfaceSize();
-            surface.UpdateSurface(surf);
+            var restoreTheme = FlowsheetObjectIcons.BeginDraw(_flowsheet);
+            try { surface.UpdateSurface(surf); }
+            finally { FlowsheetObjectIcons.EndDraw(_flowsheet, restoreTheme); }
         };
 
         InputPressCallback = (x, y) => surface.InputPress(x, y);
@@ -2160,7 +2162,7 @@ public partial class FlowsheetView : UserControl
     {
         if (_surface != null)
         {
-            _surface.ZoomAll((int)(Canvas.Bounds.Width * GlobalSettings.Settings.DpiScale), (int)(Canvas.Bounds.Height * GlobalSettings.Settings.DpiScale));
+            _surface.ZoomAll(Canvas.DeviceWidth, Canvas.DeviceHeight);
             SetZoom(_surface.Zoom);
         }
         Canvas.Refresh();
