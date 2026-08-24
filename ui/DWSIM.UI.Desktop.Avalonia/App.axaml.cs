@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Avalonia;
@@ -95,6 +95,8 @@ public class App : Application
         Resources["ControlContentThemeFontSize"] = 12.0 * scale;
         Resources["FontSizeNormal"] = 12.0 * scale;
         Resources["FontSizeSmall"] = 11.0 * scale;
+        Resources["FontSizeSectionHeader"] = 15.0 * scale;
+        Resources["FontSizePageTitle"] = 20.0 * scale;
         Resources["TextControlThemeMinHeight"] = 24.0 * scale;
 
         // Controls built in code (object editors, the Objects palette, the integrator panel)

@@ -315,7 +315,7 @@
     </Style>
 
     <Style Selector="TextBlock.welcomeHeader">
-      <Setter Property="FontSize" Value="15" />
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeSectionHeader}" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="TextBlock.welcomeSubtitle">
