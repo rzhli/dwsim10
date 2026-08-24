@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1368,6 +1368,17 @@ public partial class FlowsheetView : UserControl
     {
         if (_spreadsheet == null) return;
 
+        // Standard editing commands. They operate on the current selection like the keyboard
+        // shortcuts do; the clipboard work is ReoGrid's own (see its Clipboard.cs, which the
+        // Avalonia build routes through the platform clipboard without blocking the UI thread).
+        var menuCut = new MenuItem { Header = "Cut\tCtrl+X", Icon = IconHelper.MIcon("✂") }; // scissors
+        var menuCopy = new MenuItem { Header = "Copy\tCtrl+C", Icon = IconHelper.MIcon("\U0001F4CB") }; // clipboard
+        var menuPaste = new MenuItem { Header = "Paste\tCtrl+V", Icon = IconHelper.MIcon("\U0001F4CC") }; // pushpin
+
+        menuCut.Click += (_, _) => _spreadsheet.Grid.CurrentWorksheet.Cut();
+        menuCopy.Click += (_, _) => _spreadsheet.Grid.CurrentWorksheet.Copy();
+        menuPaste.Click += (_, _) => _spreadsheet.Grid.CurrentWorksheet.Paste();
+
         var menuImport = new MenuItem { Header = "Import Data (GETPROPVAL)", Icon = IconHelper.MIcon("⬇") }; // down arrow
         var menuExport = new MenuItem { Header = "Export Data (SETPROPVAL)", Icon = IconHelper.MIcon("⬆") }; // up arrow
 
@@ -1399,10 +1410,16 @@ public partial class FlowsheetView : UserControl
         };
 
         var contextMenu = new ContextMenu();
+        contextMenu.Items.Add(menuCut);
+        contextMenu.Items.Add(menuCopy);
+        contextMenu.Items.Add(menuPaste);
+        contextMenu.Items.Add(new Separator());
         contextMenu.Items.Add(menuImport);
         contextMenu.Items.Add(menuExport);
 
-        _spreadsheet.Grid.ContextMenu = contextMenu;
+        // The grid's right-click path assigns this to the control's ContextMenu (and opens it);
+        // the plain ContextMenu property would be overwritten by that assignment every click.
+        _spreadsheet.Grid.CellsContextMenu = contextMenu;
     }
 
     // -------------------------------------------------------------------------
