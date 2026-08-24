@@ -48,7 +48,12 @@
     <!-- Body: the welcome screen until a simulation is open, then the document tabs -->
     <Grid>
 
-    <Grid Name="WelcomeHost" ColumnDefinitions="380,*" Margin="0">
+    <Grid Name="WelcomeHost" Margin="0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="380" MinWidth="260" MaxWidth="680" />
+        <ColumnDefinition Width="5" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
 
       <!-- Left: "Get Started", the same sections the Windows welcome screen stacks -->
       <ScrollViewer Grid.Column="0"
@@ -115,8 +120,17 @@
         </Border>
       </ScrollViewer>
 
+      <!-- Draggable divider so the user can size the welcome column to taste. The width is
+           remembered in UiPreferences across sessions. -->
+      <GridSplitter Name="WelcomeSplitter" Grid.Column="1"
+                    Width="5"
+                    ResizeDirection="Columns"
+                    ResizeBehavior="PreviousAndNext"
+                    Background="Transparent"
+                    HorizontalAlignment="Stretch" />
+
       <!-- Right: recent files, samples and the FOSSEE flowsheets -->
-      <TabControl Grid.Column="1" TabStripPlacement="Top" Margin="0">
+      <TabControl Grid.Column="2" TabStripPlacement="Top" Margin="0">
 
         <TabItem Header="Recent Files">
           <DockPanel Margin="16">

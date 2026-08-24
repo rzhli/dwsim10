@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
@@ -45,6 +45,21 @@ public partial class MainWindow : Window
 
         InitializeComponent();
         IconHelper.ApplyWindowIcon(this);
+
+        // Welcome screen splitter: restore the saved left-column width and remember it when the
+        // user drags the divider between the two panes.
+        try
+        {
+            var savedWidth = UiPreferences.WelcomeColumnWidth;
+            if (savedWidth > 0)
+                WelcomeHost.ColumnDefinitions[0].Width = new GridLength(savedWidth);
+            WelcomeSplitter.DragCompleted += (_, _) =>
+            {
+                UiPreferences.WelcomeColumnWidth = Math.Round(WelcomeHost.ColumnDefinitions[0].Width.Value);
+                UiPreferences.Save();
+            };
+        }
+        catch { }
 
         InitializeSupport();
 

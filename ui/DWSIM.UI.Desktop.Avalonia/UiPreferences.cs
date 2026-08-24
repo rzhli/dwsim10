@@ -24,18 +24,25 @@ internal static class UiPreferences
     {
         public double HoverTableScale { get; set; } = DefaultHoverTableScale;
         public bool UsePaletteIconsOnCanvas { get; set; } = true;
+        public double WelcomeColumnWidth { get; set; } = DefaultWelcomeColumnWidth;
     }
 
     /// <summary>The engine's own base size, which is what the classic UI shows.</summary>
     public const double DefaultHoverTableScale = 1.0;
 
+    /// <summary>Initial width of the welcome screen's left column, matching the XAML default.</summary>
+    public const double DefaultWelcomeColumnWidth = 380.0;
+
     public static double HoverTableScale { get; set; } = DefaultHoverTableScale;
 
     /// <summary>
-    /// Draws flowsheet blocks with the Objects palette artwork instead of the schematic outline.
-    /// See <see cref="FlowsheetObjectIcons"/>.
+    /// Drawn blocks with the Objects palette artwork instead of the schematic outline. See
+    /// <see cref="FlowsheetObjectIcons"/>.
     /// </summary>
     public static bool UsePaletteIconsOnCanvas { get; set; } = true;
+
+    /// <summary>The user-sized width of the welcome screen's left column.</summary>
+    public static double WelcomeColumnWidth { get; set; } = DefaultWelcomeColumnWidth;
 
     public static void Load()
     {
@@ -46,6 +53,7 @@ internal static class UiPreferences
             if (model == null) return;
             HoverTableScale = Math.Clamp(model.HoverTableScale, 0.5, 4.0);
             UsePaletteIconsOnCanvas = model.UsePaletteIconsOnCanvas;
+            WelcomeColumnWidth = Math.Clamp(model.WelcomeColumnWidth, 260, 680);
         }
         catch { }
     }
@@ -59,6 +67,7 @@ internal static class UiPreferences
             {
                 HoverTableScale = HoverTableScale,
                 UsePaletteIconsOnCanvas = UsePaletteIconsOnCanvas,
+                WelcomeColumnWidth = WelcomeColumnWidth,
             }));
         }
         catch { }
