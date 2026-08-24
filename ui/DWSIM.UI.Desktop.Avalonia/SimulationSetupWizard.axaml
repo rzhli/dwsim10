@@ -25,7 +25,7 @@
     <!-- ===== Header ===== -->
     <Border DockPanel.Dock="Top" Padding="16,10" BorderThickness="0,0,0,1">
       <StackPanel Spacing="2">
-        <TextBlock Name="LblHeaderTitle" Text="Welcome" FontSize="16" FontWeight="Bold" />
+        <TextBlock Name="LblHeaderTitle" Text="Welcome" FontSize="{DynamicResource FontSizeSectionHeader}" FontWeight="Bold" />
         <TextBlock Name="LblHeaderDesc" Text="" FontSize="{DynamicResource FontSizeNormal}" TextWrapping="Wrap" />
       </StackPanel>
     </Border>

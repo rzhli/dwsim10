@@ -16,7 +16,7 @@
     <ScrollViewer>
       <StackPanel Spacing="8">
 
-        <TextBlock Text="Identification" FontWeight="SemiBold" FontSize="13" />
+        <TextBlock Text="Identification" FontWeight="SemiBold" FontSize="{DynamicResource FontSizeNormal}" />
         <Grid ColumnDefinitions="270,*" RowDefinitions="Auto,Auto,Auto,Auto" >
           <TextBlock Grid.Row="0" Text="Name" VerticalAlignment="Center" />
           <TextBox   Grid.Row="0" Grid.Column="1" Name="TbName" />
@@ -30,7 +30,7 @@
 
         <Separator Margin="0,8" />
 
-        <TextBlock Text="Essential Thermodynamic Constants" FontWeight="SemiBold" FontSize="13" />
+        <TextBlock Text="Essential Thermodynamic Constants" FontWeight="SemiBold" FontSize="{DynamicResource FontSizeNormal}" />
         <Grid ColumnDefinitions="270,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Text="Molecular Weight (g/mol)" VerticalAlignment="Center" />
           <TextBox   Grid.Row="0" Grid.Column="1" Name="TbMW" />

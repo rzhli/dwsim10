@@ -17,7 +17,7 @@
 
         <StackPanel Grid.Column="1" Spacing="3">
           <TextBlock Text="DWSIM - Open Source Process Simulation, Modeling and Optimization"
-                     FontWeight="Bold" FontSize="14" TextWrapping="Wrap" />
+                     FontWeight="Bold" FontSize="{DynamicResource FontSizeSectionHeader}" TextWrapping="Wrap" />
           <TextBlock Name="LblVersion" FontSize="{DynamicResource FontSizeNormal}" />
           <TextBlock Name="LblCopyright" FontSize="{DynamicResource FontSizeNormal}" />
 
