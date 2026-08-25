@@ -59,18 +59,27 @@ Namespace GraphicObjects.Shapes
 
             MyBase.Draw(g)
 
-            If Image Is Nothing Then
-                Dim assm = Me.GetType.Assembly
-                Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.control_panel.png")
-                    Using bitmap = SKBitmap.Decode(filestr)
-                        Image = SKImage.FromBitmap(bitmap)
-                    End Using
-                End Using
-            End If
+            If DrawMode = 2 Then
 
-            Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
-                canvas.DrawImage(Image, New SKRect(X, Y, X + Width, Y + Height), p)
-            End Using
+                If Image Is Nothing Then
+                    Dim assm = Me.GetType.Assembly
+                    Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.control_panel.png")
+                        Using bitmap = SKBitmap.Decode(filestr)
+                            Image = SKImage.FromBitmap(bitmap)
+                        End Using
+                    End Using
+                End If
+
+                Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
+                    canvas.DrawImage(Image, New SKRect(X, Y, X + Width, Y + Height), p)
+                End Using
+
+            Else
+
+                LogicalSymbolDrawHelper.DrawBubble(canvas, X, Y, Width, Height, "MPC",
+                    If(GlobalSettings.Settings.DarkMode, LineColorDark, LineColor), GetForeColor())
+
+            End If
 
             Dim f = Height / 50.0
 
@@ -86,7 +95,7 @@ Namespace GraphicObjects.Shapes
                 canvas.DrawText("MPC", X + Width + 3 * f, Y + Height * 0.8, paint)
             End Using
 
-            If Not Owner?.Active Then
+            If Not Owner?.Active AndAlso Image IsNot Nothing Then
                 Using p As New SKPaint() With {.FilterQuality = SKFilterQuality.High}
                     p.BlendMode = SKBlendMode.Color
                     p.ColorFilter = SKColorFilter.CreateBlendMode(SKColors.Gray, SKBlendMode.SrcIn)

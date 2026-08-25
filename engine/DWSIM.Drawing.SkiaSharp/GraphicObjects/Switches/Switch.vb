@@ -1,4 +1,4 @@
-﻿Imports Interfaces = DWSIM.Interfaces
+Imports Interfaces = DWSIM.Interfaces
 Imports DWSIM.Interfaces
 Imports DWSIM.Interfaces.Enums.GraphicObjects
 Imports DWSIM.DrawingTools.Point
@@ -70,39 +70,51 @@ Namespace GraphicObjects
                 End Using
             End If
 
-            If owneri.IsOn Then
+            If DrawMode = 2 Then
 
-                If ImageOn Is Nothing Then
+                If owneri.IsOn Then
 
-                    Dim assm = Me.GetType.Assembly
-                    Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.switch_on.png")
-                        Using bitmap = SKBitmap.Decode(filestr)
-                            ImageOn = SKImage.FromBitmap(bitmap)
+                    If ImageOn Is Nothing Then
+
+                        Dim assm = Me.GetType.Assembly
+                        Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.switch_on.png")
+                            Using bitmap = SKBitmap.Decode(filestr)
+                                ImageOn = SKImage.FromBitmap(bitmap)
+                            End Using
                         End Using
+
+                    End If
+
+                    Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
+                        canvas.DrawImage(ImageOn, New SKRect(X, Y, X + Width, Y + Height), p)
+                    End Using
+
+                Else
+
+                    If ImageOff Is Nothing Then
+
+                        Dim assm = Me.GetType.Assembly
+                        Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.switch_off.png")
+                            Using bitmap = SKBitmap.Decode(filestr)
+                                ImageOff = SKImage.FromBitmap(bitmap)
+                            End Using
+                        End Using
+
+                    End If
+
+                    Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
+                        canvas.DrawImage(ImageOff, New SKRect(X, Y, X + Width, Y + Height), p)
                     End Using
 
                 End If
-
-                Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
-                    canvas.DrawImage(ImageOn, New SKRect(X, Y, X + Width, Y + Height), p)
-                End Using
 
             Else
 
-                If ImageOff Is Nothing Then
-
-                    Dim assm = Me.GetType.Assembly
-                    Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.switch_off.png")
-                        Using bitmap = SKBitmap.Decode(filestr)
-                            ImageOff = SKImage.FromBitmap(bitmap)
-                        End Using
-                    End Using
-
-                End If
-
-                Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
-                    canvas.DrawImage(ImageOff, New SKRect(X, Y, X + Width, Y + Height), p)
-                End Using
+                ' plain instrument bubble outside the photorealistic theme; a dashed
+                ' outline marks the switch as off
+                LogicalSymbolDrawHelper.DrawBubble(canvas, X, Y, Width, Height, "SW",
+                    If(GlobalSettings.Settings.DarkMode, LineColorDark, LineColor), GetForeColor(),
+                    dashed:=Not owneri.IsOn)
 
             End If
 
