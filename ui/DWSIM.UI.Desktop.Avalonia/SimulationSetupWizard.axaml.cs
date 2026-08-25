@@ -328,16 +328,22 @@ public partial class SimulationSetupWizard : Window
             HeadersVisibility = DataGridHeadersVisibility.Column,
             GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
             CanUserSortColumns = true,
+            CanUserResizeColumns = true,
             SelectionMode = DataGridSelectionMode.Single
         };
         _compoundGrid = grid;
+
+        // fixed-width columns are scaled with the UI factor; star columns keep the extra room and
+        // a minimum so they stay readable after the user drags a divider
+        var sz = DWSIM.UI.Shared.Avalonia.UiScale.Size;
 
         // a checkbox column of the grid only reacts once the cell is in edit mode, which costs
         // two clicks and reads as broken; a checkbox in the cell itself takes the first one
         grid.Columns.Add(new DataGridTemplateColumn
         {
             Header = "Added",
-            Width = new DataGridLength(70),
+            Width = new DataGridLength(sz(46)),
+            MinWidth = sz(40),
             CellTemplate = new FuncDataTemplate<CompoundRow>((row, _) =>
             {
                 if (row == null) return new TextBlock();
@@ -352,28 +358,32 @@ public partial class SimulationSetupWizard : Window
             Header = "Name",
             Binding = new Binding("Name"),
             IsReadOnly = true,
-            Width = new DataGridLength(2.2, DataGridLengthUnitType.Star)
+            Width = new DataGridLength(2.2, DataGridLengthUnitType.Star),
+            MinWidth = sz(120)
         });
         grid.Columns.Add(new DataGridTextColumn
         {
             Header = "CAS Number",
             Binding = new Binding("CAS"),
             IsReadOnly = true,
-            Width = new DataGridLength(110)
+            Width = new DataGridLength(sz(130)),
+            MinWidth = sz(90)
         });
         grid.Columns.Add(new DataGridTextColumn
         {
             Header = "Formula",
             Binding = new Binding("Formula"),
             IsReadOnly = true,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            Width = new DataGridLength(1.6, DataGridLengthUnitType.Star),
+            MinWidth = sz(150)
         });
         grid.Columns.Add(new DataGridTextColumn
         {
             Header = "Database",
             Binding = new Binding("Database"),
             IsReadOnly = true,
-            Width = new DataGridLength(100)
+            Width = new DataGridLength(sz(140)),
+            MinWidth = sz(90)
         });
 
         host.Children.Add(grid);
@@ -518,6 +528,7 @@ public partial class SimulationSetupWizard : Window
             HeadersVisibility = DataGridHeadersVisibility.Column,
             GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
             CanUserSortColumns = false,
+            CanUserResizeColumns = true,
             IsReadOnly = true,
             SelectionMode = DataGridSelectionMode.Single,
 
