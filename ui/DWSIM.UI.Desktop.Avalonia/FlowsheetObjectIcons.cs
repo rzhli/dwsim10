@@ -71,7 +71,10 @@ internal static class FlowsheetObjectIcons
 
     /// <summary>
     /// The private SKImage cache each external unit operation passes ByRef to
-    /// BioOpsDrawHelper.TryDrawPhotorealistic, looked up once per concrete type.
+    /// BioOpsDrawHelper.TryDrawPhotorealistic, looked up once per concrete type. The
+    /// biochemical blocks name it "_photoImage"; the Clean Power classes (wind turbine,
+    /// solar panel, ...) name theirs "Image". The field-type check keeps the generic
+    /// "Image" name from matching anything that is not the cached artwork.
     /// </summary>
     private static readonly Dictionary<Type, FieldInfo?> _externalPhotoFields = new();
 
@@ -83,7 +86,13 @@ internal static class FlowsheetObjectIcons
 
             FieldInfo? found = null;
             for (var t = type; t != null && found == null; t = t.BaseType)
-                found = t.GetField("_photoImage", BindingFlags.NonPublic | BindingFlags.Instance);
+            {
+                foreach (var name in new[] { "_photoImage", "Image" })
+                {
+                    var f = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (f?.FieldType == typeof(SKImage)) { found = f; break; }
+                }
+            }
 
             _externalPhotoFields[type] = found;
             return found;
