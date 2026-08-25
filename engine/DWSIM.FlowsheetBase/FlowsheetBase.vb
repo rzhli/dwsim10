@@ -1943,7 +1943,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.ShortcutColumn
 
-                Dim mySC As New ShortcutColumnGraphic(mpx, mpy, 72, 90)
+                Dim mySC As New ShortcutColumnGraphic(mpx, mpy, 56, 70)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "SCOL-" + objindex
@@ -1959,7 +1959,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.DistillationColumn
 
-                Dim mySC As New RigorousColumnGraphic(mpx, mpy, 72, 90)
+                Dim mySC As New RigorousColumnGraphic(mpx, mpy, 56, 70)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "DCOL-" + objindex
@@ -1976,7 +1976,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.AbsorptionColumn
 
-                Dim mySC As New AbsorptionColumnGraphic(mpx, mpy, 72, 90)
+                Dim mySC As New AbsorptionColumnGraphic(mpx, mpy, 56, 70)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "ABS-" + objindex
