@@ -69,6 +69,35 @@ internal static class FlowsheetObjectIcons
     private static bool IsExternal(Interfaces.Enums.GraphicObjects.ObjectType type) =>
         type == Interfaces.Enums.GraphicObjects.ObjectType.External;
 
+    private static readonly Dictionary<Type, FieldInfo?> _graphicArtworkFields = new();
+
+    /// <summary>
+    /// True when the graphic class itself holds the artwork it paints (a private SKImage cache
+    /// named <c>Image</c>, <c>ImageOn</c>/<c>ImageOff</c> or <c>_photoImage</c>). Those graphics -
+    /// the PID/MPC/Python controllers and the switches - paint more than a body in their Draw
+    /// (leader lines, live readouts, state images), so the canvas override must leave them alone.
+    /// </summary>
+    private static bool GraphicHasOwnArtwork(Type type)
+    {
+        lock (_graphicArtworkFields)
+        {
+            if (_graphicArtworkFields.TryGetValue(type, out var cached)) return cached != null;
+
+            FieldInfo? found = null;
+            for (var t = type; t != null && found == null; t = t.BaseType)
+            {
+                foreach (var name in new[] { "Image", "ImageOn", "ImageOff", "_photoImage" })
+                {
+                    var f = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (f?.FieldType == typeof(SKImage)) { found = f; break; }
+                }
+            }
+
+            _graphicArtworkFields[type] = found;
+            return found != null;
+        }
+    }
+
     /// <summary>
     /// The private SKImage cache each external unit operation passes ByRef to
     /// BioOpsDrawHelper.TryDrawPhotorealistic, looked up once per concrete type. The
@@ -203,6 +232,19 @@ internal static class FlowsheetObjectIcons
         if (IsExcluded(gobj.ObjectType)) return false;
 
         var state = _state.TryGetValue(gobj, out var s) ? s : null;
+
+        // Let the graphics that render their own artwork and overlays natively keep doing so:
+        // the controllers draw the control-panel plus the dashed leader lines and the SP/PV/MV
+        // readout, the switches draw their on/off state images and the inputs their editable
+        // value box - an icon blit would bury those, which is exactly why the controller's
+        // dashed connections vanished when this override was installed.
+        if (gobj.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.Input) return false;
+        if (GraphicHasOwnArtwork(gobj.GetType())) return false;
+
+        // ShapeGraphics with an embedded photo already get the right artwork swapped in by the
+        // BeginDraw pass and render it through DrawPhoto; drawing over them would double up.
+        if (state?.OriginalPhotoName is { Length: > 0 }) return false;
+
         var icon = state?.PaletteIcon;
         if (icon == null)
         {

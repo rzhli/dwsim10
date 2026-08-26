@@ -1482,7 +1482,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.LevelGauge
 
-                Dim myGobj As New LevelGaugeGraphic(mpx, mpy, 40, 70)
+                Dim myGobj As New LevelGaugeGraphic(mpx, mpy, 50, 70)
                 myGobj.Tag = "LG-" + objindex
                 If tag <> "" Then myGobj.Tag = tag
                 gObj = myGobj
@@ -1524,7 +1524,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Adjust
 
-                Dim myNode As New AdjustGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New AdjustGraphic(mpx, mpy, 50, 63)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "C-" + objindex
@@ -1540,7 +1540,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Spec
 
-                Dim myNode As New SpecGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New SpecGraphic(mpx, mpy, 50, 63)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "SP-" + objindex
@@ -1572,7 +1572,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Recycle
 
-                Dim myNode As New RecycleGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New RecycleGraphic(mpx, mpy, 50, 63)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "R-" + objindex
@@ -1588,7 +1588,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_EnergyRecycle
 
-                Dim myNode As New EnergyRecycleGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New EnergyRecycleGraphic(mpx, mpy, 50, 63)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "ER-" + objindex
