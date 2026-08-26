@@ -1441,15 +1441,11 @@ public partial class FlowsheetView : UserControl
             Dispatcher.UIThread.Post(() => LogList.Add(message, type, exceptionId));
     }
 
-    public void SetStatus(string text)
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-            StatusLabel.Text = text;
-        else
-            Dispatcher.UIThread.Post(() => StatusLabel.Text = text);
-    }
+    // The bottom status bar (Ready / Zoom) was removed to give the canvas more room; these remain as
+    // no-ops so callers (zoom, status updates) do not have to change. Zoom is on the view toolbar.
+    public void SetStatus(string text) { }
 
-    public void SetZoom(float zoom) => ZoomLabel.Text = $"Zoom: {zoom * 100:F0}%";
+    public void SetZoom(float zoom) { }
 
     // -------------------------------------------------------------------------
     // Menu icons
@@ -2892,19 +2888,31 @@ public partial class FlowsheetView : UserControl
 
                 var displayName = obj.GetDisplayName();
                 var category = ObjectClassToCategory(obj.ObjectClass);
-                // External unit operations (bio, refining, premium) reuse generic ObjectClass
-                // values (Reactors, Exchangers, Logical...). The classic palette
-                // (SimulationObjectsPanel) reroutes them to their own sections via the
-                // IsPremium/IsRefining/IsBio reflection flags; mirror that here so the
-                // Premium, Refining and Biochemical tabs appear.
-                try
+
+                // A third-party unit operation (loaded from unitops\, neither open nor Plus) is
+                // grouped under its own ProductName, or a shared "Third-Party" section when it
+                // does not override one. Otherwise fall through to the normal grouping below.
+                var thirdParty = DWSIM.SharedClasses.Utility.GetThirdPartyPaletteGroup(obj);
+                if (thirdParty.IsThirdParty)
                 {
-                    var t = obj.GetType();
-                    if (t.GetProperty("IsPremium")?.GetValue(obj) is bool p && p) category = "Premium";
-                    if (t.GetProperty("IsRefining")?.GetValue(obj) is bool r && r) category = "Refining";
-                    if (t.GetProperty("IsBio")?.GetValue(obj) is bool b && b) category = "Biochemical";
+                    category = string.IsNullOrEmpty(thirdParty.GroupName) ? "Third-Party" : thirdParty.GroupName;
                 }
-                catch { }
+                else
+                {
+                    // External unit operations (bio, refining, premium) reuse generic ObjectClass
+                    // values (Reactors, Exchangers, Logical...). The classic palette
+                    // (SimulationObjectsPanel) reroutes them to their own sections via the
+                    // IsPremium/IsRefining/IsBio reflection flags; mirror that here so the
+                    // Premium, Refining and Biochemical tabs appear.
+                    try
+                    {
+                        var t = obj.GetType();
+                        if (t.GetProperty("IsPremium")?.GetValue(obj) is bool p && p) category = "Premium";
+                        if (t.GetProperty("IsRefining")?.GetValue(obj) is bool r && r) category = "Refining";
+                        if (t.GetProperty("IsBio")?.GetValue(obj) is bool b && b) category = "Biochemical";
+                    }
+                    catch { }
+                }
                 byte[]? iconBytes = null;
                 try { iconBytes = obj.GetIconBitmapBytes(); } catch { }
                 string? tip = null;
@@ -2925,9 +2933,13 @@ public partial class FlowsheetView : UserControl
             }
         }
 
-        // Build collapsible sections for each category, in the classic palette order
+        // Build collapsible sections for each category, in the classic palette order, with any
+        // third-party product groups appended after the built-ins (alphabetical) and the shared
+        // "Third-Party" catch-all last.
+        var extras = _paletteCategories.Keys.Where(k => !CategoryOrder.Contains(k)).ToList();
         var orderedCats = CategoryOrder.Where(_paletteCategories.ContainsKey)
-            .Concat(_paletteCategories.Keys.Where(k => !CategoryOrder.Contains(k)));
+            .Concat(extras.Where(k => k != "Third-Party").OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase))
+            .Concat(extras.Where(k => k == "Third-Party"));
         foreach (var cat in orderedCats)
         {
             var items = _paletteCategories[cat];

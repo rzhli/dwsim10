@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -27,7 +27,6 @@
     <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
     <PackageReference Include="Dock.Model.Avalonia" />
     <PackageReference Include="Dock.Serializer.Newtonsoft" />
-    <PackageReference Include="Flee" />
     <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="SkiaSharp" />
   </ItemGroup>
@@ -44,6 +43,7 @@
   <ItemGroup>
     <ProjectReference Include="..\DWSIM.UI.Desktop.Editors.Avalonia\DWSIM.UI.Desktop.Editors.Avalonia.csproj" />
     <ProjectReference Include="..\DWSIM.UI.Shared.Avalonia\DWSIM.UI.Shared.Avalonia.csproj" />
+    <ProjectReference Include="..\..\engine\DWSIM.Automation.DynamicRunner\DWSIM.Automation.DynamicRunner.csproj" />
     <ProjectReference Include="..\..\engine\DWSIM.Drawing.SkiaSharp\DWSIM.Drawing.SkiaSharp.vbproj" />
     <ProjectReference Include="..\..\engine\DWSIM.DynamicsManager\DWSIM.DynamicsManager.vbproj" />
     <ProjectReference Include="..\..\engine\DWSIM.ExtensionMethods\DWSIM.ExtensionMethods.vbproj" />

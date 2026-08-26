@@ -506,11 +506,26 @@ Namespace Reactors
             st.C_xc = a / (32.0 * O2mol)
             st.N_xc = d / (32.0 * O2mol)
 
+            ' The inerts cannot carry nitrogen the composite never had. N_I keeps the ADM1 default
+            ' while the composite is derived from the substrate's own formula, so a nitrogen-free
+            ' substrate - glucose is the obvious one - left the inerts holding 0.3 * N_I of it. The
+            ' protein fraction below is then clamped at zero, nDis comes out NEGATIVE, and every
+            ' disintegration destroys ammonia the feed has to keep replacing. On the validation
+            ' digester that sink was 2.8e-3 kmol N/m³/d against 3.1e-3 fed: S_IN settled at 3e-4
+            ' instead of 0.07, the acetoclastic methanogens and the amino-acid degraders starved out
+            ' while the sugar fermenters kept going, and the reactor soured to pH 4 with acetate at
+            ' 6 kg COD/m³. Cap N_I at what the composite can actually supply.
+            ' Recomputed from the default rather than from whatever the last substrate left behind,
+            ' so switching back to a nitrogen-rich one restores the Batstone value.
+            Dim inertShare = st.f_sI_xc + st.f_xI_xc
+            st.N_I = ADM1.StoichiometryParams.N_I_Default
+            If inertShare > 0.0 Then st.N_I = Min(st.N_I, st.N_xc / inertShare)
+
             ' All composite nitrogen not held by the soluble/particulate inerts goes into the protein
             ' fraction, so nDis = N_xc - (f_sI+f_xI)*N_I - f_pr*N_aa is zero and the disintegration adds
             ' no spurious ammonia term. The COD freed from the default protein fraction becomes
             ' carbohydrate; the lipid and inert fractions are left untouched.
-            Dim inertN = (st.f_sI_xc + st.f_xI_xc) * st.N_I
+            Dim inertN = inertShare * st.N_I
             Dim fPr = (st.N_xc - inertN) / Max(st.N_aa, 1.0E-30)
             fPr = Max(0.0, Min(fPr, 1.0 - st.f_sI_xc - st.f_xI_xc - st.f_li_xc))
             st.f_pr_xc = fPr
@@ -974,6 +989,39 @@ Namespace Reactors
         ''' with step size tau/NSTEP and NSTEP = 20000 to remain stable in presence of
         ''' fast H2 dynamics. All state fluxes are COD-balanced (g COD/L).
         ''' </summary>
+        ''' <summary>
+        ''' The residence time the reactor actually runs at (s), reported back into <see cref="HRT_s"/>.
+        ''' </summary>
+        ''' <remarks>
+        ''' A CSTR's residence time is V/Q, so a separately entered HRT is a third number against two
+        ''' degrees of freedom and cannot be honoured while both a volume and a feed flow are known -
+        ''' it is used only when there is no pair to derive tau from. ADM1-Lite has always said so.
+        ''' ADM1-Full and ADM1-S took Q from the feed stream and V from the Volume property and never
+        ''' looked at HRT at all, so setting it there changed nothing and said nothing: a sweep of
+        ''' 25, 40, 60 and 90 days over the validation digester returned identical results.
+        ''' </remarks>
+        Private Function ResolveResidenceTime(Q_liquid_m3s As Double) As Double
+
+            Dim tau_s As Double
+
+            If Volume > 0 AndAlso Q_liquid_m3s > 0 Then
+                tau_s = Volume / Q_liquid_m3s
+                If HRT_s > 0 AndAlso Abs(tau_s - HRT_s) / Max(tau_s, 1.0) > 0.05 Then
+                    FlowSheet?.ShowMessage(String.Format(
+                        "AnaerobicDigester '{0}': HRT ({1:F1} d) differs from V/Q ({2:F1} d) by >{3}%. Using V/Q for CSTR consistency.",
+                        Me.GraphicObject.Tag, HRT_s / 86400.0, tau_s / 86400.0, 5), IFlowsheet.MessageType.Warning)
+                End If
+            ElseIf HRT_s > 0 Then
+                tau_s = HRT_s
+            Else
+                tau_s = 86400.0 * 20.0
+            End If
+
+            HRT_s = tau_s
+            Return tau_s
+
+        End Function
+
         Private Sub CalculateADM1Lite()
 
             If String.IsNullOrEmpty(SubstrateCompound) Then
@@ -1060,21 +1108,7 @@ Namespace Reactors
             S_s_feed -= codDebit
 
             ' Retention time (s) - for CSTR consistency, tau must equal V/Q.
-            ' If user specified both Volume and HRT, use V/Q and warn if they differ.
-            Dim tau_s As Double
-            If Volume > 0 AndAlso Q_liquid > 0 Then
-                tau_s = Volume / Q_liquid
-                If HRT_s > 0 AndAlso Abs(tau_s - HRT_s) / Max(tau_s, 1.0) > 0.05 Then
-                    FlowSheet.ShowMessage(String.Format(
-                        "AnaerobicDigester '{0}': HRT ({1:F1} d) differs from V/Q ({2:F1} d) by >{3}%. Using V/Q for CSTR consistency.",
-                        Me.GraphicObject.Tag, HRT_s / 86400.0, tau_s / 86400.0, 5), IFlowsheet.MessageType.Warning)
-                End If
-            ElseIf HRT_s > 0 Then
-                tau_s = HRT_s
-            Else
-                tau_s = 86400.0 * 20.0
-            End If
-            HRT_s = tau_s
+            Dim tau_s As Double = ResolveResidenceTime(Q_liquid)
             Dim tau_d = tau_s / 86400.0 ' days, since ADM1 kinetic constants are in 1/d
 
             ' Convert per-day kinetic constants to per-second
@@ -1581,6 +1615,10 @@ Namespace Reactors
 
             ' Use ADM1Params.Operating.V_liq as reactor volume if it matches DWSIM Volume; otherwise override
             If Volume > 0.0 Then op.V_liq = Volume
+
+            ' The integrator takes its dilution rate from op.Q_in / op.V_liq, so this changes nothing it
+            ' solves - it reports the residence time and warns when the HRT that was entered disagrees.
+            ResolveResidenceTime(Q_liquid_m3s)
 
             ' Integrate
             Dim ic = ADM1Params.InitialConditions
