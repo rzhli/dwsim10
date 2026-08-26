@@ -5411,7 +5411,9 @@ Label_00CC:
 
                     Try
                         Options.LoadData(data)
-                        Options.EnabledUndoRedo = False
+                        'keep undo/redo available after loading a file; the saved settings may
+                        'not carry the flag, and this UI expects the snapshot stack to work
+                        Options.EnabledUndoRedo = True
                     Catch ex As Exception
                         excs.Add(New Exception("Error Loading Flowsheet Settings", ex))
                     End Try
@@ -5907,6 +5909,80 @@ Label_00CC:
 
     End Sub
 
+    ''' <summary>
+    ''' Snapshot restore rebuilds the object dictionaries only. The drawing surface keeps its own
+    ''' object list (plus the connector graphics, which live nowhere else), so after an undo/redo
+    ''' the restored flowsheet would stay invisible. This mirrors the surface back into step with
+    ''' the dictionaries: drops deleted objects, re-adds restored ones and recreates the connection
+    ''' lines from the restored port attachment data - the same job AddGraphicObjects does for a
+    ''' file load.
+    ''' </summary>
+    Private Sub RebuildFlowsheetSurfaceFromObjects()
+
+        Try
+            Dim onsurface = FlowsheetSurface.DrawingObjects.ToDictionary(Function(o) o.Name, Function(o) o)
+
+            ' 1. surface objects that are no longer in the flowsheet (a redone removal)
+            For Each go As IGraphicObject In onsurface.Values.ToList()
+                If go.IsConnector Then Continue For
+                If Not GraphicObjects.ContainsKey(go.Name) Then
+                    FlowsheetSurface.DrawingObjects.Remove(go)
+                End If
+            Next
+
+            ' 2. restored objects missing from the surface (an undone removal)
+            For Each go As IGraphicObject In GraphicObjects.Values.ToList()
+                If Not onsurface.ContainsKey(go.Name) Then
+                    FlowsheetSurface.DrawingObjects.Add(go)
+                End If
+            Next
+
+            Dim onsurf2 = FlowsheetSurface.DrawingObjects.ToDictionary(Function(o) o.Name, Function(o) o)
+
+            ' 3. recreate the connection lines between restored ports
+            For Each go As IGraphicObject In onsurf2.Values.ToList()
+                If go.IsConnector Then Continue For
+
+                For Each cp In go.InputConnectors
+                    Try
+                        If Not cp.IsAttached Then Continue For
+                        Dim parts = cp.ConnectorName.Split("|"c)
+                        If parts.Length < 2 Then Continue For
+                        Dim src As IGraphicObject = Nothing
+                        If Not onsurf2.TryGetValue(parts(0), src) Then Continue For
+                        Dim idx As Integer = CInt(parts(1))
+                        If idx < 0 OrElse idx >= src.OutputConnectors.Count Then Continue For
+                        Dim sp = src.OutputConnectors(idx)
+                        If sp.IsAttached AndAlso sp.AttachedConnector IsNot Nothing AndAlso
+                           sp.AttachedConnector.AttachedTo Is go Then Continue For ' line already drawn
+                        FlowsheetSurface.ConnectObject(CType(src, GraphicObject), CType(go, GraphicObject), idx, go.InputConnectors.IndexOf(cp))
+                    Catch ex As Exception
+                    End Try
+                Next
+
+                Try
+                    Dim ec = go.EnergyConnector
+                    If ec IsNot Nothing AndAlso ec.IsAttached AndAlso ec.AttachedTo IsNot Nothing Then
+                        Dim tid = ec.AttachedTo.Name
+                        Dim tgt As IGraphicObject = Nothing
+                        If onsurf2.TryGetValue(tid, tgt) Then
+                            Dim sp = go.OutputConnectors(go.OutputConnectors.Count - 1)
+                            If Not (sp.IsAttached AndAlso sp.AttachedConnector IsNot Nothing AndAlso
+                                    sp.AttachedConnector.AttachedTo Is tgt) Then
+                                FlowsheetSurface.ConnectObject(CType(go, GraphicObject), CType(tgt, GraphicObject), -1, 0)
+                            End If
+                        End If
+                    End If
+                Catch ex As Exception
+                End Try
+            Next
+
+            FlowsheetSurface.SelectedObject = Nothing
+        Catch ex As Exception
+        End Try
+
+    End Sub
+
     Public Sub ProcessUndo()
 
         If Options.EnabledUndoRedo AndAlso UndoStack.Count > 0 Then
@@ -5921,6 +5997,7 @@ Label_00CC:
             End If
             If xdata.Item1 = SnapshotType.ObjectAddedOrRemoved Or xdata.Item1 = SnapshotType.All Then CloseOpenEditForms()
             RestoreSnapshot(xdata.Item2, xdata.Item1)
+            RebuildFlowsheetSurfaceFromObjects()
             UpdateInterface()
             UpdateOpenEditForms()
             Options.EnabledUndoRedo = True
@@ -5943,6 +6020,7 @@ Label_00CC:
             End If
             If xdata.Item1 = SnapshotType.ObjectAddedOrRemoved Or xdata.Item1 = SnapshotType.All Then CloseOpenEditForms()
             RestoreSnapshot(xdata.Item2, xdata.Item1)
+            RebuildFlowsheetSurfaceFromObjects()
             UpdateInterface()
             UpdateOpenEditForms()
             Options.EnabledUndoRedo = True

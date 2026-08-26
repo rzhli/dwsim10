@@ -57,10 +57,10 @@ namespace DWSIM.UI.Desktop.Editors
                     {
                         _amount = parsed;
                     }
-                    // no PropertyChanged here: raising it makes the two-way binding write the
-                    // formatted amount back into the TextBox mid-typing - a typed "0." snaps to
-                    // "0" (the dot is eaten) and the caret jumps. The TextBox already shows what
-                    // the user typed; Set() raises when code changes the value instead.
+                    // raised only at commit time: the binding uses UpdateSourceTrigger.LostFocus,
+                    // so the source is written once when cell editing ends (and this then
+                    // refreshes the displayed formatting), never on each keystroke while typing
+                    Raise(nameof(Amount));
                 }
             }
 
@@ -117,7 +117,11 @@ namespace DWSIM.UI.Desktop.Editors
                 Header = "Amount",
                 Binding = new Binding(nameof(Row.Amount))
                 {
-                    Mode = editable ? BindingMode.TwoWay : BindingMode.OneWay
+                    Mode = editable ? BindingMode.TwoWay : BindingMode.OneWay,
+                    // write the source only when cell editing ends: per-keystroke commits let
+                    // the binding fight the TextBox (eaten dots, jumping caret). The parse and
+                    // the Edited event both run once, on commit.
+                    UpdateSourceTrigger = UpdateSourceTrigger.LostFocus
                 },
                 IsReadOnly = !editable,
                 Width = new DataGridLength(40, DataGridLengthUnitType.Star)

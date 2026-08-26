@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Avalonia.Threading;
 using DWSIM.Interfaces;
 
@@ -37,6 +37,12 @@ internal sealed class AvaloniaFlowsheet : DWSIM.FlowsheetBase.FlowsheetBase
     {
         // The solver checks this flag before every solve; must be true to allow calculation.
         DWSIM.GlobalSettings.Settings.CalculatorActivated = true;
+
+        // The snapshot undo/redo machinery registers nothing while this is false (the engine
+        // default), which left Ctrl+Z dead - a deleted stream never came back. Turn it on for
+        // every flowsheet this UI creates; loading a file would otherwise reset it to false
+        // again (FlowsheetBase keeps that behaviour, patched separately).
+        Options.EnabledUndoRedo = true;
     }
 
     public override IFlowsheet GetNewInstance() => new AvaloniaFlowsheet();
