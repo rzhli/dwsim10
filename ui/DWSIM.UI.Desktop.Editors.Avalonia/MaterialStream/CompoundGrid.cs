@@ -57,7 +57,10 @@ namespace DWSIM.UI.Desktop.Editors
                     {
                         _amount = parsed;
                     }
-                    Raise(nameof(Amount));
+                    // no PropertyChanged here: raising it makes the two-way binding write the
+                    // formatted amount back into the TextBox mid-typing - a typed "0." snaps to
+                    // "0" (the dot is eaten) and the caret jumps. The TextBox already shows what
+                    // the user typed; Set() raises when code changes the value instead.
                 }
             }
 
