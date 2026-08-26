@@ -169,6 +169,91 @@ internal static class FlowsheetObjectIcons
         try { flowsheet.FlowsheetOptions.FlowsheetColorTheme = original.Value; } catch { }
     }
 
+    private static SKPaint? _iconPaint;
+
+    /// <summary>
+    /// Installs a surface-wide draw override so every block that belongs to a simulation object
+    /// renders its palette icon under the Default theme. Custom-painting graphics (the Logical
+    /// spheres, the controller panels, the Clean Power artwork) ignore the photo fields this class
+    /// swaps for ShapeGraphics, and several of them only implement the schematic branch of their
+    /// draw switch - without this they can never show the icon the palette thumbnail promised.
+    /// Streams are left alone (their graphic is the connecting arrow), annotations have no owner,
+    /// the Color Icons theme falls through to the native photorealistic rendering, and everything
+    /// else keeps drawing itself. The native selection highlight is replicated because the engine
+    /// skips it while an override is installed.
+    /// </summary>
+    public static void InstallSurfaceOverride(DWSIM.Drawing.SkiaSharp.GraphicsSurface surface)
+    {
+        surface.GlobalDrawOverride = (gobj, canvas) =>
+        {
+            if (!TryDrawCanvasIcon(gobj, canvas))
+            {
+                try { gobj.Draw(canvas); } catch { }
+            }
+
+            DrawSelectionGizmo(gobj, canvas);
+        };
+    }
+
+    private static bool TryDrawCanvasIcon(IGraphicObject gobj, SKCanvas canvas)
+    {
+        if (_state is null || !Available) return false;
+        if (UiPreferences.UsePaletteIconsOnCanvas != true) return false;
+        if (gobj.Owner == null) return false;
+        if (IsExcluded(gobj.ObjectType)) return false;
+
+        var state = _state.TryGetValue(gobj, out var s) ? s : null;
+        var icon = state?.PaletteIcon;
+        if (icon == null)
+        {
+            // not swapped by BeginDraw (custom painter, or the pass never ran): pull the
+            // palette artwork straight from the simulation object
+            try
+            {
+                var bytes = gobj.Owner.GetIconBitmapBytes();
+                icon = Decode(bytes);
+                if (icon != null && state != null) { state.PaletteIcon = icon; state.PaletteTried = true; }
+            }
+            catch { return false; }
+        }
+        if (icon == null) return false;
+
+        using var restore = new SKAutoCanvasRestore(canvas);
+        if (gobj.Rotation != 0)
+            canvas.RotateDegrees(gobj.Rotation, gobj.X + gobj.Width / 2f, gobj.Y + gobj.Height / 2f);
+
+        if (_iconPaint == null)
+            _iconPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
+
+        canvas.DrawImage(icon, new SKRect(gobj.X, gobj.Y, gobj.X + gobj.Width, gobj.Y + gobj.Height), _iconPaint);
+
+        if (!gobj.Active || gobj.Status == Interfaces.Enums.GraphicObjects.Status.Inactive)
+        {
+            // grey the block out the way ShapeGraphic does for inactive objects
+            using var p = new SKPaint { BlendMode = SKBlendMode.Color, ColorFilter = SKColorFilter.CreateBlendMode(SKColors.Gray, SKBlendMode.SrcIn) };
+            canvas.DrawImage(icon, new SKRect(gobj.X, gobj.Y, gobj.X + gobj.Width, gobj.Y + gobj.Height), p);
+        }
+
+        return true;
+    }
+
+    private static void DrawSelectionGizmo(IGraphicObject gobj, SKCanvas canvas)
+    {
+        if (!gobj.Selected) return;
+
+        using var fill = new SKPaint { Color = SKColors.LightBlue.WithAlpha(75), IsAntialias = true, IsStroke = false };
+        using var line = new SKPaint { Color = SKColors.LightBlue.WithAlpha(175), IsAntialias = true, IsStroke = true, StrokeWidth = 2 };
+
+        using var restore = new SKAutoCanvasRestore(canvas);
+        if (gobj.Rotation != 0)
+            canvas.RotateDegrees(gobj.Rotation, gobj.X + gobj.Width / 2f, gobj.Y + gobj.Height / 2f);
+
+        var rect = new SKRect(gobj.X - 10, gobj.Y - 10, gobj.X + gobj.Width + 10, gobj.Y + gobj.Height + 10);
+        canvas.DrawRoundRect(rect, 4, 4, fill);
+        canvas.DrawRoundRect(rect, 4, 4, line);
+    }
+
+
     /// <summary>
     /// External unit operations (the biochemical blocks and friends) paint themselves in
     /// IExternalUnitOperation.Draw, so the graphic object's photo fields never come into play.

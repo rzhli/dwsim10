@@ -823,6 +823,7 @@ public partial class FlowsheetView : UserControl
             DWSIM.UI.Desktop.Editors.FlowsheetObjectTypes.EnsureDefaults(_flowsheet);
 
             WireEngineSurface(_surface);
+            FlowsheetObjectIcons.InstallSurfaceOverride(_surface);
             MaterialStreamsPanel.SetFlowsheet(fs);
             ResultsPanel.SetFlowsheet(fs);
             IntegratorPanel.SetFlowsheet(fs);
@@ -973,6 +974,7 @@ public partial class FlowsheetView : UserControl
         DWSIM.UI.Desktop.Editors.FlowsheetObjectTypes.EnsureDefaults(_flowsheet);
 
         WireEngineSurface(_surface);
+        FlowsheetObjectIcons.InstallSurfaceOverride(_surface);
         WireSpreadsheet(fs);
         MaterialStreamsPanel.SetFlowsheet(fs);
         ResultsPanel.SetFlowsheet(fs);
