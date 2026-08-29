@@ -738,7 +738,7 @@ Namespace Reactors
             ' Gas-liquid equilibrium of the weak-electrolyte gases at the assumed digester pH. Only the
             ' volatile fraction of each obeys Henry's law, so most of the H2S and NH3 and part of the
             ' CO2 stay in the effluent as HS-/S(2-), NH4+ and HCO3-/CO3(2-). ADM1 constants, corrected to T.
-            Dim phBB = ADM1.ADM1Equations.TemperatureCorrect(ADM1Params.Physicochemical, T)
+            Dim phBB = ADM1.ADM1Equations.TemperatureCorrect(ADM1Params.Physicochemical, OperatingTemperature(T))
             Dim S_H_bb = 10.0 ^ (-Max(AssumedPH_ForSulfide, 0.1))
             Dim Pbar = P / 100000.0
             Dim nGasRef = (n_CH4_mols + n_CO2_mols) / 1000.0                    ' dry-gas reference, kmol/s
@@ -1301,7 +1301,7 @@ Namespace Reactors
             Dim nH2SGas_kmols As Double, cSulfideLiq As Double
             PartitionSulfide(nS_total_kmols, Q_liquid,
                              (m_CH4_kgs / 0.01604 + m_CO2_kgs / 0.04401) / 1000.0,
-                             P / 100000.0, T, nH2SGas_kmols, cSulfideLiq)
+                             P / 100000.0, OperatingTemperature(T), nH2SGas_kmols, cSulfideLiq)
             Dim m_H2S_gas_kgs = nH2SGas_kmols * MW_H2S
             Dim m_H2S_liq_kgs = Max(nS_total_kmols - nH2SGas_kmols, 0.0) * MW_H2S
 
@@ -1465,6 +1465,20 @@ Namespace Reactors
         ''' Trajectory is stored in ADM1LastTrajectory; final state in ADM1LastState. Results
         ''' are mapped back to outlet liquid and biogas streams on a COD basis.
         ''' </summary>
+        ''' <summary>
+        ''' Temperature (K) at which the digester contents actually react. Isothermal and Adiabatic run
+        ''' at the influent temperature <paramref name="feedT_K"/>; a defined outlet temperature means the
+        ''' vessel is heated or cooled to that setpoint, so the biology, acid-base equilibria and gas-liquid
+        ''' transfer are evaluated there instead of at the feed temperature. Only DefinedOutletTemperature
+        ''' overrides, so existing Isothermal/Adiabatic simulations are unchanged.
+        ''' </summary>
+        Private Function OperatingTemperature(ByVal feedT_K As Double) As Double
+            If ThermalMode = BioReactorThermalMode.DefinedOutletTemperature AndAlso OutletTemperature > 0.0 Then
+                Return OutletTemperature
+            End If
+            Return feedT_K
+        End Function
+
         Public Sub CalculateADM1Full()
 
             ' Hydrate parameter object from JSON if we just came back from a save/load
@@ -1531,6 +1545,27 @@ Namespace Reactors
             If codFactor <= 0 Then Throw New Exception("AnaerobicDigester (ADM1-Full): Theoretical COD of substrate is non-positive.")
 
             Dim CODin_kgs = m_sub_in * codFactor
+
+            ' Physical sanity on the hydraulic load. A digester feed that carries almost no water - a
+            ' substrate specified nearly neat, or a feed that flashed to a sliver of "liquid" - makes
+            ' LiquidVolumetricFlow report a tiny flow, which inflates the influent COD concentration to
+            ' unphysical values and then integrates into a garbage acidified steady state that still
+            ' reports Converged. Two cheap checks catch it here with an actionable message instead.
+            Dim m_feed_total = ims.Phases(0).Properties.massflow.GetValueOrDefault
+            If m_feed_total > 0.0 AndAlso m_sub_in > m_feed_total * 1.0000001 Then
+                Throw New Exception(String.Format(
+                    "AnaerobicDigester (ADM1-Full): the substrate mass flow ({0:G4} kg/s) exceeds the total " &
+                    "feed mass flow ({1:G4} kg/s), so the feed did not solve consistently. Check that the feed " &
+                    "stream converged and carries the water of an aqueous slurry.", m_sub_in, m_feed_total))
+            End If
+            Dim S_in_COD_check = CODin_kgs / Max(Q_liquid_m3s, 0.000000000001)
+            If S_in_COD_check > 1000.0 Then
+                Throw New Exception(String.Format(
+                    "AnaerobicDigester (ADM1-Full): the influent COD concentration comes out at {0:G4} kg COD/m3, " &
+                    "which is not physical for an aqueous digester feed (a real slurry is mostly water). This " &
+                    "usually means the feed carries too little water, or it flashed to almost no liquid. Check the " &
+                    "feed composition (water fraction) and that the feed stream converged.", S_in_COD_check))
+            End If
 
             ' Build influent vector - feed the substrate as composite particulate X_c, characterised
             ' from its own elemental formula (see CharacteriseCompositeFromSubstrate), so disintegration
@@ -1605,13 +1640,13 @@ Namespace Reactors
                 Sin = op.ToInfluentVector(ADM1Params.Sulfate)
             End If
 
-            ' The reactor runs at the feed's temperature whichever way the influent was specified.
-            ' These used to sit inside the useStream branch, so a manual influent silently pinned the
-            ' whole model to the 308.15 K default no matter what the stream said. Physicochemical is
-            ' the one the equations read; Operating.T_op_K is kept in step because it is what the
-            ' parameter dialog shows.
-            op.T_op_K = T_K
-            ADM1Params.Physicochemical.T_op_K = T_K
+            ' Operating temperature of the digester contents. Isothermal and Adiabatic run at the influent
+            ' temperature; a defined outlet temperature means the vessel is heated to that setpoint, so the
+            ' rates, acid-base equilibria and gas transfer must be read there. Physicochemical is the one the
+            ' equations read; Operating.T_op_K is kept in step because it is what the parameter dialog shows.
+            Dim T_op_K = OperatingTemperature(T_K)
+            op.T_op_K = T_op_K
+            ADM1Params.Physicochemical.T_op_K = T_op_K
 
             ' Use ADM1Params.Operating.V_liq as reactor volume if it matches DWSIM Volume; otherwise override
             If Volume > 0.0 Then op.V_liq = Volume

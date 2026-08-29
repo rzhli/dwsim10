@@ -3308,6 +3308,10 @@ Imports DWSIM.ExtensionMethods
 
         For Each xel As XElement In data
             Try
+                ' An empty <GraphicObject/> carries nothing to read. Files written by older versions contain
+                ' one - the FOSSEE flowsheets do - and dereferencing its missing children failed the load of
+                ' the whole flowsheet: four NullReferenceExceptions, none of them about a real object.
+                If xel.Element("Type") Is Nothing OrElse xel.Element("ObjectType") Is Nothing Then Continue For
                 xel.Element("Type").Value = xel.Element("Type").Value.Replace("Microsoft.MSDN.Samples.GraphicObjects", "DWSIM.DrawingTools.GraphicObjects")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Ajuste", "OT_Adjust")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Especificacao", "OT_Spec")
@@ -3376,6 +3380,7 @@ Imports DWSIM.ExtensionMethods
 
         For Each xel As XElement In data
             Try
+                If xel.Element("Name") Is Nothing Then Continue For      ' the same empty element
                 Dim id As String = pkey & xel.Element("Name").Value
                 If id <> "" Then
                     Dim obj As IGraphicObject = (From go As IGraphicObject In FlowsheetSurface.DrawingObjects Where go.Name = id).SingleOrDefault
@@ -3408,6 +3413,7 @@ Imports DWSIM.ExtensionMethods
 
         For Each xel As XElement In data
             Try
+                If xel.Element("Name") Is Nothing Then Continue For      ' the same empty element
                 Dim id As String = pkey & xel.Element("Name").Value
                 If id <> "" Then
                     Dim obj As IGraphicObject = (From go As IGraphicObject In FlowsheetSurface.DrawingObjects Where go.Name = id).SingleOrDefault
@@ -3457,6 +3463,10 @@ Imports DWSIM.ExtensionMethods
 
         For Each xel As XElement In data
             Try
+                ' An empty <GraphicObject/> carries nothing to read. Files written by older versions contain
+                ' one - the FOSSEE flowsheets do - and dereferencing its missing children failed the load of
+                ' the whole flowsheet: four NullReferenceExceptions, none of them about a real object.
+                If xel.Element("Type") Is Nothing OrElse xel.Element("ObjectType") Is Nothing Then Continue For
                 xel.Element("Type").Value = xel.Element("Type").Value.Replace("Microsoft.MSDN.Samples.GraphicObjects", "DWSIM.DrawingTools.GraphicObjects")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Ajuste", "OT_Adjust")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Especificacao", "OT_Spec")
@@ -4299,7 +4309,10 @@ Label_00CC:
 
         Dim paths0 = engine.GetSearchPaths().ToList()
         Dim apppath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+        ' the standard library folder is "Lib" on Windows and "lib" on the cross-platform build; add
+        ' both because Linux is case-sensitive and a non-existent path is ignored by the import machinery
         paths0.Add(Path.Combine(apppath, "Lib"))
+        paths0.Add(Path.Combine(apppath, "lib"))
         Try
             engine.SetSearchPaths(paths0)
         Catch ex As Exception
@@ -5430,6 +5443,10 @@ Label_00CC:
 
                     For Each xel As XElement In data
                         Try
+                            ' An empty <GraphicObject/> carries nothing to read. Files written by older versions contain
+                            ' one - the FOSSEE flowsheets do - and dereferencing its missing children failed the load of
+                            ' the whole flowsheet: four NullReferenceExceptions, none of them about a real object.
+                            If xel.Element("Type") Is Nothing OrElse xel.Element("ObjectType") Is Nothing Then Continue For
                             xel.Element("Type").Value = xel.Element("Type").Value.Replace("Microsoft.MSDN.Samples.GraphicObjects", "DWSIM.DrawingTools.GraphicObjects")
                             xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Ajuste", "OT_Adjust")
                             xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Especificacao", "OT_Spec")

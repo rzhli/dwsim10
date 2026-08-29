@@ -3722,94 +3722,116 @@ redirect2:                  IObj?.SetCurrent()
                 ByRef CP As ArrayList, ByRef TCR As Double, ByRef PCR As Double, ByRef VCR As Double,
                 ByRef stopAtCP As Boolean, ByRef recalcCP As Boolean)
 
-            If TypeOf Me Is PengRobinsonPropertyPackage Then
-                If n > 0 Then
-                    CP = New Utilities.TCP.Methods().CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
-                    If CP.Count = 0 Then CP = New Utilities.TCP.Methods().CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
-                    If CP.Count > 0 Then
-                        Dim cp0 = CP(0)
-                        TCR = cp0(0)
-                        PCR = cp0(1)
-                        VCR = cp0(2)
-                        stopAtCP = True
+            ' Every branch below already falls back to the pseudo-critical point when the solver
+            ' returns nothing. An exception is the same outcome by a different route - a property
+            ' package with no analytical critical point (Raoult's Law has no DW_CalcP, so the
+            ' generic method throws NotImplementedException) failed the whole envelope instead of
+            ' plotting it with the pseudo-critical point, which is what the empty result does.
+            Try
+
+                If TypeOf Me Is PengRobinsonPropertyPackage Then
+                    If n > 0 Then
+                        CP = New Utilities.TCP.Methods().CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
+                        If CP.Count = 0 Then CP = New Utilities.TCP.Methods().CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
+                        If CP.Count > 0 Then
+                            Dim cp0 = CP(0)
+                            TCR = cp0(0)
+                            PCR = cp0(1)
+                            VCR = cp0(2)
+                            stopAtCP = True
+                        Else
+                            TCR = Me.AUX_TCM(Phase.Mixture)
+                            PCR = Me.AUX_PCM(Phase.Mixture)
+                            VCR = Me.AUX_VCM(Phase.Mixture)
+                            recalcCP = True
+                        End If
                     Else
                         TCR = Me.AUX_TCM(Phase.Mixture)
                         PCR = Me.AUX_PCM(Phase.Mixture)
                         VCR = Me.AUX_VCM(Phase.Mixture)
-                        recalcCP = True
+                        CP.Add(New Object() {TCR, PCR, VCR})
                     End If
-                Else
-                    TCR = Me.AUX_TCM(Phase.Mixture)
-                    PCR = Me.AUX_PCM(Phase.Mixture)
-                    VCR = Me.AUX_VCM(Phase.Mixture)
-                    CP.Add(New Object() {TCR, PCR, VCR})
-                End If
-            ElseIf TypeOf Me Is PengRobinson1978PropertyPackage Then
-                If n > 0 Then
-                    CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_PR78).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
-                    If CP.Count = 0 Then CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_PR78).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
-                    If CP.Count > 0 Then
-                        Dim cp0 = CP(0)
-                        TCR = cp0(0)
-                        PCR = cp0(1)
-                        VCR = cp0(2)
-                        stopAtCP = True
+                ElseIf TypeOf Me Is PengRobinson1978PropertyPackage Then
+                    If n > 0 Then
+                        CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_PR78).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
+                        If CP.Count = 0 Then CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_PR78).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
+                        If CP.Count > 0 Then
+                            Dim cp0 = CP(0)
+                            TCR = cp0(0)
+                            PCR = cp0(1)
+                            VCR = cp0(2)
+                            stopAtCP = True
+                        Else
+                            TCR = Me.AUX_TCM(Phase.Mixture)
+                            PCR = Me.AUX_PCM(Phase.Mixture)
+                            VCR = Me.AUX_VCM(Phase.Mixture)
+                            recalcCP = True
+                        End If
                     Else
                         TCR = Me.AUX_TCM(Phase.Mixture)
                         PCR = Me.AUX_PCM(Phase.Mixture)
                         VCR = Me.AUX_VCM(Phase.Mixture)
-                        recalcCP = True
+                        CP.Add(New Object() {TCR, PCR, VCR})
                     End If
-                Else
-                    TCR = Me.AUX_TCM(Phase.Mixture)
-                    PCR = Me.AUX_PCM(Phase.Mixture)
-                    VCR = Me.AUX_VCM(Phase.Mixture)
-                    CP.Add(New Object() {TCR, PCR, VCR})
-                End If
-            ElseIf TypeOf Me Is SRKPropertyPackage Then
-                If n > 0 Then
-                    CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_SRK).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
-                    If CP.Count = 0 Then CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_SRK).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
-                    If CP.Count > 0 Then
-                        Dim cp0 = CP(0)
-                        TCR = cp0(0)
-                        PCR = cp0(1)
-                        VCR = cp0(2)
-                        stopAtCP = True
+                ElseIf TypeOf Me Is SRKPropertyPackage Then
+                    If n > 0 Then
+                        CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_SRK).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij2)
+                        If CP.Count = 0 Then CP = New Utilities.TCP.Methods(Utilities.TCP.CubicCP.EOS_SRK).CRITPT_PR(Vm2, VTc2, VPc2, VVc2, Vw2, VKij3)
+                        If CP.Count > 0 Then
+                            Dim cp0 = CP(0)
+                            TCR = cp0(0)
+                            PCR = cp0(1)
+                            VCR = cp0(2)
+                            stopAtCP = True
+                        Else
+                            TCR = Me.AUX_TCM(Phase.Mixture)
+                            PCR = Me.AUX_PCM(Phase.Mixture)
+                            VCR = Me.AUX_VCM(Phase.Mixture)
+                            recalcCP = True
+                        End If
                     Else
                         TCR = Me.AUX_TCM(Phase.Mixture)
                         PCR = Me.AUX_PCM(Phase.Mixture)
                         VCR = Me.AUX_VCM(Phase.Mixture)
-                        recalcCP = True
+                        CP.Add(New Object() {TCR, PCR, VCR})
                     End If
                 Else
-                    TCR = Me.AUX_TCM(Phase.Mixture)
-                    PCR = Me.AUX_PCM(Phase.Mixture)
-                    VCR = Me.AUX_VCM(Phase.Mixture)
-                    CP.Add(New Object() {TCR, PCR, VCR})
-                End If
-            Else
-                If n > 0 Then
-                    CP = New ArrayList(DW_CalculateCriticalPoints())
-                    If CP.Count > 0 Then
-                        Dim cp0 = CP(0)
-                        TCR = cp0(0)
-                        PCR = cp0(1)
-                        VCR = cp0(2)
-                        stopAtCP = True
+                    If n > 0 Then
+                        CP = New ArrayList(DW_CalculateCriticalPoints())
+                        If CP.Count > 0 Then
+                            Dim cp0 = CP(0)
+                            TCR = cp0(0)
+                            PCR = cp0(1)
+                            VCR = cp0(2)
+                            stopAtCP = True
+                        Else
+                            TCR = Me.AUX_TCM(Phase.Mixture)
+                            PCR = Me.AUX_PCM(Phase.Mixture)
+                            VCR = Me.AUX_VCM(Phase.Mixture)
+                            recalcCP = True
+                        End If
                     Else
                         TCR = Me.AUX_TCM(Phase.Mixture)
                         PCR = Me.AUX_PCM(Phase.Mixture)
                         VCR = Me.AUX_VCM(Phase.Mixture)
-                        recalcCP = True
+                        CP.Add(New Object() {TCR, PCR, VCR})
                     End If
+                End If
+
+
+            Catch ex As Exception
+
+                CP.Clear()
+                TCR = Me.AUX_TCM(Phase.Mixture)
+                PCR = Me.AUX_PCM(Phase.Mixture)
+                VCR = Me.AUX_VCM(Phase.Mixture)
+                If n > 0 Then
+                    recalcCP = True
                 Else
-                    TCR = Me.AUX_TCM(Phase.Mixture)
-                    PCR = Me.AUX_PCM(Phase.Mixture)
-                    VCR = Me.AUX_VCM(Phase.Mixture)
                     CP.Add(New Object() {TCR, PCR, VCR})
                 End If
-            End If
+
+            End Try
 
         End Sub
 
@@ -5283,6 +5305,13 @@ redirect2:                  IObj?.SetCurrent()
                     End While
                 End If
             End If
+
+            ' The critical point is consumed as cpdata(0) with no emptiness check, and there are two ways
+            ' to get here without one: the solver returned nothing and the bubble and dew curves never
+            ' crossed (recalcCP), or the package has no analytical critical point at all. Both already
+            ' computed the pseudo-critical point into TCR/PCR/VCR - carry it, rather than returning an
+            ' empty list for the caller to index into.
+            If CP.Count = 0 Then CP.Add(New Object() {TCR, PCR, VCR})
 
             Return New Object() {TVB, PB, HB, SB, VB, TVD, PO, HO, SO, VO, TE, PE, THsI, PHsI, THsII, CP, TQ, PQ, TI, PI, TOWF, POWF, HOWF, SOWF, VOWF, TVB1, PB1, HB1, SB1, VB1, TVB2, PB2, HB2, SB2, VB2, TSLE1, PSLE1, TSLE2, PSLE2, TWidomCp, PWidomCp, TWidomBetaT, PWidomBetaT, TWidomAvg, PWidomAvg, PHsII}
 
@@ -7619,7 +7648,10 @@ Final3:
 
             i = 0
             For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(0).Compounds.Values
-                val += Vxw(i) * Me.AUX_HVAPi(subst.Name, T)
+                ' Guard against a single compound with an undefined heat of vaporisation (e.g. an
+                ' incompletely defined pseudo-compound) poisoning the whole mixture through 0*NaN.
+                Dim hv As Double = Me.AUX_HVAPi(subst.Name, T)
+                If Not Double.IsNaN(hv) AndAlso Not Double.IsInfinity(hv) Then val += Vxw(i) * hv
                 i += 1
             Next
 
@@ -7706,6 +7738,13 @@ Final3:
                     result = cprop.HVap_A * ((1 - Tr) / (1 - tr1)) ^ 0.375
                 End If
 
+                ' An incompletely defined User/biomass compound can carry an invalid normal boiling
+                ' point above its critical temperature (tr1 > 1), which turns the Watson term into a
+                ' fractional power of a negative number and returns NaN - or a negative HVap from the
+                ' Vetere fallback on a bad Pc. Either way it would poison RET_HVAPM (and every Raoult
+                ' liquid enthalpy) through the 0*NaN term in the mixture sum. A non-volatile pseudo-
+                ' compound has no meaningful heat of vaporisation, so clamp to zero.
+                If Double.IsNaN(result) OrElse Double.IsInfinity(result) OrElse result < 0.0 Then result = 0.0
                 Return result
             ElseIf cprop.OriginalDB = "ChEDL Thermo" Then
                 Dim eqno As String = cprop.VaporizationEnthalpyEquation
@@ -8554,25 +8593,49 @@ Final3:
                 Dim vk(Me.CurrentMaterialStream.Phases(0).Compounds.Count - 1) As Double
                 Dim i As Integer
                 i = 0
+
+                'A pure-compound saturated liquid density correlation collapses towards the critical
+                'density as the compound approaches its own critical temperature, with an infinite slope
+                'at Tc. That is not a usable partial molar volume for a light compound dissolved in a
+                'much heavier liquid, and dropping the compound from the volume sum at Tc puts a step in
+                'the mixture density. Once a compound's own reduced temperature runs ahead of the
+                'mixture's, evaluate its correlation at the mixture's reduced temperature instead, so a
+                'dissolved light compound follows the state of the liquid it is dissolved in. The floor
+                'leaves the correlation in charge everywhere it is still trustworthy; a compound that is
+                'itself the near-critical solvent is untouched, its reduced temperature being the
+                'mixture's.
+                Dim Tcm As Double = props.Tcm(Vx, RET_VTC())
+                Dim Trcap As Double = Math.Max(If(Tcm > 0.0, T / Tcm, 0.0), 0.9)
+
                 For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(1).Compounds.Values
                     IObj?.SetCurrent()
                     IObj?.Paragraphs.Add(String.Format("Calculating value for {0}... (xi = {1}, wi = {2})", subst.Name, subst.MoleFraction.GetValueOrDefault, subst.MassFraction.GetValueOrDefault))
-                    vk(i) = AUX_LIQDENSi(subst, T)
-                    IObj?.Paragraphs.Add(String.Format("Value calculated from experimental curve: {0} kg/m3", vk(i)))
+                    Dim Tci As Double = subst.ConstantProperties.Critical_Temperature
+                    Dim Ti As Double = T
+                    If Tci > 0.0 AndAlso T > Trcap * Tci Then Ti = Trcap * Tci
+                    vk(i) = AUX_LIQDENSi(subst, Ti)
+                    IObj?.Paragraphs.Add(String.Format("Value calculated from experimental curve at {0} K: {1} kg/m3", Ti, vk(i)))
                     If LiquidDensity_CorrectExpDataForPressure Then
                         'pressure correction
-                        Dim pcorr = Auxiliary.PROPS.liq_dens_pcorrection(T / subst.ConstantProperties.Critical_Temperature, P, subst.ConstantProperties.Critical_Pressure, AUX_PVAPi(subst.Name, T), subst.ConstantProperties.Acentric_Factor)
+                        Dim pcorr = Auxiliary.PROPS.liq_dens_pcorrection(Ti / Tci, P, subst.ConstantProperties.Critical_Pressure, AUX_PVAPi(subst.Name, Ti), subst.ConstantProperties.Acentric_Factor)
                         IObj?.Paragraphs.Add(String.Format("Compressed Liquid Density Correction Factor: {0}", pcorr))
                         vk(i) *= pcorr
                         IObj?.Paragraphs.Add(String.Format("Corrected Liquid Density: {0} kg/m3", vk(i)))
                     End If
-                    If T > subst.ConstantProperties.Critical_Temperature Then
+                    'drop the compound from the sum, as before. Now only reachable once the mixture itself
+                    'is above its pseudocritical temperature, or for a compound with no critical
+                    'temperature on record; with every compound dropped the covolume guard below hands
+                    'the whole calculation over to the equation of state.
+                    If Ti > Tci Then
                         vk(i) = 1.0E+20
                     End If
-                    If Not Double.IsNaN(vk(i)) Then vk(i) = Vx(i) / vk(i) Else vk(i) = 0.0#
+                    'volumes add on a mass basis, so each compound enters the sum weighted by its mass
+                    'and not by its mole fraction, which would over-weight the light ones by M/Mi.
+                    Dim mi As Double = Vx(i) * subst.ConstantProperties.Molar_Weight
+                    If Not Double.IsNaN(vk(i)) Then vk(i) = mi / vk(i) Else vk(i) = 0.0#
                     i = i + 1
                 Next
-                val = 1 / MathEx.Common.Sum(vk)
+                val = AUX_MMM(Vx) / MathEx.Common.Sum(vk)
             End If
 
             'The molar volume can never be smaller than the equation-of-state covolume b, so the liquid

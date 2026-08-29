@@ -500,7 +500,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             AddInfoRow(info, 0, "Object", tag, active);
             AddInfoRow(info, 1, "Status", status, null);
-            AddInfoRow(info, 2, "Linked to", linked, null);
+            var linkedCaption = AddInfoRow(info, 2, "Linked to", linked, null);
 
             refresh = () =>
             {
@@ -508,7 +508,13 @@ namespace DWSIM.UI.Desktop.Editors
                     ? ms.ErrorMessage
                     : (ms.Calculated ? "Calculated" : "Not calculated");
 
-                linked.Text = Upstream(ms) + "  >  " + Downstream(ms);
+                // The logical block driving this stream, not its connections - those have their own
+                // tab, and the Windows editor's lblConnectedTo means the spec/adjust. The row is
+                // hidden outright when nothing is attached, rather than showing a placeholder.
+                linked.Text = LinkedTo(ms);
+                var isLinked = !string.IsNullOrEmpty(linked.Text);
+                linked.IsVisible = isLinked;
+                linkedCaption.IsVisible = isLinked;
 
                 if (tag.Text != ms.GraphicObject.Tag) tag.Text = ms.GraphicObject.Tag;
                 active.IsChecked = ms.GraphicObject.Active;
@@ -520,6 +526,28 @@ namespace DWSIM.UI.Desktop.Editors
             tabs.Items.Add(Tab("Information", info));
             tabs.Items.Add(Tab("Connections", BuildConnections(ms)));
             return tabs;
+        }
+
+
+        /// <summary>
+        /// The spec or adjust block attached to this object, or an empty string when there is none -
+        /// the same thing the Windows editor puts in lblConnectedTo.
+        /// </summary>
+        private static string LinkedTo(MaterialStream ms)
+        {
+            try
+            {
+                var flowsheet = ms.GetFlowsheet();
+
+                if (ms.IsSpecAttached && flowsheet.SimulationObjects.ContainsKey(ms.AttachedSpecId))
+                    return flowsheet.SimulationObjects[ms.AttachedSpecId].GraphicObject.Tag;
+
+                if (ms.IsAdjustAttached && flowsheet.SimulationObjects.ContainsKey(ms.AttachedAdjustId))
+                    return flowsheet.SimulationObjects[ms.AttachedAdjustId].GraphicObject.Tag;
+            }
+            catch (Exception) { }
+
+            return "";
         }
 
         private static string Upstream(MaterialStream ms)
@@ -538,7 +566,8 @@ namespace DWSIM.UI.Desktop.Editors
             return to == null ? "-" : to.Tag;
         }
 
-        private static void AddInfoRow(Grid host, int row, string caption, Control editor, Control trailing)
+        /// <summary>Adds a caption/editor row and returns the caption, so a caller can hide the pair.</summary>
+        private static TextBlock AddInfoRow(Grid host, int row, string caption, Control editor, Control trailing)
         {
             var label = new TextBlock
             {
@@ -555,12 +584,14 @@ namespace DWSIM.UI.Desktop.Editors
             Grid.SetColumn(editor, 1);
             host.Children.Add(editor);
 
-            if (trailing == null) return;
+            if (trailing == null) return label;
 
             trailing.Margin = new Thickness(8, 5, 0, 5);
             Grid.SetRow(trailing, row);
             Grid.SetColumn(trailing, 2);
             host.Children.Add(trailing);
+
+            return label;
         }
 
         /// <summary>Upstream and downstream of the stream, as the WinForms Connections tab lists them.</summary>
@@ -569,7 +600,7 @@ namespace DWSIM.UI.Desktop.Editors
             return new ScrollViewer { Content = AvaloniaTabBuilders.BuildConnections(ms) };
         }
 
-        /// <summary>The Property Package Settings group between the two notebooks.</summary>
+        /// <summary>The property-package row between the two notebooks.</summary>
         private static Control BuildPropertyPackageGroup(MaterialStream ms)
         {
             var flowsheet = ms.GetFlowsheet();
@@ -614,16 +645,10 @@ namespace DWSIM.UI.Desktop.Editors
             row.Children.Add(configure);
             row.Children.Add(picker);
 
-            var content = new StackPanel();
-            content.Children.Add(new TextBlock
-            {
-                Text = "Property Package Settings",
-                FontWeight = FontWeight.SemiBold,
-                Margin = new Thickness(6, 4, 0, 0)
-            });
-            content.Children.Add(row);
-
-            var group = new Border { Margin = new Thickness(0, 4, 0, 4), Child = content };
+            // No heading over the row: it said "Property Package Settings" above a row that already
+            // reads "Property Package  [picker]  Configure", and on a phone that is a line of height
+            // spent restating the label beside it.
+            var group = new Border { Margin = new Thickness(0, 4, 0, 4), Child = row };
             group.Classes.Add("group");
             return group;
         }

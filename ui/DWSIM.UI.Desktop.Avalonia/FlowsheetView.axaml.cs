@@ -1485,6 +1485,7 @@ public partial class FlowsheetView : UserControl
 
         // Dynamics
         IconHelper.Set(MenuDynamicsToggle, "⚡");
+        IconHelper.Set(MenuDynWizard,      "\U0001F9ED"); // compass
         IconHelper.Set(MenuDynManager,     "\U0001F4CA"); // chart
         IconHelper.Set(MenuDynIntegrator,  "⏱");     // stopwatch
         IconHelper.Set(MenuDynPIDTuning,   "\U0001F39B"); // control knobs
@@ -2114,6 +2115,14 @@ public partial class FlowsheetView : UserControl
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
             new PIDTuningWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuDynWizard.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            var wizard = new DynamicsWizard(_flowsheet);
+            // The manager builds its lists once; anything the wizard creates needs it to reload.
+            wizard.OnApplied = () => DynManagerPanel?.Populate();
+            wizard.Show(HostWindow);
         };
 
         // --- Results menu ---

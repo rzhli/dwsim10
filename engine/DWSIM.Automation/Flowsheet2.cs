@@ -46,12 +46,16 @@ namespace DWSIM.Automation
                 if (xdoc.Element("DWSIM_Simulation_Data").Element("Spreadsheet") != null)
                 {
                     var rgfdataelement = xdoc.Element("DWSIM_Simulation_Data").Element("Spreadsheet").Element("RGFData");
-                    if (rgfdataelement != null)
+                    // A file saved with an untouched spreadsheet carries <RGFData /> - present but
+                    // empty - and deserialising that returns null, not an empty dictionary. Iterating
+                    // it threw, so a simulation saved by a host that never used the spreadsheet could
+                    // not be reopened at all.
+                    string rgfdata = rgfdataelement == null ? "" : rgfdataelement.Value;
+                    if (!string.IsNullOrWhiteSpace(rgfdata))
                     {
-                        string rgfdata = xdoc.Element("DWSIM_Simulation_Data").Element("Spreadsheet").Element("RGFData").Value;
                         rgfdata = rgfdata.Replace("Calibri", "Arial").Replace("10.25", "10");
-                        Dictionary<string, string> sdict = new Dictionary<string, string>();
-                        sdict = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(rgfdata);
+                        var sdict = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(rgfdata);
+                        if (sdict == null || sdict.Count == 0) return;
                         Spreadsheet.RemoveWorksheet(0);
                         foreach (var item in sdict)
                         {
@@ -458,6 +462,19 @@ namespace DWSIM.Automation
         public override void SetMessageListener(Action<string, IFlowsheet.MessageType> act)
         {
             listeningaction = act;
+        }
+
+        /// <summary>
+        /// Sets the handler the solver''s UpdateInterface calls, so a host can repaint while a
+        /// calculation runs - the flowsheet surface colours each object by its status, and without
+        /// this the drawing does not change until the solve is over. The constructor takes one too;
+        /// this is for the hosts that obtain a flowsheet from Automation3, which passes null.
+        ///
+        /// It is raised from the solver''s thread, so a UI host has to marshal.
+        /// </summary>
+        public void SetUpdateInterfaceHandler(Action act)
+        {
+            updateUIaction = act;
         }
 
         /// <summary>Generates a simulation results report for the specified objects and writes it to a stream.</summary>
