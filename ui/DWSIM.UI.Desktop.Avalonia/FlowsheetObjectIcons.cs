@@ -76,6 +76,11 @@ internal static class FlowsheetObjectIcons
     /// named <c>Image</c>, <c>ImageOn</c>/<c>ImageOff</c> or <c>_photoImage</c>). Those graphics -
     /// the PID/MPC/Python controllers and the switches - paint more than a body in their Draw
     /// (leader lines, live readouts, state images), so the canvas override must leave them alone.
+    ///
+    /// The walk stops short of <see cref="GraphicObjectType"/>: the base class declares
+    /// <c>Image</c> and <c>PhotoImage</c> for every graphic there is, so counting inherited fields
+    /// matched all 57 concrete types and the override below could never fire - which is why the
+    /// Logical blocks kept drawing their schematic spheres instead of the palette icon.
     /// </summary>
     private static bool GraphicHasOwnArtwork(Type type)
     {
@@ -84,11 +89,11 @@ internal static class FlowsheetObjectIcons
             if (_graphicArtworkFields.TryGetValue(type, out var cached)) return cached != null;
 
             FieldInfo? found = null;
-            for (var t = type; t != null && found == null; t = t.BaseType)
+            for (var t = type; t != null && t != GraphicObjectType && found == null; t = t.BaseType)
             {
                 foreach (var name in new[] { "Image", "ImageOn", "ImageOff", "_photoImage" })
                 {
-                    var f = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+                    var f = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
                     if (f?.FieldType == typeof(SKImage)) { found = f; break; }
                 }
             }
@@ -97,6 +102,17 @@ internal static class FlowsheetObjectIcons
             return found != null;
         }
     }
+
+    /// <summary>
+    /// Instruments that render a live reading - the analog/digital/level gauges and the Input's
+    /// editable value box. Their whole point is the number they show, so they keep their native
+    /// draw; blitting the palette photograph over them would freeze the needle and hide the value.
+    /// </summary>
+    private static bool IsLiveReadout(Interfaces.Enums.GraphicObjects.ObjectType type) =>
+        type == Interfaces.Enums.GraphicObjects.ObjectType.Input ||
+        type == Interfaces.Enums.GraphicObjects.ObjectType.AnalogGauge ||
+        type == Interfaces.Enums.GraphicObjects.ObjectType.DigitalGauge ||
+        type == Interfaces.Enums.GraphicObjects.ObjectType.LevelGauge;
 
     /// <summary>
     /// The private SKImage cache each external unit operation passes ByRef to
@@ -143,12 +159,19 @@ internal static class FlowsheetObjectIcons
     /// </summary>
     public static int? BeginDraw(IFlowsheet? flowsheet)
     {
+        _activeTheme = null;
+
         if (!Available || flowsheet == null) return null;
         if (!UiPreferences.UsePaletteIconsOnCanvas) return null;
 
         int theme;
         try { theme = flowsheet.FlowsheetOptions.FlowsheetColorTheme; } catch { return null; }
         if (theme != DefaultTheme && theme != ColorIconsTheme) return null;
+
+        // The surface override cannot read the theme back: the swap below puts the option on the
+        // photo mode for the whole frame, so DrawMode is 2 under both themes by the time anything
+        // paints. Remember which one we are really in.
+        _activeTheme = theme;
 
         List<ISimulationObject> objects;
         try { objects = new List<ISimulationObject>(flowsheet.SimulationObjects.Values); }
@@ -194,9 +217,14 @@ internal static class FlowsheetObjectIcons
     /// <summary>Puts back the theme <see cref="BeginDraw"/> overrode. Safe to call with null.</summary>
     public static void EndDraw(IFlowsheet? flowsheet, int? original)
     {
+        _activeTheme = null;
         if (flowsheet == null || original == null) return;
         try { flowsheet.FlowsheetOptions.FlowsheetColorTheme = original.Value; } catch { }
     }
+
+    /// <summary>The theme of the frame being painted, as seen before <see cref="BeginDraw"/>
+    /// swapped the option to the photo mode. Null outside a draw pass.</summary>
+    private static int? _activeTheme;
 
     private static SKPaint? _iconPaint;
 
@@ -220,8 +248,35 @@ internal static class FlowsheetObjectIcons
                 try { gobj.Draw(canvas); } catch { }
             }
 
+            DrawTag(gobj, canvas);
             DrawSelectionGizmo(gobj, canvas);
         };
+    }
+
+    /// <summary>Object types whose graphic is its own label or has none - the annotations and the
+    /// tables. Everything else gets its tag drawn under the block, as DesignSurface does natively.</summary>
+    private static bool HasNoTag(Interfaces.Enums.GraphicObjects.ObjectType t) =>
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_MasterTable ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_SpreadsheetTable ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Table ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Animation ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Chart ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Rectangle ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Image ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Text ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_Button ||
+        t == Interfaces.Enums.GraphicObjects.ObjectType.GO_FloatingTable;
+
+    /// <summary>
+    /// Draws the block's tag. DesignSurface only does this on the branch it takes when no override
+    /// is installed (it sits inside the Else of the GlobalDrawOverride test), so with the override
+    /// in place every label on the flowsheet would otherwise disappear.
+    /// </summary>
+    private static void DrawTag(IGraphicObject gobj, SKCanvas canvas)
+    {
+        if (HasNoTag(gobj.ObjectType)) return;
+        if (gobj is not DWSIM.Drawing.SkiaSharp.GraphicObjects.ShapeGraphic shape) return;
+        try { shape.DrawTag(canvas); } catch { }
     }
 
     private static bool TryDrawCanvasIcon(IGraphicObject gobj, SKCanvas canvas)
@@ -231,19 +286,26 @@ internal static class FlowsheetObjectIcons
         if (gobj.Owner == null) return false;
         if (IsExcluded(gobj.ObjectType)) return false;
 
+        // Only the Default theme swaps in palette artwork; under Color Icons the blocks must keep
+        // the photorealistic rendering they draw for themselves.
+        if (_activeTheme != DefaultTheme) return false;
+
         var state = _state.TryGetValue(gobj, out var s) ? s : null;
 
         // Let the graphics that render their own artwork and overlays natively keep doing so:
         // the controllers draw the control-panel plus the dashed leader lines and the SP/PV/MV
-        // readout, the switches draw their on/off state images and the inputs their editable
-        // value box - an icon blit would bury those, which is exactly why the controller's
+        // readout, the switches draw their on/off state images and the gauges and inputs their
+        // live reading - an icon blit would bury those, which is exactly why the controller's
         // dashed connections vanished when this override was installed.
-        if (gobj.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.Input) return false;
+        if (IsLiveReadout(gobj.ObjectType)) return false;
         if (GraphicHasOwnArtwork(gobj.GetType())) return false;
 
-        // ShapeGraphics with an embedded photo already get the right artwork swapped in by the
-        // BeginDraw pass and render it through DrawPhoto; drawing over them would double up.
-        if (state?.OriginalPhotoName is { Length: > 0 }) return false;
+        // ShapeGraphics with an embedded photo would otherwise fall through to the native
+        // DrawPhoto, which stretches the artwork across the whole block. Routing them through
+        // here too is what makes every icon scale by the same rule - the columns' tall artwork
+        // is letterboxed in the square box instead of being squashed into it. Connector
+        // positions are set by the surface in its own pass, so nothing is lost by not calling
+        // the native Draw.
 
         var icon = state?.PaletteIcon;
         if (icon == null)
@@ -260,23 +322,42 @@ internal static class FlowsheetObjectIcons
         }
         if (icon == null) return false;
 
-        using var restore = new SKAutoCanvasRestore(canvas);
-        if (gobj.Rotation != 0)
-            canvas.RotateDegrees(gobj.Rotation, gobj.X + gobj.Width / 2f, gobj.Y + gobj.Height / 2f);
-
+        // No local rotation: DesignSurface has already applied the object's flip and rotation to
+        // the canvas before invoking the override, so rotating again would double the angle.
         if (_iconPaint == null)
             _iconPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
 
-        canvas.DrawImage(icon, new SKRect(gobj.X, gobj.Y, gobj.X + gobj.Width, gobj.Y + gobj.Height), _iconPaint);
+        var dest = FitRect(icon, gobj);
+
+        canvas.DrawImage(icon, dest, _iconPaint);
 
         if (!gobj.Active || gobj.Status == Interfaces.Enums.GraphicObjects.Status.Inactive)
         {
             // grey the block out the way ShapeGraphic does for inactive objects
             using var p = new SKPaint { BlendMode = SKBlendMode.Color, ColorFilter = SKColorFilter.CreateBlendMode(SKColors.Gray, SKBlendMode.SrcIn) };
-            canvas.DrawImage(icon, new SKRect(gobj.X, gobj.Y, gobj.X + gobj.Width, gobj.Y + gobj.Height), p);
+            canvas.DrawImage(icon, dest, p);
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The largest rectangle with the icon's aspect ratio that fits the block, centred on it. Every
+    /// block now spawns in the same square box, so artwork that is not square (the columns, the PFR
+    /// tube) is letterboxed instead of stretched to fill it.
+    /// </summary>
+    private static SKRect FitRect(SKImage icon, IGraphicObject gobj)
+    {
+        float w = gobj.Width, h = gobj.Height;
+        if (icon.Width <= 0 || icon.Height <= 0 || w <= 0 || h <= 0)
+            return new SKRect(gobj.X, gobj.Y, gobj.X + w, gobj.Y + h);
+
+        var scale = Math.Min(w / icon.Width, h / icon.Height);
+        var dw = icon.Width * scale;
+        var dh = icon.Height * scale;
+        var left = gobj.X + (w - dw) / 2f;
+        var top = gobj.Y + (h - dh) / 2f;
+        return new SKRect(left, top, left + dw, top + dh);
     }
 
     private static void DrawSelectionGizmo(IGraphicObject gobj, SKCanvas canvas)
@@ -286,10 +367,7 @@ internal static class FlowsheetObjectIcons
         using var fill = new SKPaint { Color = SKColors.LightBlue.WithAlpha(75), IsAntialias = true, IsStroke = false };
         using var line = new SKPaint { Color = SKColors.LightBlue.WithAlpha(175), IsAntialias = true, IsStroke = true, StrokeWidth = 2 };
 
-        using var restore = new SKAutoCanvasRestore(canvas);
-        if (gobj.Rotation != 0)
-            canvas.RotateDegrees(gobj.Rotation, gobj.X + gobj.Width / 2f, gobj.Y + gobj.Height / 2f);
-
+        // As above, the canvas already carries the object's transform.
         var rect = new SKRect(gobj.X - 10, gobj.Y - 10, gobj.X + gobj.Width + 10, gobj.Y + gobj.Height + 10);
         canvas.DrawRoundRect(rect, 4, 4, fill);
         canvas.DrawRoundRect(rect, 4, 4, line);

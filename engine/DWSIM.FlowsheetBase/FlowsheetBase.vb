@@ -1393,7 +1393,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.External
 
-                Dim myNode As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim myNode As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 myNode.Tag = uoobj.Prefix + objindex
                 If tag <> "" Then myNode.Tag = tag
                 gObj = myNode
@@ -1408,7 +1408,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Switch
 
-                Dim myGobj As New SwitchGraphic(mpx, mpy, 50, 40)
+                Dim myGobj As New SwitchGraphic(mpx, mpy, 50, 50)
                 myGobj.Tag = "SW-" + objindex
                 If tag <> "" Then myGobj.Tag = tag
                 gObj = myGobj
@@ -1524,7 +1524,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Adjust
 
-                Dim myNode As New AdjustGraphic(mpx, mpy, 50, 63)
+                Dim myNode As New AdjustGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "C-" + objindex
@@ -1540,7 +1540,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Spec
 
-                Dim myNode As New SpecGraphic(mpx, mpy, 50, 63)
+                Dim myNode As New SpecGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "SP-" + objindex
@@ -1556,7 +1556,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_InformationCarrier
 
-                Dim myNode As New InformationCarrierGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New InformationCarrierGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "IC-" + objindex
@@ -1572,7 +1572,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_Recycle
 
-                Dim myNode As New RecycleGraphic(mpx, mpy, 50, 63)
+                Dim myNode As New RecycleGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "R-" + objindex
@@ -1588,7 +1588,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OT_EnergyRecycle
 
-                Dim myNode As New EnergyRecycleGraphic(mpx, mpy, 50, 63)
+                Dim myNode As New EnergyRecycleGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "ER-" + objindex
@@ -1604,7 +1604,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.NodeIn, ObjectType.Mixer
 
-                Dim myNode As New MixerGraphic(mpx, mpy, 20, 20)
+                Dim myNode As New MixerGraphic(mpx, mpy, 50, 50)
                 myNode.LineWidth = 2
                 myNode.Fill = True
                 myNode.Tag = "MIX-" + objindex
@@ -1620,7 +1620,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.NodeOut, ObjectType.Splitter
 
-                Dim myNodeo As New SplitterGraphic(mpx, mpy, 20, 20)
+                Dim myNodeo As New SplitterGraphic(mpx, mpy, 50, 50)
                 myNodeo.LineWidth = 2
                 myNodeo.Fill = True
                 myNodeo.Tag = "SPL-" + objindex
@@ -1637,10 +1637,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Pump
 
-                Dim myPump As New PumpGraphic(mpx, mpy, 25, 25)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myPump.SetSize(New SKSize(40, 40))
-                End If
+                Dim myPump As New PumpGraphic(mpx, mpy, 50, 50)
                 myPump.LineWidth = 2
                 myPump.Fill = True
                 myPump.Tag = "PUMP-" + objindex
@@ -1675,9 +1672,6 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.Vessel
 
                 Dim myVessel As New VesselGraphic(mpx, mpy, 50, 50)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myVessel.SetSize(New SKSize(70, 60))
-                End If
                 myVessel.LineWidth = 2
                 myVessel.Fill = True
                 myVessel.Tag = "V-" + objindex
@@ -1729,10 +1723,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Compressor
 
-                Dim myComp As New CompressorGraphic(mpx, mpy, 25, 25)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myComp.SetSize(New SKSize(50, 50))
-                End If
+                Dim myComp As New CompressorGraphic(mpx, mpy, 50, 50)
                 myComp.LineWidth = 2
                 myComp.Fill = True
                 myComp.Tag = "C-" + objindex
@@ -1749,10 +1740,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Expander
 
-                Dim myComp As New TurbineGraphic(mpx, mpy, 25, 25)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myComp.SetSize(New SKSize(50, 50))
-                End If
+                Dim myComp As New TurbineGraphic(mpx, mpy, 50, 50)
                 myComp.LineWidth = 2
                 myComp.Fill = True
                 myComp.Tag = "X-" + objindex
@@ -1768,7 +1756,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Cooler
 
-                Dim myCool As New CoolerGraphic(mpx, mpy, 25, 25)
+                Dim myCool As New CoolerGraphic(mpx, mpy, 50, 50)
                 myCool.LineWidth = 2
                 myCool.Fill = True
                 myCool.Tag = "CL-" + objindex
@@ -1785,7 +1773,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Heater
 
-                Dim myHeat As New HeaterGraphic(mpx, mpy, 25, 25)
+                Dim myHeat As New HeaterGraphic(mpx, mpy, 50, 50)
                 myHeat.LineWidth = 2
                 myHeat.Fill = True
                 myHeat.Tag = "HT-" + objindex
@@ -1802,10 +1790,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Pipe
 
-                Dim myPipe As New PipeSegmentGraphic(mpx, mpy, 50, 10)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myPipe.SetSize(New SKSize(50, 20))
-                End If
+                Dim myPipe As New PipeSegmentGraphic(mpx, mpy, 50, 50)
                 myPipe.LineWidth = 2
                 myPipe.Fill = True
                 myPipe.Tag = "PIPE-" + objindex
@@ -1822,11 +1807,8 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.Valve
 
-                Dim myValve As New ValveGraphic(mpx, mpy, 20, 20)
+                Dim myValve As New ValveGraphic(mpx, mpy, 50, 50)
                 Dim myPipe As New PipeSegmentGraphic(mpx, mpy, 50, 10)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myValve.SetSize(New SKSize(30, 30))
-                End If
                 myValve.LineWidth = 2
                 myValve.Fill = True
                 myValve.Tag = "VALVE-" + objindex
@@ -1909,7 +1891,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.RCT_PFR
 
-                Dim myRpfr As New PFRGraphic(mpx, mpy, 70, 20)
+                Dim myRpfr As New PFRGraphic(mpx, mpy, 50, 50)
                 myRpfr.LineWidth = 2
                 myRpfr.Fill = True
                 myRpfr.Tag = "PFR-" + objindex
@@ -1926,10 +1908,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.HeatExchanger
 
-                Dim myHeatExchanger As New HeatExchangerGraphic(mpx, mpy, 30, 30)
-                If FlowsheetOptions.FlowsheetColorTheme = 2 Then
-                    myHeatExchanger.SetSize(New SKSize(60, 60))
-                End If
+                Dim myHeatExchanger As New HeatExchangerGraphic(mpx, mpy, 50, 50)
                 myHeatExchanger.LineWidth = 2
                 myHeatExchanger.Fill = True
                 myHeatExchanger.Tag = "HX-" + objindex
@@ -1946,7 +1925,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.ShortcutColumn
 
-                Dim mySC As New ShortcutColumnGraphic(mpx, mpy, 50, 63)
+                Dim mySC As New ShortcutColumnGraphic(mpx, mpy, 50, 50)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "SCOL-" + objindex
@@ -1962,7 +1941,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.DistillationColumn
 
-                Dim mySC As New RigorousColumnGraphic(mpx, mpy, 50, 63)
+                Dim mySC As New RigorousColumnGraphic(mpx, mpy, 50, 50)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "DCOL-" + objindex
@@ -1979,7 +1958,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.AbsorptionColumn
 
-                Dim mySC As New AbsorptionColumnGraphic(mpx, mpy, 50, 63)
+                Dim mySC As New AbsorptionColumnGraphic(mpx, mpy, 50, 50)
                 mySC.LineWidth = 2
                 mySC.Fill = True
                 mySC.Tag = "ABS-" + objindex
@@ -2045,7 +2024,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.OrificePlate
 
-                Dim myOPL As New OrificePlateGraphic(mpx, mpy, 25, 25)
+                Dim myOPL As New OrificePlateGraphic(mpx, mpy, 50, 50)
                 myOPL.LineWidth = 2
                 myOPL.Fill = True
                 myOPL.Tag = "OP-" + objindex
@@ -2062,7 +2041,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.CustomUO
 
-                Dim myCUO As New ScriptGraphic(mpx, mpy, 25, 25)
+                Dim myCUO As New ScriptGraphic(mpx, mpy, 50, 50)
                 myCUO.LineWidth = 2
                 myCUO.Fill = True
                 myCUO.Tag = "CUSTOM-" + objindex
@@ -2079,7 +2058,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.ExcelUO
 
-                Dim myEUO As New SpreadsheetGraphic(mpx, mpy, 25, 25)
+                Dim myEUO As New SpreadsheetGraphic(mpx, mpy, 50, 50)
                 myEUO.LineWidth = 2
                 myEUO.Fill = True
                 myEUO.Tag = "SHEET-" + objindex
@@ -2100,7 +2079,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.FlowsheetUO
 
-                Dim myEUO As New FlowsheetGraphic(mpx, mpy, 25, 25)
+                Dim myEUO As New FlowsheetGraphic(mpx, mpy, 50, 50)
                 myEUO.LineWidth = 2
                 myEUO.Fill = True
                 myEUO.Tag = "FS-" + objindex
@@ -2117,7 +2096,7 @@ Imports DWSIM.ExtensionMethods
 
             Case ObjectType.CapeOpenUO
 
-                Dim myCUO As New CAPEOPENGraphic(mpx, mpy, 40, 40)
+                Dim myCUO As New CAPEOPENGraphic(mpx, mpy, 50, 50)
                 myCUO.LineWidth = 2
                 myCUO.Fill = True
                 myCUO.Tag = "CO-" + objindex
@@ -2134,7 +2113,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.RCT_GibbsReaktoro
 
                 Dim fsobj = New Reactor_ReaktoroGibbs()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "RGIBBSR-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
@@ -2150,7 +2129,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.WindTurbine
 
                 Dim fsobj = New WindTurbine()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "WT-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
@@ -2166,7 +2145,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.HydroelectricTurbine
 
                 Dim fsobj = New HydroelectricTurbine()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "HYT-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
@@ -2182,7 +2161,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.PEMFuelCell
 
                 Dim fsobj = New PEMFC_Amphlett()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "PEMFC-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
@@ -2198,7 +2177,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.SolarPanel
 
                 Dim fsobj = New SolarPanel()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "SP-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
@@ -2214,7 +2193,7 @@ Imports DWSIM.ExtensionMethods
             Case ObjectType.WaterElectrolyzer
 
                 Dim fsobj = New WaterElectrolyzer()
-                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 40, 40)
+                Dim grobj As New ExternalUnitOperationGraphic(mpx, mpy, 50, 50)
                 grobj.Tag = "WELEC-" + objindex
                 If tag <> "" Then grobj.Tag = tag
                 gObj = grobj
