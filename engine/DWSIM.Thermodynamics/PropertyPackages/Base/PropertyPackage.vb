@@ -1862,6 +1862,148 @@ Namespace PropertyPackages
 
         End Function
 
+        ''' <summary>
+        ''' Puts the current material stream into the state a flash result describes, without running the
+        ''' flash: everything <see cref="DW_CalcEquilibrium"/> does after its own flash call returns.
+        '''
+        ''' A caller that has already flashed a state has no reason to flash it again to record it. The pipe
+        ''' did exactly that at every increment: its energy balance flashed at the outlet pressure and
+        ''' enthalpy, kept only the temperature, and then set the stream to that same pressure and enthalpy
+        ''' and asked it to flash. This exists so the second flash can be dropped, and it lives next to
+        ''' <see cref="DW_CalcEquilibrium"/> so the two cannot drift apart.
+        ''' </summary>
+        Public Sub DW_ApplyFlashResult(result As Interfaces.IFlashCalculationResult, T As Double, P As Double, H As Double)
+
+            Dim ms = Me.CurrentMaterialStream
+            If ms Is Nothing OrElse result Is Nothing Then Exit Sub
+
+            Dim xv = result.GetVaporPhaseMoleFraction()
+            Dim xl = result.GetLiquidPhase1MoleFraction()
+            Dim xl2 = result.GetLiquidPhase2MoleFraction()
+            Dim xs = result.GetSolidPhaseMoleFraction()
+
+            Dim Vy = result.GetVaporPhaseMoleFractions()
+            Dim Vx = result.GetLiquidPhase1MoleFractions()
+            Dim Vx2 = result.GetLiquidPhase2MoleFractions()
+            Dim Vs = result.GetSolidPhaseMoleFractions()
+
+            DW_ApplyPhaseSplit(xv, xl, xl2, xs, Vy, Vx, Vx2, Vs)
+
+            'the fugacity coefficients and the partial pressures that go with them: nothing in the property
+            'routines reads these, but they are part of the state the flash leaves behind and a later caller
+            'may
+            Dim FCL = Me.DW_CalcFugCoeff(Vx, T, P, State.Liquid)
+            Dim FCL2 = Me.DW_CalcFugCoeff(Vx2, T, P, State.Liquid)
+            Dim FCV = Me.DW_CalcFugCoeff(Vy, T, P, State.Vapor)
+            Dim FCS = Me.DW_CalcFugCoeff(Vs, T, P, State.Solid)
+
+            DW_WritePhaseFugacities(3, Vx, FCL, P)
+            DW_WritePhaseFugacities(4, Vx2, FCL2, P)
+            DW_WritePhaseFugacities(2, Vy, FCV, P)
+            DW_WritePhaseFugacities(7, Vs, FCS, 0.0)
+
+            Dim SM, SV, SL, SL2, SS As Double
+            If xl <> 0 Then SL = Me.DW_CalcEntropy(Vx, T, P, State.Liquid)
+            If xl2 <> 0 Then SL2 = Me.DW_CalcEntropy(Vx2, T, P, State.Liquid)
+            If xv <> 0 Then SV = Me.DW_CalcEntropy(Vy, T, P, State.Vapor)
+            If xs <> 0 AndAlso T <> 298.15 Then
+                Dim constprops As New List(Of Interfaces.ICompoundConstantProperties)
+                For Each su As Interfaces.ICompound In ms.Phases(0).Compounds.Values
+                    constprops.Add(su.ConstantProperties)
+                Next
+                SS = Me.DW_CalcSolidEnthalpy(T, Vs, constprops) / (T - 298.15)
+            End If
+
+            SM = ms.Phases(4).Properties.massfraction.GetValueOrDefault * SL2 +
+                 ms.Phases(3).Properties.massfraction.GetValueOrDefault * SL +
+                 ms.Phases(2).Properties.massfraction.GetValueOrDefault * SV +
+                 ms.Phases(7).Properties.massfraction.GetValueOrDefault * SS
+
+            ms.Phases(0).Properties.temperature = T
+            ms.Phases(0).Properties.pressure = P
+            ms.Phases(0).Properties.enthalpy = H
+            ms.Phases(0).Properties.entropy = SM
+
+            ms.AtEquilibrium = True
+
+        End Sub
+
+        ''' <summary>Fugacity coefficients, partial pressures and the zeroed activity terms of one phase.</summary>
+        Private Sub DW_WritePhaseFugacities(phaseindex As Integer, x As Double(), fc As Double(), P As Double)
+
+            If x Is Nothing OrElse fc Is Nothing Then Exit Sub
+
+            Dim i As Integer = 0
+            For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(phaseindex).Compounds.Values
+                If i >= x.Length OrElse i >= fc.Length Then Exit For
+                subst.FugacityCoeff = fc(i)
+                subst.ActivityCoeff = 0
+                subst.PartialVolume = 0
+                subst.PartialPressure = x(i) * fc(i) * P
+                i += 1
+            Next
+
+        End Sub
+
+        ''' <summary>
+        ''' Writes a phase split computed elsewhere into the current material stream, without flashing.
+        '''
+        ''' This is the part of <see cref="DW_CalcEquilibrium"/> that follows the flash call: the molar
+        ''' fraction of each phase, the composition of each phase, and the mass fractions that follow from
+        ''' them. It is here so that a caller which already knows the answer, because it cached it or read it
+        ''' off a table, can put the stream into that state and then ask for properties alone.
+        '''
+        ''' Fugacity coefficients, activity coefficients and partial pressures are NOT written, since the
+        ''' property routines do not read them. A caller that needs those has to run the real flash.
+        ''' </summary>
+        Public Sub DW_ApplyPhaseSplit(xv As Double, xl As Double, xl2 As Double, xs As Double,
+                                      Vy As Double(), Vx As Double(), Vx2 As Double(), Vs As Double())
+
+            Dim ms = Me.CurrentMaterialStream
+            If ms Is Nothing Then Exit Sub
+
+            ms.Phases(3).Properties.molarfraction = xl
+            ms.Phases(4).Properties.molarfraction = xl2
+            ms.Phases(2).Properties.molarfraction = xv
+            ms.Phases(7).Properties.molarfraction = xs
+
+            DW_WritePhaseComposition(3, Vx)
+            DW_WritePhaseComposition(4, Vx2)
+            DW_WritePhaseComposition(2, Vy)
+            DW_WritePhaseComposition(7, Vs)
+
+            Dim mml = xl * Me.AUX_MMM(Phase.Liquid1)
+            Dim mml2 = xl2 * Me.AUX_MMM(Phase.Liquid2)
+            Dim mmv = xv * Me.AUX_MMM(Phase.Vapor)
+            Dim mms = xs * Me.AUX_MMM(Phase.Solid)
+            Dim mmt = mml + mml2 + mmv + mms
+
+            If mmt > 0.0 Then
+                ms.Phases(3).Properties.massfraction = mml / mmt
+                ms.Phases(4).Properties.massfraction = mml2 / mmt
+                ms.Phases(2).Properties.massfraction = mmv / mmt
+                ms.Phases(7).Properties.massfraction = mms / mmt
+            End If
+
+        End Sub
+
+        ''' <summary>Sets one phase's compound mole fractions and the mass fractions that follow from them.</summary>
+        Private Sub DW_WritePhaseComposition(phaseindex As Integer, x As Double())
+
+            If x Is Nothing Then Exit Sub
+
+            Dim i As Integer = 0
+            For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(phaseindex).Compounds.Values
+                If i >= x.Length Then Exit For
+                subst.MoleFraction = x(i)
+                i += 1
+            Next
+            For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(phaseindex).Compounds.Values
+                subst.MassFraction = Me.AUX_CONVERT_MOL_TO_MASS(subst.Name, phaseindex)
+            Next
+
+        End Sub
+
         Public MustOverride Function SupportsComponent(ByVal comp As Interfaces.ICompoundConstantProperties) As Boolean
 
         Public MustOverride Sub DW_CalcPhaseProps(ByVal Phase As Phase)

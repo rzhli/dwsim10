@@ -131,6 +131,11 @@ Version 10.2
 - [CHG] Automation interface: a flowsheet obtained through it can be given the repaint handler the solver calls, so a host can colour objects by status while a solve runs
 - [CHG] Pipe network: an option evaluates every pipe on two grids and extrapolates away the leading discretisation error, reaching a converged answer from the discretisation already drawn for about twice the cost (off by default)
 - [CHG] Pipe network: the nodal solver uses an analytic Beggs-Brill pressure-drop gradient, so multiphase branches converge with fewer correlation evaluations
+- [CHG] Pipe network: an option relaxes each pipe's energy balance by Wegstein's method, reaching the same answer in far fewer passes on pipes that exchange heat (off by default)
+- [CHG] Pipe network: the default pipe temperature convergence tolerance is 0.01 K, was 0.1 K
+- [CHG] Pipe network: a compositional pipe also re-flashes on how far the fluid has moved, not only on a step count
+- [CHG] Pipe network: a branch can read tabulated fluid properties instead of flashing, and stops tabulating when its table does not pay for itself
+- [CHG] Pipe network: the pipe flash and energy-balance settings are on the network property list, with the tolerances and iteration limits
 - [FIX] A product of a CAPE-OPEN unit operation was re-flashed by the flowsheet property package, discarding the phase split the unit had computed
 - [FIX] Object editors were cut off on a display set above 96 dots per inch; the distillation column stage table was the most visible case
 - [FIX] A flowsheet opened from the desktop on macOS started DWSIM with nothing loaded and reported an unsupported file
@@ -201,6 +206,7 @@ Version 10.2
 - [FIX] Distillation: a column with no pressure drop specified left its stage pressures at zero and failed to solve; the stage pressures are repaired from the condenser and reboiler pressures (issue #38)
 - [FIX] Vapor Compression Chiller: the saturated vapour and liquid states are taken from the vapour-fraction flash and converted to a molar basis, and the shaft power is written to the shaft port, which is connectable and takes a duty specification
 - [FIX] Fired Heater: it is fired for the duty it is asked to deliver, writes the resulting fuel flow back to its fuel stream, and no longer rejects the geometry it ships with
+- [FIX] Fired Heater: a burner lightly fired for its installed surface area no longer fails with a NaN flue gas temperature; the radiant, shield and convection sections cannot absorb more heat than the fuel releases
 - [FIX] Advanced Heat Exchanger: Simulation mode solves for the exchanger's own duty
 - [FIX] Refining unit operations: the outlet temperature and mass balances are closed and the duty ports are connectable
 - [FIX] Neutralization reactor: its energy balance is closed
@@ -232,6 +238,9 @@ Version 10.2
 - [FIX] Pipe network: the direct-evaluation vs surrogate choice is latched for the life of the warm start, so a network returns the same result every solve
 - [FIX] Mixer: an inlet carrying zero mass flow (the empty phase of an upstream split, say) no longer fails the mixer with a NaN-enthalpy error; it is skipped (issue #45)
 - [FIX] Python Script: the Python 3 standard library is bundled and on the interpreter search path, so a Python Script unit operation and flowsheet scripts can import stdlib modules (pathlib, json) on every platform (issue #46)
+- [FIX] Pipe network editor: the temperature and pressure tolerance fields were loaded into each other's box; the stored values are worth checking in simulations saved earlier
+- [FIX] Pipe segment: no heat transfer was reported, and the increment stopped iterating, where the fluid crossed the ambient temperature along an increment
+- [FIX] Pipe network: the nodal solver's outer loop tests temperature against its own tolerance instead of one meant for pressure; a gas condensate now returns the same answer when solved repeatedly
 
 Version 10.1
 
