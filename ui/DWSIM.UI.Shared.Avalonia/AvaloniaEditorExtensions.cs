@@ -345,12 +345,26 @@ public static class AvaloniaEditorExtensions
     // DropDown / ComboBox rows
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Refills a picker built by the CreateAndAddDropDownRow helpers.
+    ///
+    /// Avalonia's ItemsControl accepts either the inline <c>Items</c> collection or a bound
+    /// <c>ItemsSource</c>, never both: assigning ItemsSource while Items holds anything throws
+    /// InvalidOperationException("Items collection must be empty before using ItemsSource"), and
+    /// touching Items while an ItemsSource is set throws the other way round. A refill inside a
+    /// SelectionChanged handler that picks the wrong one takes the process down - nothing catches
+    /// on the dispatcher. The helpers below fill ItemsSource, so refills go through here.
+    /// </summary>
+    public static void SetOptions(this ComboBox cb, IEnumerable<string> options)
+    {
+        cb.ItemsSource = options as IList<string> ?? new List<string>(options);
+    }
+
     public static ComboBox CreateAndAddDropDownRow(this AvaloniaEditorPanel panel,
         string label, List<string> options, int position,
         Action<ComboBox, EventArgs>? command, Action? keypress = null)
     {
-        var cb = new ComboBox { Width = ControlWidth };
-        foreach (var item in options) cb.Items.Add(item);
+        var cb = new ComboBox { Width = ControlWidth, ItemsSource = options };
         if (options.Count > 0 && position >= 0 && position < options.Count)
             cb.SelectedIndex = position;
 
@@ -364,8 +378,7 @@ public static class AvaloniaEditorExtensions
         string label, List<string> options, string selectedItem,
         Action<ComboBox, EventArgs>? command, Action? keypress = null)
     {
-        var cb = new ComboBox { Width = ControlWidth };
-        foreach (var item in options) cb.Items.Add(item);
+        var cb = new ComboBox { Width = ControlWidth, ItemsSource = options };
         var idx = options.IndexOf(selectedItem);
         if (idx >= 0) cb.SelectedIndex = idx;
 
@@ -379,8 +392,7 @@ public static class AvaloniaEditorExtensions
         string label, List<string> options, int position,
         Action<ComboBox, EventArgs>? command, int ddwidth, Action? keypress = null)
     {
-        var cb = new ComboBox { Width = ddwidth };
-        foreach (var item in options) cb.Items.Add(item);
+        var cb = new ComboBox { Width = ddwidth, ItemsSource = options };
         if (options.Count > 0 && position >= 0 && position < options.Count)
             cb.SelectedIndex = position;
 

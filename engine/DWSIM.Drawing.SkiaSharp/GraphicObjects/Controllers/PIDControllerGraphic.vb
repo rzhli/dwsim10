@@ -145,7 +145,13 @@ Namespace GraphicObjects.Shapes
                 End Select
                 Dim trect As New SKRect(0, 0, 2, 2)
                 paint.GetTextPath("TEST", 0, 0).GetBounds(trect)
-                Owner?.UpdateVars()
+                ' A repaint must never be able to throw: a badly configured controller (a link
+                ' pointing at a deleted object) would otherwise take the whole UI down from the
+                ' paint handler, where nothing catches.
+                Try
+                    Owner?.UpdateVars()
+                Catch
+                End Try
                 canvas.DrawText("SP " + Convert.ToDouble(Owner?.SPValue).ToString("G2"), X + Width + 3 * f, Y + Height * 0.8, paint)
                 canvas.DrawText("PV " + Convert.ToDouble(Owner?.PVValue).ToString("G2"), X + Width + 3 * f, Y + Height * 0.8 + trect.Height + 2 * f, paint)
                 canvas.DrawText("MV " + Convert.ToDouble(Owner?.MVValue).ToString("G2"), X + Width + 3 * f, Y + Height * 0.8 + 2 * trect.Height + 4 * f, paint)

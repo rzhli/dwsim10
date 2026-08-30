@@ -70,6 +70,9 @@ namespace DWSIM.UI.Desktop.Editors
             var properties = new List<string>();
             ComboBox propertyPicker = null;
             TextBlock valueLabel = null;
+            // set by AddUnitPickers: adopts the unit that belongs to the property now selected,
+            // and moves both unit pickers onto it
+            Action<ISimulationObject> syncUnits = null;
 
             var selected = objects.FindIndex(x => x.Name == info.ID);
             var objectPicker = panel.CreateAndAddDropDownRow(label + " Object", tags,
@@ -127,9 +130,30 @@ namespace DWSIM.UI.Desktop.Editors
                     info.Units = obj.GetPropertyUnit(info.PropertyName, su);
                     info.UnitsType = su.GetUnitType(info.Units);
                 }
+                else if (syncUnits != null && !UnitFitsProperty(obj, info, su))
+                {
+                    // The unit the controller stored belongs to the property it used to point at.
+                    // Reading a valve opening through "C" gave -273.15 in the Current Value row, so
+                    // when the property no longer measures the same thing, adopt its own unit.
+                    syncUnits(obj);
+                }
 
                 ShowValue();
                 if (changed != null) changed();
+            }
+
+            /// <summary>True when the stored unit is one of those the property's own unit type offers.</summary>
+            static bool UnitFitsProperty(ISimulationObject obj, SpecialOpObjectInfo info, IUnitsOfMeasure su)
+            {
+                string unit;
+                try { unit = obj.GetPropertyUnit(info.PropertyName, su); }
+                catch (Exception) { return true; }
+
+                // a dimensionless property (an opening in %, a mode index) has no unit to compare
+                if (string.IsNullOrEmpty(unit)) return string.IsNullOrEmpty(info.Units);
+
+                try { return su.GetUnitSet(su.GetUnitType(unit)).Contains(info.Units); }
+                catch (Exception) { return true; }
             }
 
             ReloadProperties();
@@ -137,7 +161,7 @@ namespace DWSIM.UI.Desktop.Editors
             propertyPicker = panel.CreateAndAddDropDownRow(label + " Property", properties.ToList(),
                 Math.Max(0, properties.IndexOf(info.PropertyName ?? "")), (dd, e) => StoreProperty());
 
-            if (withUnits) AddUnitPickers(panel, su, info, label, () => ShowValue());
+            if (withUnits) syncUnits = AddUnitPickers(panel, su, info, label, () => ShowValue());
 
             valueLabel = panel.CreateAndAddTwoLabelsRow("Current Value", "");
             ShowValue();
@@ -156,7 +180,7 @@ namespace DWSIM.UI.Desktop.Editors
                 Attach(block, obj, role);
 
                 ReloadProperties();
-                propertyPicker.ItemsSource = properties.ToList();
+                propertyPicker.SetOptions(properties);
                 propertyPicker.SelectedIndex = Math.Max(0, properties.IndexOf(info.PropertyName ?? ""));
 
                 StoreProperty();
@@ -167,8 +191,10 @@ namespace DWSIM.UI.Desktop.Editors
         /// <summary>
         /// The units group and the unit inside it, which is how the controllers store the unit
         /// they read and write a variable in, independently of the simulation's unit system.
+        /// Returns a delegate that adopts the unit of the property currently stored on
+        /// <paramref name="info"/> and moves both pickers onto it.
         /// </summary>
-        private static void AddUnitPickers(AvaloniaEditorPanel panel, IUnitsOfMeasure su,
+        private static Action<ISimulationObject> AddUnitPickers(AvaloniaEditorPanel panel, IUnitsOfMeasure su,
                                            SpecialOpObjectInfo info, string label, Action changed)
         {
             var groups = Enum.GetNames(typeof(UnitOfMeasure)).ToList();
@@ -191,7 +217,7 @@ namespace DWSIM.UI.Desktop.Editors
 
                     var refilled = UnitsOf(info.UnitsType);
                     if (unitPicker == null) return;
-                    unitPicker.ItemsSource = refilled;
+                    unitPicker.SetOptions(refilled);
                     unitPicker.SelectedIndex = Math.Max(0, refilled.IndexOf(info.Units ?? ""));
                 });
 
@@ -204,6 +230,22 @@ namespace DWSIM.UI.Desktop.Editors
                     info.Units = picked;
                     changed();
                 });
+
+            return obj =>
+            {
+                string unit;
+                try { unit = obj.GetPropertyUnit(info.PropertyName, su) ?? ""; }
+                catch (Exception) { return; }
+
+                info.Units = unit;
+                info.UnitsType = string.IsNullOrEmpty(unit) ? UnitOfMeasure.none : su.GetUnitType(unit);
+
+                groupPicker.SelectedIndex = Math.Max(0, groups.IndexOf(info.UnitsType.ToString()));
+
+                var refilled = UnitsOf(info.UnitsType);
+                unitPicker.SetOptions(refilled);
+                unitPicker.SelectedIndex = Math.Max(0, refilled.IndexOf(info.Units));
+            };
         }
 
         /// <summary>Clears the marker the block left on the object it used to point at.</summary>

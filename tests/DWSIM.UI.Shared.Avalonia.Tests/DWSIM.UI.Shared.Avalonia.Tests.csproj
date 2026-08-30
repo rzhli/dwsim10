@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DWSIM.UI.Shared.Avalonia.Tests</RootNamespace>
+    <AssemblyName>DWSIM.UI.Shared.Avalonia.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ui\DWSIM.UI.Shared.Avalonia\DWSIM.UI.Shared.Avalonia.csproj" />
+  </ItemGroup>
+
+</Project>

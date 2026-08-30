@@ -654,6 +654,9 @@ Namespace SpecialOps
 
             Dim ManipulatedObject = GetFlowsheet.SimulationObjects.Values.Where(Function(x) x.Name = ManipulatedObjectData.ID).SingleOrDefault
 
+            ' Nothing to estimate from when either link is unresolved - see UpdateVars.
+            If ControlledObject Is Nothing Or ManipulatedObject Is Nothing Then Exit Sub
+
             Dim CurrentValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ControlledObjectData.Units, ControlledObject.GetPropertyValue(ControlledObjectData.PropertyName))
 
             Dim CurrentManipulatedValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ManipulatedObjectData.Units, ManipulatedObject.GetPropertyValue(ManipulatedObjectData.PropertyName))
@@ -713,6 +716,16 @@ Namespace SpecialOps
             ' assigned it. A controller driven from the Automation API or from MCP, or restored from a
             ' file whose editor was never opened, dereferenced Nothing there.
             ManipulatedObject = TryCast(manipulated, SharedClasses.UnitOperations.BaseClass)
+            ControlledObject = TryCast(controlled, SharedClasses.UnitOperations.BaseClass)
+
+            ' A linked object can be gone: deleted after the controller was pointed at it, or saved
+            ' with an ID that no longer resolves (a file cloned from another one keeps the old GUIDs).
+            ' The graphic calls this on every repaint, so dereferencing Nothing here killed the whole
+            ' UI - leave the last known reading in place and let the block report itself uncalculated.
+            If controlled Is Nothing Or manipulated Is Nothing Then
+                SPValue = AdjustValue
+                Return
+            End If
 
             Dim CurrentValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ControlledObjectData.Units, controlled.GetPropertyValue(ControlledObjectData.PropertyName))
 
@@ -732,12 +745,27 @@ Namespace SpecialOps
             ' Calculates PID value for given reference feedback
             ' u(t) = K_p e(t) + K_i \int_{0}^{t} e(t)dt + K_d {de}/{dt}
 
+            UpdateVars()
+
+            ' An unresolved link is a configuration error, not a crash: the solver catches this per
+            ' object, marks the block with an error status and carries on with the rest of the
+            ' flowsheet. Without it the run ended on a NullReferenceException from the SetPropertyValue
+            ' on the last line. Checked before the integrator lookup so the message names the broken
+            ' link rather than the dynamics schedule the lookup would fail on first.
+            If ControlledObject Is Nothing Then
+                Throw New Exception("The controlled object '" + ControlledObjectData.Name +
+                                    "' is not on the flowsheet. Point the controller at an existing object.")
+            End If
+
+            If ManipulatedObject Is Nothing Then
+                Throw New Exception("The manipulated object '" + ManipulatedObjectData.Name +
+                                    "' is not on the flowsheet. Point the controller at an existing object.")
+            End If
+
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
             Dim integrator = FlowSheet.DynamicsManager.IntegratorList(integratorID)
 
             Dim timestep = integrator.IntegrationStep.TotalSeconds
-
-            UpdateVars()
 
             If CascadeMasterID <> "" Then
                 Try

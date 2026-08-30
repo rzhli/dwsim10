@@ -305,6 +305,19 @@ Namespace SpecialOps
 
             Dim ManipulatedObject = GetFlowsheet.SimulationObjects.Values.Where(Function(x) x.Name = ManipulatedObjectData.ID).SingleOrDefault
 
+            ' A link can point at an object that is no longer on the flowsheet (deleted after the
+            ' controller was configured, or a file cloned from another one keeping the old IDs).
+            ' Report it as a calculation error instead of dereferencing Nothing.
+            If ControlledObject Is Nothing Then
+                Throw New Exception("The controlled object '" + ControlledObjectData.Name +
+                                    "' is not on the flowsheet. Point the controller at an existing object.")
+            End If
+
+            If ManipulatedObject Is Nothing Then
+                Throw New Exception("The manipulated object '" + ManipulatedObjectData.Name +
+                                    "' is not on the flowsheet. Point the controller at an existing object.")
+            End If
+
             Dim CurrentValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ControlledObjectData.Units, ControlledObject.GetPropertyValue(ControlledObjectData.PropertyName))
 
             Dim CurrentManipulatedValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ManipulatedObjectData.Units, ManipulatedObject.GetPropertyValue(ManipulatedObjectData.PropertyName))

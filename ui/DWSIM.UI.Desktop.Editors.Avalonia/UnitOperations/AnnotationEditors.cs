@@ -258,8 +258,7 @@ namespace DWSIM.UI.Desktop.Editors
                 repopulateObjects("");
                 repopulateProperties("");
 
-                sortPicker.Items.Clear();
-                foreach (var item in table.SortableItems) sortPicker.Items.Add(item);
+                sortPicker.SetOptions(table.SortableItems);
                 sortPicker.SelectedIndex = 0;
 
                 // repaint the canvas so the table reflects the new type immediately (this picker has no
@@ -326,8 +325,6 @@ namespace DWSIM.UI.Desktop.Editors
 
             void RefreshModels()
             {
-                modelPicker.Items.Clear();
-
                 var index = ownerPicker.SelectedIndex;
                 IEnumerable<string> names;
 
@@ -345,14 +342,15 @@ namespace DWSIM.UI.Desktop.Editors
                 {
                     var obj = flowsheet.SimulationObjects.Values
                                        .FirstOrDefault(o => o.GraphicObject.Tag == owners[index]);
-                    if (obj == null) return;
+                    if (obj == null) { modelPicker.SetOptions(new List<string>()); return; }
                     chart.OwnerID = obj.Name;
                     names = obj.GetChartModelNames();
                 }
 
-                foreach (var n in names) modelPicker.Items.Add(n);
+                var list = names.ToList();
+                modelPicker.SetOptions(list);
                 modelPicker.SelectedItem = chart.ModelName;
-                if (modelPicker.SelectedIndex < 0 && modelPicker.Items.Count > 0)
+                if (modelPicker.SelectedIndex < 0 && list.Count > 0)
                     modelPicker.SelectedIndex = 0;
             }
 

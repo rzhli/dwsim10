@@ -240,9 +240,8 @@ namespace DWSIM.UI.Desktop.Editors
             objDD.SelectionChanged += (s, e) =>
             {
                 ReloadProps();
-                propDD.Items.Clear();
-                foreach (var p in props) propDD.Items.Add(p);
-                if (propDD.Items.Count > 0) propDD.SelectedIndex = 0;
+                propDD.SetOptions(props);
+                if (props.Count > 0) propDD.SelectedIndex = 0;
             };
 
             Store();
@@ -1393,9 +1392,8 @@ namespace DWSIM.UI.Desktop.Editors
                     inpObjDD.SelectionChanged += (s, e) =>
                     {
                         ReloadInputProps();
-                        inpPropDD.Items.Clear();
-                        foreach (var p in inpProps) inpPropDD.Items.Add(p);
-                        if (inpPropDD.Items.Count > 0) inpPropDD.SelectedIndex = 0;
+                        inpPropDD.SetOptions(inpProps);
+                        if (inpProps.Count > 0) inpPropDD.SelectedIndex = 0;
                     };
                     break;
                 }
