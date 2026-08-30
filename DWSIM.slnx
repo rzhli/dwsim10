@@ -74,6 +74,7 @@
     <Project Path="tests/DWSIM.Engine.SmokeTests/DWSIM.Engine.SmokeTests.csproj" />
     <Project Path="tests/DWSIM.FluentAPI.Tests/DWSIM.FluentAPI.Tests.csproj" />
     <Project Path="tests/DWSIM.UI.Shared.Avalonia.Tests/DWSIM.UI.Shared.Avalonia.Tests.csproj" />
+    <Project Path="tests/DWSIM.UI.Desktop.Editors.Tests/DWSIM.UI.Desktop.Editors.Tests.csproj" />
     <Project Path="tests/DWSIM.Validation.Tests/DWSIM.Validation.Tests.csproj" />
     <Project Path="tests/DWSIM.GlobalSettings.Tests/DWSIM.GlobalSettings.Tests.csproj" />
     <Project Path="tests/DWSIM.MathOps.Tests/DWSIM.MathOps.Tests.csproj" />

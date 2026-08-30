@@ -355,9 +355,16 @@ public static class AvaloniaEditorExtensions
     /// SelectionChanged handler that picks the wrong one takes the process down - nothing catches
     /// on the dispatcher. The helpers below fill ItemsSource, so refills go through here.
     /// </summary>
+    /// <summary>
+    /// Replaces a picker's options. The editors build their pickers through
+    /// <see cref="CreateAndAddDropDownRow"/>, which binds ItemsSource; Avalonia refuses to mix that
+    /// with the inline Items collection, so every refill has to come back through here. The list is
+    /// copied because callers keep and rebuild their own (a property list is cleared and refilled
+    /// when the object it belongs to changes), and a plain List raises no change notification.
+    /// </summary>
     public static void SetOptions(this ComboBox cb, IEnumerable<string> options)
     {
-        cb.ItemsSource = options as IList<string> ?? new List<string>(options);
+        cb.ItemsSource = new List<string>(options);
     }
 
     public static ComboBox CreateAndAddDropDownRow(this AvaloniaEditorPanel panel,

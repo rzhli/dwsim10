@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The rows a controller's Linked Objects tab is built from: the object, the property and the unit
+    the value is read in. Driven headless - the panels are plain Avalonia controls and need no
+    application instance to be built and clicked through.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>DWSIM.UI.Desktop.Editors.Tests</RootNamespace>
+    <AssemblyName>DWSIM.UI.Desktop.Editors.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\engine\DWSIM.Automation\DWSIM.Automation.csproj" />
+    <ProjectReference Include="..\..\engine\DWSIM.FlowsheetBase\DWSIM.FlowsheetBase.vbproj" />
+    <ProjectReference Include="..\..\ui\DWSIM.UI.Desktop.Editors.Avalonia\DWSIM.UI.Desktop.Editors.Avalonia.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="CapeOpen">
+      <HintPath>..\..\lib\CapeOpen.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

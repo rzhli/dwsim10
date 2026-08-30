@@ -67,7 +67,9 @@ namespace DWSIM.UI.Desktop.Editors
             var tags = objects.Select(x => x.GraphicObject.Tag).ToList();
             var kind = writable ? PropertyType.WR : PropertyType.ALL;
 
+            // the property codes, in picker order, and the readable names shown in their place
             var properties = new List<string>();
+            var propertyNames = new List<string>();
             ComboBox propertyPicker = null;
             TextBlock valueLabel = null;
             // set by AddUnitPickers: adopts the unit that belongs to the property now selected,
@@ -75,15 +77,34 @@ namespace DWSIM.UI.Desktop.Editors
             Action<ISimulationObject> syncUnits = null;
 
             var selected = objects.FindIndex(x => x.Name == info.ID);
+
+            // A saved link whose ID is no longer on the flowsheet: the picker would silently show the
+            // first object while the block still points at nothing, which is how HX.dwxmz ended up
+            // running against a valve that had been replaced. Name it instead of hiding it.
+            if (selected < 0 && !string.IsNullOrEmpty(info.ID))
+                panel.CreateAndAddDescriptionRow(label + " object '" + (info.Name ?? info.ID) +
+                                                 "' is not on the flowsheet anymore. Pick one below.");
+
             var objectPicker = panel.CreateAndAddDropDownRow(label + " Object", tags,
                 Math.Max(0, selected), null);
 
             void ReloadProperties()
             {
                 properties.Clear();
+                propertyNames.Clear();
                 var obj = objects.ElementAtOrDefault(objectPicker.SelectedIndex);
                 if (obj == null) return;
                 properties.AddRange(obj.GetProperties(kind) ?? new string[0]);
+
+                // "PROP_VA_5" means nothing to the reader; the flowsheet resolves it to "Opening",
+                // and the unit goes next to it so the row can be matched against Current Value.
+                foreach (var p in properties)
+                {
+                    var name = flowsheet.GetTranslatedString(p);
+                    string unit = null;
+                    try { unit = obj.GetPropertyUnit(p, su); } catch (Exception) { }
+                    propertyNames.Add(string.IsNullOrEmpty(unit) ? name : name + " (" + unit + ")");
+                }
             }
 
             void ShowValue()
@@ -158,7 +179,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             ReloadProperties();
 
-            propertyPicker = panel.CreateAndAddDropDownRow(label + " Property", properties.ToList(),
+            propertyPicker = panel.CreateAndAddDropDownRow(label + " Property", propertyNames.ToList(),
                 Math.Max(0, properties.IndexOf(info.PropertyName ?? "")), (dd, e) => StoreProperty());
 
             if (withUnits) syncUnits = AddUnitPickers(panel, su, info, label, () => ShowValue());
@@ -180,7 +201,7 @@ namespace DWSIM.UI.Desktop.Editors
                 Attach(block, obj, role);
 
                 ReloadProperties();
-                propertyPicker.SetOptions(properties);
+                propertyPicker.SetOptions(propertyNames);
                 propertyPicker.SelectedIndex = Math.Max(0, properties.IndexOf(info.PropertyName ?? ""));
 
                 StoreProperty();
