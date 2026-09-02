@@ -5,19 +5,18 @@ name: Sync fork from upstream
 # 触发方式：
 #   1. 定时：每小时整点自动运行
 #   2. 手动：Actions 页面 → Sync fork from upstream → Run workflow
-#   3. 需要同步时命令行：gh workflow run sync-fork.yml --repo rzhli/dwsim10
+#   3. 需要同步时：gh workflow run sync-fork.yml --repo rzhli/dwsim10
 
 on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
 
-# merge-upstream 在合并上游 master 时，如果上游改动过 .github/workflows/*，
-# 需要创建/更新 workflow 文件。GitHub App 令牌没有 workflows 权限会被 422 拒绝，
-# 所以除了 contents:write 之外还必须给 workflows:write。
-permissions:
-  contents: write
-  workflows: write
+# merge-upstream 在合并上游 master 时，若上游改动过 .github/workflows/*，
+# GitHub App 令牌（默认 GITHUB_TOKEN）需要 workflows 权限才能创建/更新这些文件，
+# 否则会被 422 拒绝。当前环境下显式写 workflows: write 不被 YAML 解析器接受，
+# 只能用 write-all 把所有 scope（含 workflows）置为 write。
+permissions: write-all
 
 jobs:
   sync:
