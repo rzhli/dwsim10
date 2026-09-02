@@ -437,6 +437,38 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
         Public MustOverride Function Flash_TV(ByVal Vz As Double(), ByVal T As Double, ByVal V As Double, ByVal Pref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
 
         ''' <summary>
+        ''' Absolute floor for a pressure or temperature handed to a property package (Pa or K).
+        ''' </summary>
+        Private Const MinimumTrialValue As Double = 1.0
+
+        ''' <summary>
+        ''' Clamps a trial value proposed by the optimiser to the range the variable was declared with,
+        ''' never returning a value at or below zero.
+        ''' </summary>
+        ''' <remarks>
+        ''' COBYLA treats the bounds on an OptSimplexBoundVariable as penalty terms rather than hard
+        ''' limits - CobylaDriver turns them into entries in CON - so it both proposes and evaluates
+        ''' points outside them. The volume-spec flashes below hand the trial pressure and temperature
+        ''' straight to the property package, and for a nearly incompressible liquid the volume residual
+        ''' is flat in pressure: there is no gradient to follow, so the search wanders the full width of
+        ''' the window and off the end. IAPWS-IF97 then refuses to give a density at zero or negative
+        ''' pressure and the whole flash throws, which is what took out a dynamic heat exchanger holding
+        ''' liquid water. Clamping here keeps every evaluation at a physical state; the optimiser's own
+        ''' constraint handling still pulls the iterate back inside the window.
+        ''' </remarks>
+        Private Shared Function ClampTrial(value As Double, lower As Double, upper As Double) As Double
+
+            Dim floor As Double = Math.Max(lower, MinimumTrialValue)
+
+            If Double.IsNaN(value) Then Return floor
+            If value < floor Then Return floor
+            If value > upper Then Return upper
+
+            Return value
+
+        End Function
+
+        ''' <summary>
         ''' Volume-Temperature Flash
         ''' </summary>
         ''' <param name="Vz">Mole fractions</param>
@@ -456,13 +488,15 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             simplex.MaxFunEvaluations = 1000
             simplex.Tolerance = 0.0001
 
-            Dim var As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Pref * 0.7, Pref * 1.4)
+            Dim Plo As Double = Pref * 0.7, Phi As Double = Pref * 1.4
+
+            Dim var As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Plo, Phi)
 
             Dim flashresult As New FlashCalculationResult
             Dim errval As Double
 
             Dim Pfunc = Function(Pvec)
-                            Dim P = Pvec(0)
+                            Dim P = ClampTrial(Pvec(0), Plo, Phi)
                             flashresult = CalculateEquilibrium(FlashSpec.P, FlashSpec.T, P, T, PP, Vz, PrevKi, 0.0)
                             Dim RHOL1, RHOL2, RHOV, VL2, VL1, VV As Double
                             RHOL1 = PP.AUX_LIQDENS(T, flashresult.GetLiquidPhase1MoleFraction, P) / PP.AUX_MMM(flashresult.GetLiquidPhase1MoleFraction) * 1000 'mol/m3
@@ -496,12 +530,14 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             simplex.MaxFunEvaluations = 1000
             simplex.Tolerance = 0.0001
 
-            Dim var As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tref * 0.9, Tref * 1.1)
+            Dim Tlo As Double = Tref * 0.9, Thi As Double = Tref * 1.1
+
+            Dim var As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tlo, Thi)
 
             Dim flashresult As New FlashCalculationResult
 
             simplex.ComputeMin(Function(Tvec)
-                                   Dim T = Tvec(0)
+                                   Dim T = ClampTrial(Tvec(0), Tlo, Thi)
                                    flashresult = CalculateEquilibrium(FlashSpec.P, FlashSpec.T, P, T, PP, Vz, PrevKi, 0.0)
                                    Dim RHOL1, RHOL2, RHOV, VL2, VL1, VV As Double
                                    RHOL1 = PP.AUX_LIQDENS(T, flashresult.GetLiquidPhase1MoleFraction, P) / PP.AUX_MMM(flashresult.GetLiquidPhase1MoleFraction) * 1000 'mol/m3
@@ -530,14 +566,17 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             simplex.MaxFunEvaluations = 1000
             simplex.Tolerance = 0.0001
 
-            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tref * 0.9, Tref * 1.1)
-            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Pref * 0.7, Pref * 1.4)
+            Dim Tlo As Double = Tref * 0.9, Thi As Double = Tref * 1.1
+            Dim Plo As Double = Pref * 0.7, Phi As Double = Pref * 1.4
+
+            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tlo, Thi)
+            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Plo, Phi)
 
             Dim flashresult As New FlashCalculationResult
 
             simplex.ComputeMin(Function(vec)
-                                   Dim T = vec(0)
-                                   Dim P = vec(1)
+                                   Dim T = ClampTrial(vec(0), Tlo, Thi)
+                                   Dim P = ClampTrial(vec(1), Plo, Phi)
                                    flashresult = CalculateEquilibrium(FlashSpec.P, FlashSpec.T, P, T, PP, Vz, PrevKi, 0.0)
                                    Dim RHOL1, RHOL2, RHOV, VL2, VL1, VV As Double
                                    RHOL1 = PP.AUX_LIQDENS(T, flashresult.GetLiquidPhase1MoleFraction, P) / PP.AUX_MMM(flashresult.GetLiquidPhase1MoleFraction) * 1000 'mol/m3
@@ -570,14 +609,17 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             simplex.MaxFunEvaluations = 1000
             simplex.Tolerance = 0.0001
 
-            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tref * 0.9, Tref * 1.1)
-            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Pref * 0.7, Pref * 1.4)
+            Dim Tlo As Double = Tref * 0.9, Thi As Double = Tref * 1.1
+            Dim Plo As Double = Pref * 0.7, Phi As Double = Pref * 1.4
+
+            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tlo, Thi)
+            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Plo, Phi)
 
             Dim flashresult As New FlashCalculationResult
 
             simplex.ComputeMin(Function(vec)
-                                   Dim T = vec(0)
-                                   Dim P = vec(1)
+                                   Dim T = ClampTrial(vec(0), Tlo, Thi)
+                                   Dim P = ClampTrial(vec(1), Plo, Phi)
                                    flashresult = CalculateEquilibrium(FlashSpec.P, FlashSpec.T, P, T, PP, Vz, PrevKi, 0.0)
                                    Dim RHOL1, RHOL2, RHOV, VL2, VL1, VV As Double
                                    RHOL1 = PP.AUX_LIQDENS(T, flashresult.GetLiquidPhase1MoleFraction, P) / PP.AUX_MMM(flashresult.GetLiquidPhase1MoleFraction) * 1000 'mol/m3
@@ -610,14 +652,17 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             simplex.MaxFunEvaluations = 1000
             simplex.Tolerance = 0.0001
 
-            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tref * 0.9, Tref * 1.1)
-            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Pref * 0.7, Pref * 1.4)
+            Dim Tlo As Double = Tref * 0.9, Thi As Double = Tref * 1.1
+            Dim Plo As Double = Pref * 0.7, Phi As Double = Pref * 1.4
+
+            Dim var1 As New DotNumerics.Optimization.OptSimplexBoundVariable(Tref, Tlo, Thi)
+            Dim var2 As New DotNumerics.Optimization.OptSimplexBoundVariable(Pref, Plo, Phi)
 
             Dim flashresult As New FlashCalculationResult
 
             simplex.ComputeMin(Function(vec)
-                                   Dim T = vec(0)
-                                   Dim P = vec(1)
+                                   Dim T = ClampTrial(vec(0), Tlo, Thi)
+                                   Dim P = ClampTrial(vec(1), Plo, Phi)
                                    flashresult = CalculateEquilibrium(FlashSpec.P, FlashSpec.T, P, T, PP, Vz, PrevKi, 0.0)
                                    Dim RHOL1, RHOL2, RHOV, VL2, VL1, VV As Double
                                    RHOL1 = PP.AUX_LIQDENS(T, flashresult.GetLiquidPhase1MoleFraction, P) / PP.AUX_MMM(flashresult.GetLiquidPhase1MoleFraction) * 1000 'mol/m3
