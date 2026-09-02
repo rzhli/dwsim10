@@ -1,9 +1,0 @@
-name: test-perm
-on:
-  workflow_dispatch:
-permissions: write-all
-jobs:
-  t:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo ok
