@@ -12,8 +12,12 @@ on:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+# merge-upstream 在合并上游 master 时，如果上游改动过 .github/workflows/*，
+# 需要创建/更新 workflow 文件。GitHub App 令牌没有 workflows 权限会被 422 拒绝，
+# 所以除了 contents:write 之外还必须给 workflows:write。
 permissions:
   contents: write
+  workflows: write
 
 jobs:
   sync:
