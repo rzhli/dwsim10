@@ -1,9 +1,7 @@
 name: test-perm
 on:
   workflow_dispatch:
-permissions:
-  contents: write
-  workflows: write
+permissions: write-all
 jobs:
   t:
     runs-on: ubuntu-latest
