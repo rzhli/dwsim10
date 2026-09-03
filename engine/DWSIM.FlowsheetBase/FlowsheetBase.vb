@@ -1015,6 +1015,10 @@ Imports DWSIM.ExtensionMethods
 
                 Return Me.SimulationObjects(AddObjectToSurface(ObjectType.CapeOpenUO, x, y, tag,,, CreateConnected))
 
+            Case "ChemSep Column"
+
+                Return Me.SimulationObjects(AddObjectToSurface(ObjectType.CapeOpenUO, x, y, tag,,, CreateConnected, True))
+
             Case "Digital Gauge"
 
                 Return Me.SimulationObjects(AddObjectToSurface(ObjectType.DigitalGauge, x, y, tag,,, CreateConnected))
@@ -1379,7 +1383,8 @@ Imports DWSIM.ExtensionMethods
                                        Optional tag As String = "",
                                        Optional id As String = "",
                                        Optional uoobj As Interfaces.IExternalUnitOperation = Nothing,
-                                       Optional CreateConnected As Boolean = False) As String
+                                       Optional CreateConnected As Boolean = False,
+                                       Optional chemsep As Boolean = False) As String
 
         RegisterSnapshot(SnapshotType.ObjectAddedOrRemoved)
 
@@ -2126,8 +2131,14 @@ Imports DWSIM.ExtensionMethods
                 CheckTag(gObj)
                 gObj.Name = "COUO-" & Guid.NewGuid.ToString
                 If id <> "" Then gObj.Name = id
+                If chemsep Then
+                    If tag = "" Then gObj.Tag = "CSCOL-" + objindex
+                    DirectCast(gObj, CAPEOPENGraphic).ChemSep = True
+                    gObj.Width = 144
+                    gObj.Height = 180
+                End If
                 GraphicObjects.Add(gObj.Name, myCUO)
-                Dim myCOCUO As CapeOpenUO = New CapeOpenUO(myCUO.Name, "CapeOpenUnitOperation", gObj, False)
+                Dim myCOCUO As CapeOpenUO = New CapeOpenUO(myCUO.Name, "CapeOpenUnitOperation", gObj, chemsep)
                 myCOCUO.GraphicObject = myCUO
                 SimulationObjects.Add(myCUO.Name, myCOCUO)
 
@@ -5690,6 +5701,12 @@ Label_00CC:
 
                 If xdoc.Element("DWSIM_Simulation_Data").Element("SimulationObjects") IsNot Nothing Then
 
+                    'CAPE-OPEN unit operations wrap a live COM object (ChemSep is an STA in-proc
+                    'server): destroying it and creating another from the persisted data during
+                    'the session brings the process down, so the live instance is kept and only
+                    'rewired to the rebuilt graphic objects below
+                    Dim livecouo = SimulationObjects.Values.OfType(Of CapeOpenUO).ToDictionary(Function(o) o.Name)
+
                     SimulationObjects.Clear()
 
                     data = xdoc.Element("DWSIM_Simulation_Data").Element("SimulationObjects").Elements.ToList
@@ -5702,8 +5719,12 @@ Label_00CC:
                         Try
                             Dim id As String = xel.<Name>.Value
                             Dim obj As SharedClasses.UnitOperations.BaseClass = Nothing
+                            Dim reused As Boolean = False
                             If xel.Element("Type").Value.Contains("Streams.MaterialStream") Then
                                 obj = New Streams.MaterialStream()
+                            ElseIf xel.Element("Type").Value.Contains("CapeOpenUO") AndAlso livecouo.ContainsKey(id) Then
+                                obj = livecouo(id)
+                                reused = True
                             Else
                                 Dim uokey As String = xel.Element("ComponentDescription").Value
                                 If AvailableExternalUnitOperations.ContainsKey(uokey) Then
@@ -5718,7 +5739,7 @@ Label_00CC:
                             gobj.Owner = obj
                             obj.SetFlowsheet(Me)
                             If Not gobj Is Nothing Then
-                                obj.LoadData(xel.Elements.ToList)
+                                If Not reused Then obj.LoadData(xel.Elements.ToList)
                                 If TypeOf obj Is Streams.MaterialStream Then
                                     For Each phase As BaseClasses.Phase In DirectCast(obj, Streams.MaterialStream).Phases.Values
                                         For Each c As ConstantProperties In Options.SelectedComponents.Values
