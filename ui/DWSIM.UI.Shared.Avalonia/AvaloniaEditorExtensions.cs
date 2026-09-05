@@ -346,25 +346,19 @@ public static class AvaloniaEditorExtensions
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Refills a picker built by the CreateAndAddDropDownRow helpers.
-    ///
-    /// Avalonia's ItemsControl accepts either the inline <c>Items</c> collection or a bound
-    /// <c>ItemsSource</c>, never both: assigning ItemsSource while Items holds anything throws
-    /// InvalidOperationException("Items collection must be empty before using ItemsSource"), and
-    /// touching Items while an ItemsSource is set throws the other way round. A refill inside a
-    /// SelectionChanged handler that picks the wrong one takes the process down - nothing catches
-    /// on the dispatcher. The helpers below fill ItemsSource, so refills go through here.
-    /// </summary>
-    /// <summary>
-    /// Replaces a picker's options. The editors build their pickers through
-    /// <see cref="CreateAndAddDropDownRow"/>, which binds ItemsSource; Avalonia refuses to mix that
-    /// with the inline Items collection, so every refill has to come back through here. The list is
-    /// copied because callers keep and rebuild their own (a property list is cleared and refilled
-    /// when the object it belongs to changes), and a plain List raises no change notification.
+    /// Replaces a picker's options using its existing ItemsSource or inline Items collection.
+    /// Avalonia refuses to mix the two. The bound list is copied because callers keep and rebuild
+    /// their own lists, and a plain List raises no change notification.
     /// </summary>
     public static void SetOptions(this ComboBox cb, IEnumerable<string> options)
     {
-        cb.ItemsSource = new List<string>(options);
+        if (cb.ItemsSource != null)
+        {
+            cb.ItemsSource = new List<string>(options);
+            return;
+        }
+        cb.Items.Clear();
+        foreach (var o in options) cb.Items.Add(o);
     }
 
     public static ComboBox CreateAndAddDropDownRow(this AvaloniaEditorPanel panel,
@@ -407,23 +401,6 @@ public static class AvaloniaEditorExtensions
 
         panel.Children.Add(AvaloniaEditorPanel.MakeLabelControlRow(label, cb));
         return cb;
-    }
-
-    /// <summary>
-    /// Replaces a drop-down's options after it has been built. Avalonia forbids assigning ItemsSource
-    /// once the Items collection has been populated directly (and vice-versa), so a combo filled by
-    /// CreateAndAddDropDownRow - which adds to Items - must be reloaded through Items; assigning
-    /// ItemsSource to it throws InvalidOperationException. This picks the right side automatically.
-    /// </summary>
-    public static void SetOptions(this ComboBox cb, IEnumerable<string> options)
-    {
-        if (cb.ItemsSource != null)
-        {
-            cb.ItemsSource = new List<string>(options);
-            return;
-        }
-        cb.Items.Clear();
-        foreach (var o in options) cb.Items.Add(o);
     }
 
     public static AutoCompleteBox CreateAndAddEditableDropDownRow(this AvaloniaEditorPanel panel,

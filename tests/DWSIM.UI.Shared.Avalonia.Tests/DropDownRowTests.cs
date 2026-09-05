@@ -67,6 +67,20 @@ namespace DWSIM.UI.Shared.Avalonia.Tests
         }
 
         [Test]
+        public void AnInlinePickerCanBeRefilled()
+        {
+            var cb = new global::Avalonia.Controls.ComboBox();
+            cb.Items.Add("feed");
+            cb.SelectedIndex = 0;
+
+            Assert.DoesNotThrow(() => cb.SetOptions(new[] { "VALVE-1", "HX-2" }));
+            cb.SelectedIndex = 1;
+
+            Assert.That(cb.Items.Cast<string>(), Is.EqualTo(new[] { "VALVE-1", "HX-2" }));
+            Assert.That(cb.SelectedItem, Is.EqualTo("HX-2"));
+        }
+
+        [Test]
         public void ARowSurvivesRepeatedRefills()
         {
             var panel = new AvaloniaEditorPanel();
