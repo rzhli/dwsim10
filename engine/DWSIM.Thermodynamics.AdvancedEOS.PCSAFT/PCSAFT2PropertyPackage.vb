@@ -22,8 +22,10 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         ' Polymers: segment number per unit molar mass (mol/g). When > 0 the compound is a polymer and
         ' its segment number is m = m_over_M * Molar_Weight, so a single row covers any chain length.
         <FieldOptional()> <FieldNullValue(0.0#)> Public m_over_M As Double = 0.0#
-        ' Association scheme (Huang-Radosz): empty/2B = one donor + one acceptor site; 4C = two donor + two
-        ' acceptor sites (like water and the glycols/PEG), where only unlike sites associate.
+        ' Association scheme (Huang-Radosz): empty/2B = one donor + one acceptor site; 4C = two donors and
+        ' two acceptors (like water and the glycols); 4C/ETHER = a PEG-type chain, 4C end groups plus
+        ' N_ether = 0.022*Mn - 1.409 extra ether-oxygen acceptor sites (Kontogeorgis & Folas eq. 14.9).
+        ' Only unlike sites (donor-acceptor) associate. Site counts are applied as a multiplicity in InitPP.
         <FieldOptional()> <FieldNullValue("")> Public scheme As String = ""
         <FieldHidden()> Public associationparams As String = ""
 
@@ -108,16 +110,13 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 For Each pcsaftdata As PCSParam In pcsaftdatac
                     Dim ci = Globalization.CultureInfo.InvariantCulture
                     Dim k As String = pcsaftdata.kAiBi.ToString(ci), e As String = pcsaftdata.epsilon2.ToString(ci)
-                    If pcsaftdata.scheme.Trim().ToUpperInvariant() = "4C" Then
-                        ' Two acceptor (A) and two donor (B) sites; only unlike sites (A-B) associate, so the
-                        ' 4x4 kappa and epsilon matrices are zero on the A-A and B-B blocks.
-                        pcsaftdata.associationparams = "4" & Environment.NewLine &
-                            $"[0 0 {k} {k}; 0 0 {k} {k}; {k} {k} 0 0; {k} {k} 0 0]" & Environment.NewLine &
-                            $"[0 0 {e} {e}; 0 0 {e} {e}; {e} {e} 0 0; {e} {e} 0 0]"
-                    Else
-                        pcsaftdata.associationparams = "2" & Environment.NewLine &
-                            $"[0 {k}; {k} 0]" & Environment.NewLine & $"[0 {e}; {e} 0]"
-                    End If
+                    ' Association is a two-site-type donor/acceptor (A-B) scheme. How many of each site type
+                    ' there are - 2B: one each; 4C: two donors and two acceptors; PEG: two donors and
+                    ' 2 + N_ether acceptors (the ether oxygens, Kontogeorgis & Folas eq. 14.9) - is applied
+                    ' as a per-type MULTIPLICITY in InitPP from the scheme column, so the kappa and epsilon
+                    ' matrices are always the 2x2 A-B form here regardless of scheme.
+                    pcsaftdata.associationparams = "2" & Environment.NewLine &
+                        $"[0 {k}; {k} 0]" & Environment.NewLine & $"[0 {e}; {e} 0]"
                     If Not CompoundParameters.ContainsKey(pcsaftdata.casno) Then
                         CompoundParameters.Add(pcsaftdata.casno, pcsaftdata)
                     End If
@@ -541,7 +540,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcEnthalpy(Vx As Array, T As Double, P As Double, st As State) As Double
 
-            If UseLeeKeslerEnthalpy Then
+            If UseLeeKeslerEnthalpy AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Dim H As Double
                 If st = State.Liquid Then
                     H = lk.H_LK_MIX("L", T, P, Vx, RET_VKij(), RET_VTC, RET_VPC, RET_VW, RET_VMM, Me.RET_Hid(298.15, T, Vx))
@@ -574,7 +573,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcEntropy(Vx As Array, T As Double, P As Double, st As State) As Double
 
-            If UseLeeKeslerEnthalpy Then
+            If UseLeeKeslerEnthalpy AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Dim S As Double
                 If st = State.Liquid Then
                     S = lk.S_LK_MIX("L", T, P, Vx, RET_VKij(), RET_VTC, RET_VPC, RET_VW, RET_VMM, Me.RET_Sid(298.15, T, P, Vx))
@@ -779,6 +778,34 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Return CompoundParameters.ContainsKey(cas) AndAlso CompoundParameters(cas).m_over_M > 0.0
         End Function
 
+        Private Function IsAssociating(cas As String) As Boolean
+            Return CompoundParameters.ContainsKey(cas) AndAlso
+                   CompoundParameters(cas).kAiBi > 0.0 AndAlso CompoundParameters(cas).epsilon2 > 0.0
+        End Function
+
+        ' The Lee-Kesler caloric route uses Tc/Pc/omega corresponding states: it cannot represent the
+        ' enthalpy of hydrogen bonding, and its critical constants are only placeholders for a polymer
+        ' pseudo-compound. So whenever the mixture contains an associating compound or a polymer, the
+        ' PC-SAFT departure (segment + association model) is used for H/S/Cp/Cv instead, regardless of the
+        ' Use Lee-Kesler options. Checks the actual mixture compounds, not the parameter table (which always
+        ' holds every built-in associating compound and polymer).
+        Private Function MixtureNeedsPCSAFTCaloric() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    Dim cas = c.ConstantProperties.CAS_Number
+                    If IsPolymer(cas) OrElse IsAssociating(cas) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsPolymer(c.CAS_Number) OrElse IsAssociating(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
+        End Function
+
         Private Shared Function NoUserViscosityData(cp As Interfaces.ICompoundConstantProperties) As Boolean
             If cp.LiquidViscosityEquation <> "" AndAlso cp.LiquidViscosityEquation <> "0" Then Return False
             Return cp.Liquid_Viscosity_Const_A = 0.0 AndAlso cp.Liquid_Viscosity_Const_B = 0.0 AndAlso
@@ -958,7 +985,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcCp_ISOL(Phase1 As Phase, T As Double, P As Double) As Double
 
-            If UseLeeKeslerCpCv Then
+            If UseLeeKeslerCpCv AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Select Case Phase1
                     Case Phase.Vapor
                         Return lk.CpCvR_LK("V", T, P, RET_VMOL(Phase1), RET_VKij(), RET_VMAS(Phase1), RET_VTC, RET_VPC, RET_VCP(T), RET_VMM, RET_VW, RET_VZRa)(1)
@@ -983,7 +1010,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcCv_ISOL(Phase1 As Phase, T As Double, P As Double) As Double
 
-            If UseLeeKeslerCpCv Then
+            If UseLeeKeslerCpCv AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Select Case Phase1
                     Case Phase.Vapor
                         Return lk.CpCvR_LK("V", T, P, RET_VMOL(Phase1), RET_VKij(), RET_VMAS(Phase1), RET_VTC, RET_VPC, RET_VCP(T), RET_VMM, RET_VW, RET_VZRa)(2)

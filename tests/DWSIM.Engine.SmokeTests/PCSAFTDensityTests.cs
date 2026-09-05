@@ -43,6 +43,212 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         /// <summary>
+        /// A polydisperse polymer (two polypropylene cuts of different molar mass in n-pentane) must reach
+        /// its liquid-liquid split from the ordinary Simple LLE flash with no manual seed, and the flash
+        /// must fractionate: the heavier cut concentrates in the polymer-rich phase and is depleted from the
+        /// solvent-rich phase. Exercises the multi-component spinodal seed.
+        /// </summary>
+        [Test]
+        public void PolydispersePolymerSplitIsReachableAndFractionates()
+        {
+            // n-pentane + two polypropylene cuts (same CAS -> same PC-SAFT params, different molar mass)
+            double M1 = 30000.0, M2 = 70000.0, Msolv = 72.15;
+            var fs = new DWSIM.DynamicRunner.Flowsheet(null, null);
+            fs.Init();
+            fs.AddCompound("N-pentane");
+            foreach (var cut in new[] { ("PP-30k", M1), ("PP-70k", M2) })
+                fs.Options.SelectedComponents.Add(cut.Item1, new DWSIM.Thermodynamics.BaseClasses.ConstantProperties
+                {
+                    Name = cut.Item1, CAS_Number = "9003-07-0", Formula = "(C3H6)n", Molar_Weight = cut.Item2,
+                    Critical_Temperature = 1200.0, Critical_Pressure = 5.0e5, Acentric_Factor = 0.5,
+                    Normal_Boiling_Point = 800.0, IsHYPO = 1
+                });
+            var pp = new DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage { Flowsheet = fs };
+            var o = fs.AddObject(DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "feed");
+            var ms = (DWSIM.Thermodynamics.Streams.MaterialStream)fs.SimulationObjects[o.Name];
+            ms.SetFlowsheet(fs); ms.SetPropertyPackage(pp); pp.CurrentMaterialStream = ms;
+
+            double gC5 = 80, g1 = 10, g2 = 10;
+            double nC5 = gC5 / Msolv, n1 = g1 / M1, n2 = g2 / M2, nt = nC5 + n1 + n2;
+            var z = new[] { nC5 / nt, n1 / nt, n2 / nt };
+            // unseeded: the multi-component spinodal auto-seed must find the split on its own
+            var flash = new DWSIM.Thermodynamics.PropertyPackages.Auxiliary.FlashAlgorithms.SimpleLLE();
+            var res = (object[])flash.Flash_PT(z, 40e5, 460.15, pp);
+            double La = Convert.ToDouble(res[0]), Lb = Convert.ToDouble(res[5]);
+            var xa = (double[])res[2]; var xb = (double[])res[6];
+            double MassPP(double[] x) { double mp = x[1] * M1 + x[2] * M2; return mp / (mp + x[0] * Msolv); }
+            double wa = MassPP(xa), wb = MassPP(xb);
+            // orient so 'lean' is the solvent-rich phase and 'rich' the polymer-rich phase
+            double wLean = Math.Min(wa, wb), wRich = Math.Max(wa, wb);
+            var xLean = wa <= wb ? xa : xb;
+            double feedRatio = z[2] / z[1];
+            double leanRatio = xLean[2] / Math.Max(xLean[1], 1e-30);
+            TestContext.WriteLine($"La={La:F3} Lb={Lb:F3}  wPP: lean={wLean:F4} rich={wRich:F4}");
+            TestContext.WriteLine($"70k/30k ratio  feed={feedRatio:F4}  solventPhase={leanRatio:F4}");
+
+            Assert.That(Math.Min(La, Lb), Is.GreaterThan(0.01), "two liquid phases must be present");
+            Assert.That(wRich, Is.GreaterThan(0.15), "one phase must be polymer-rich");
+            Assert.That(wLean, Is.LessThan(0.02), "the other phase must be nearly pure solvent");
+            Assert.That(leanRatio, Is.LessThan(feedRatio),
+                "the solvent-rich phase must be depleted in the heavier cut (fractionation)");
+        }
+
+        /// <summary>
+        /// Pins the 2B association math (SolveXa + mu_Ass + obj_muAss) for a hydrogen-bonding
+        /// mixture, so the site-multiplicity refactor stays behaviour-preserving for the
+        /// non-polymer associating compounds. Water/ethanol liquid log fugacity coefficients at
+        /// 298.15 K, 1 atm. Reference values captured from the pre-refactor code.
+        /// </summary>
+        [Test]
+        public void WaterEthanolAssociationLogFugacityIsStable()
+        {
+            var pp = Package(fs => { fs.AddCompound("Water"); fs.AddCompound("Ethanol"); });
+            var lnphi = pp.DW_CalcLnFugCoeff(new[] { 0.5, 0.5 }, 298.15, 101325.0,
+                DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
+            TestContext.WriteLine($"lnphi water={lnphi[0]:R}  ethanol={lnphi[1]:R}");
+            Assert.That(lnphi[0], Is.EqualTo(-2.0118886197639876).Within(1e-9), "water lnphi (2B association)");
+            Assert.That(lnphi[1], Is.EqualTo(-1.7260890923336243).Within(1e-9), "ethanol lnphi (2B association)");
+        }
+
+        /// <summary>
+        /// The caloric guard: Lee-Kesler caloric properties rely on Tc/Pc/omega corresponding states, which
+        /// cannot represent hydrogen-bonding enthalpy and use placeholder criticals for a polymer. So a
+        /// mixture with an associating compound or a polymer must fall back to the PC-SAFT departure
+        /// regardless of the Use Lee-Kesler flags, while a plain non-associating mixture keeps using
+        /// Lee-Kesler when it is enabled.
+        /// </summary>
+        [Test]
+        public void AssociatingAndPolymerCaloricBypassLeeKesler()
+        {
+            var st = DWSIM.Thermodynamics.PropertyPackages.State.Liquid;
+
+            // Polymer: guard fires (LK relies on placeholder criticals).
+            var pp = PolypropyleneInNPentane(out var z);
+            pp.UseLeeKeslerEnthalpy = true;
+            double hPolyLk = pp.DW_CalcEnthalpy(z, 460.15, 40e5, st);
+            pp.UseLeeKeslerEnthalpy = false;
+            double hPolyNat = pp.DW_CalcEnthalpy(z, 460.15, 40e5, st);
+            TestContext.WriteLine($"polymer H: LK-flag-on={hPolyLk:G6}  native={hPolyNat:G6}");
+            Assert.That(hPolyLk, Is.EqualTo(hPolyNat).Within(1e-9),
+                "a polymer mixture must use the PC-SAFT departure even with Lee-Kesler enabled");
+
+            // Associating: guard fires (LK cannot represent hydrogen-bonding enthalpy).
+            var ppa = Package(fs => { fs.AddCompound("Water"); fs.AddCompound("Ethanol"); });
+            var za = new[] { 0.5, 0.5 };
+            ppa.UseLeeKeslerEnthalpy = true;
+            double hAssocLk = ppa.DW_CalcEnthalpy(za, 350.0, 2e5, st);
+            ppa.UseLeeKeslerEnthalpy = false;
+            double hAssocNat = ppa.DW_CalcEnthalpy(za, 350.0, 2e5, st);
+            TestContext.WriteLine($"water/ethanol H: LK-flag-on={hAssocLk:G6}  native={hAssocNat:G6}");
+            Assert.That(hAssocLk, Is.EqualTo(hAssocNat).Within(1e-9),
+                "an associating mixture must use the PC-SAFT departure even with Lee-Kesler enabled");
+
+            // Non-associating, non-polymer: guard inactive, Lee-Kesler still used.
+            var pp2 = Package(fs => { fs.AddCompound("Ethane"); fs.AddCompound("N-pentane"); });
+            var z2 = new[] { 0.5, 0.5 };
+            pp2.UseLeeKeslerEnthalpy = true;
+            double hLk = pp2.DW_CalcEnthalpy(z2, 300.0, 10e5, st);
+            pp2.UseLeeKeslerEnthalpy = false;
+            double hNat2 = pp2.DW_CalcEnthalpy(z2, 300.0, 10e5, st);
+            TestContext.WriteLine($"C2/nC5 H: LK={hLk:G6}  native={hNat2:G6}");
+            Assert.That(Math.Abs(hLk - hNat2), Is.GreaterThan(1e-6),
+                "a plain non-associating mixture keeps using Lee-Kesler (differs from the PC-SAFT departure)");
+        }
+
+        private static DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage PmmaChlorobutane(double Mn, double Msolv)
+        {
+            var fs = new DWSIM.DynamicRunner.Flowsheet(null, null);
+            fs.Init();
+            fs.Options.SelectedComponents.Add("1-chlorobutane", new DWSIM.Thermodynamics.BaseClasses.ConstantProperties
+            {
+                Name = "1-chlorobutane", CAS_Number = "109-69-3", Formula = "C4H9Cl", Molar_Weight = Msolv,
+                Critical_Temperature = 542.0, Critical_Pressure = 3.684e6, Acentric_Factor = 0.2216,
+                Normal_Boiling_Point = 351.58
+            });
+            fs.Options.SelectedComponents.Add("PMMA", new DWSIM.Thermodynamics.BaseClasses.ConstantProperties
+            {
+                Name = "PMMA", CAS_Number = "9011-14-7", Formula = "(C5H8O2)n", Molar_Weight = Mn,
+                Critical_Temperature = 1500.0, Critical_Pressure = 5.0e5, Acentric_Factor = 0.5,
+                Normal_Boiling_Point = 900.0, IsHYPO = 1
+            });
+            var pp = new DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage { Flowsheet = fs };
+            var o = fs.AddObject(DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "feed");
+            var ms = (DWSIM.Thermodynamics.Streams.MaterialStream)fs.SimulationObjects[o.Name];
+            ms.SetFlowsheet(fs); ms.SetPropertyPackage(pp); pp.CurrentMaterialStream = ms;
+            return pp;
+        }
+
+        // Liquid-liquid binodal at (T,P) by the convex-hull-of-Gibbs-energy tie-line construction on a
+        // geometric polymer-mole-fraction grid: a gap in the lower hull is the miscibility gap. Returns the
+        // two phases' polymer mass fractions, or (-1,-1) for a single phase. The polymer-rich branch is
+        // required above 5 wt% to reject the numerical micro-gaps that appear as the dome closes.
+        private static (double wL, double wR) LleBinodal(
+            DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage pp, double T, double P, double Mn, double Msolv)
+        {
+            int n = 140; double xmin = 1e-7, xmax = 3e-3;
+            var x = new double[n]; var g = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                double xp = xmin * Math.Pow(xmax / xmin, (double)i / (n - 1));
+                var ln = pp.DW_CalcLnFugCoeff(new[] { 1.0 - xp, xp }, T, P,
+                    DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
+                x[i] = xp; g[i] = (1.0 - xp) * (Math.Log(1.0 - xp) + ln[0]) + xp * (Math.Log(xp) + ln[1]);
+            }
+            var hull = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < n; i++)
+            {
+                while (hull.Count >= 2)
+                {
+                    int a = hull[hull.Count - 2], b = hull[hull.Count - 1];
+                    double cross = (x[b] - x[a]) * (g[i] - g[a]) - (g[b] - g[a]) * (x[i] - x[a]);
+                    if (cross <= 0) hull.RemoveAt(hull.Count - 1); else break;
+                }
+                hull.Add(i);
+            }
+            double best = 0; int ia = -1, ib = -1;
+            for (int h = 0; h < hull.Count - 1; h++)
+            {
+                int a = hull[h], b = hull[h + 1];
+                if (b - a >= 2) { double s = Math.Log(x[b]) - Math.Log(x[a]); if (s > best) { best = s; ia = a; ib = b; } }
+            }
+            if (ia < 0) return (-1, -1);
+            double wR = x[ib] * Mn / (x[ib] * Mn + (1 - x[ib]) * Msolv);
+            if (wR < 0.05) return (-1, -1);
+            double wL = x[ia] * Mn / (x[ia] * Mn + (1 - x[ia]) * Msolv);
+            return (wL, wR);
+        }
+
+        /// <summary>
+        /// PMMA (Mw 36500) + 1-chlorobutane liquid-liquid equilibrium against Kontogeorgis and Folas,
+        /// Application of SAFT to Polymers, Figure 14.4 (left): a UCST dome with the critical point near
+        /// 281 K at a polymer weight fraction around 0.10, using the shipped PC-SAFT parameters and the
+        /// kij = -0.0032 from pcsaft_ip.dat. The model reproduces the UCST within a few kelvin and the
+        /// dome width, confirming the spinodal-seeded EoS LLE path on a non-associating polymer solution.
+        /// </summary>
+        [Test]
+        public void PmmaChlorobutaneCloudPointAgainstFig144()
+        {
+            double Mn = 36500.0, Msolv = 92.568, P = 1e5;
+            var pp = PmmaChlorobutane(Mn, Msolv);
+
+            var (wl260, wr260) = LleBinodal(pp, 260.0, P, Mn, Msolv);
+            var (wl278, wr278) = LleBinodal(pp, 278.0, P, Mn, Msolv);
+            var (wl290, wr290) = LleBinodal(pp, 290.0, P, Mn, Msolv);
+            double ucst = 0.0;
+            for (double T = 270.0; T <= 288.0; T += 1.0)
+            {
+                var (_, wr) = LleBinodal(pp, T, P, Mn, Msolv);
+                if (wr >= 0) ucst = T;
+            }
+            TestContext.WriteLine($"UCST~{ucst:F0}K  260K:[{wl260:F3},{wr260:F3}]  278K:[{wl278:F3},{wr278:F3}]  290K wR={wr290:F3}");
+
+            Assert.That(wr260, Is.GreaterThan(0.28).And.LessThan(0.36), "polymer-rich branch at 260 K");
+            Assert.That(wr278, Is.GreaterThan(0.12).And.LessThan(0.22), "polymer-rich branch at 278 K");
+            Assert.That(wr290, Is.LessThan(0.0), "single phase above the UCST");
+            Assert.That(ucst, Is.GreaterThanOrEqualTo(279.0).And.LessThanOrEqualTo(285.0), "UCST near experimental 281 K");
+        }
+
+        /// <summary>
         /// A small-molecule PC-SAFT flash stays physical: ethane/n-pentane at 350 K condenses
         /// monotonically as pressure rises and the vapour keeps getting richer in the light component.
         /// </summary>
