@@ -185,8 +185,9 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
                 If assocparam <> "" Then
 
-                    assocparaml = assocparam.Split(vbCrLf)
-                    na = Integer.Parse(assocparam(0))
+                    'Parameters use the current platform's newline, and saved data can come from another OS.
+                    assocparaml = assocparam.Split({vbCrLf, vbLf, vbCr}, StringSplitOptions.RemoveEmptyEntries)
+                    na = Integer.Parse(assocparaml(0), Globalization.CultureInfo.InvariantCulture)
                     vm = assocparaml(1).Trim().Trim(vbLf).Trim("[", "]")
                     em = assocparaml(2).Trim().Trim(vbLf).Trim("[", "]")
 

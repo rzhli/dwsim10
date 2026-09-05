@@ -42,6 +42,21 @@ namespace DWSIM.Engine.SmokeTests
             return pp;
         }
 
+        [TestCase("\n")]
+        [TestCase("\r\n")]
+        public void AssociationParametersAcceptUnixAndWindowsLineEndings(string newline)
+        {
+            var pp = Package(fs => { fs.AddCompound("Ethane"); fs.AddCompound("N-pentane"); });
+            foreach (var param in pp.CompoundParameters.Values)
+                param.associationparams = param.associationparams.Replace("\r\n", "\n").Replace("\n", newline);
+
+            var ln = pp.DW_CalcLnFugCoeff(new[] { 0.5, 0.5 }, 350.0, 20e5,
+                DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
+
+            Assert.That(ln.Length, Is.EqualTo(2));
+            Assert.That(ln.All(double.IsFinite), Is.True);
+        }
+
         /// <summary>
         /// A small-molecule PC-SAFT flash stays physical: ethane/n-pentane at 350 K condenses
         /// monotonically as pressure rises and the vapour keeps getting richer in the light component.
