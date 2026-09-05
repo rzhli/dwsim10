@@ -169,17 +169,40 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
         ''' </summary>
         Private Function AnalyseSpinodal(ByVal T As Double, ByVal Vz As Double(),
                                          ByVal PP As PropertyPackages.PropertyPackage,
+                                         ByVal P As Double,
                                          ByRef est As Object) As SpinodalState
 
             est = Nothing
             If Vz.Length <> 2 Then Return SpinodalState.NotApplicable
-            Dim apk = TryCast(PP, ActivityCoefficientPropertyPackage)
-            If apk Is Nothing Then Return SpinodalState.NotApplicable
 
-            ' Resolve the model arguments once for the whole sweep: they do not vary with T or composition,
-            ' and rebuilding them per point costs more than the derivative itself for group-contribution
-            ' models, which have to re-read each compound's groups and allocate a dictionary per compound.
-            Dim d2 = apk.GetGibbsMixingD2Evaluator()
+            ' D2 is the second derivative of the molar Gibbs energy of mixing (over RT) with respect to the
+            ' first mole fraction; its sign is what the bracketing and seeding below read.
+            Dim d2 As Func(Of Double, Double, Double)
+            Dim apk = TryCast(PP, ActivityCoefficientPropertyPackage)
+            If apk IsNot Nothing Then
+                ' Resolve the model arguments once for the whole sweep: they do not vary with T or composition,
+                ' and rebuilding them per point costs more than the derivative itself for group-contribution
+                ' models, which have to re-read each compound's groups and allocate a dictionary per compound.
+                d2 = apk.GetGibbsMixingD2Evaluator()
+            ElseIf PP.UsesGibbsMinimizationForLLE Then
+                ' An equation of state has no closed-form mixing D2 here. Build it from the analytical
+                ' composition derivative of the log fugacity coefficient instead of differencing g_mix twice:
+                ' for a binary at constant T and P, D2 = 1/x1 + 1/x2 + dlnphi1/dx1 - dlnphi2/dx1, where
+                ' dlnphi_i/dx1 = J(i,0) - J(i,1) from the d(lnphi_i)/dn_j matrix. The analytical route stays
+                ' smooth into the dilute corners, where a double finite difference of g_mix explodes on the
+                ' density-solve noise and buries the real window. A polymer's window sits at extreme dilution
+                ' of the polymer and the feed is usually metastable, OUTSIDE it, so the activity path's linear
+                ' grid and feed-centred bracketing cannot see it; this branch scans a geometric grid instead.
+                Dim d2eos As Func(Of Double, Double, Double) =
+                    Function(TT As Double, x1 As Double) As Double
+                        Dim x2 As Double = 1.0 - x1
+                        Dim jac = PP.DW_CalcdLnFugCoeffdn(New Double() {x1, x2}, TT, P, State.Liquid)
+                        Return 1.0 / x1 + 1.0 / x2 + (jac(0, 0) - jac(0, 1)) - (jac(1, 0) - jac(1, 1))
+                    End Function
+                Return SeedOutsideEoSWindow(d2eos, T, Vz, est)
+            Else
+                Return SpinodalState.NotApplicable
+            End If
 
             ' A single evaluation at the feed often settles it: D2(z) < 0 puts the feed between the two
             ' spinodal roots by definition, so the window is known to exist and z is known to lie in it,
@@ -216,6 +239,98 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
         End Function
 
+        ''' <summary>
+        ''' EoS counterpart of the spinodal seeding above, for a strongly size-asymmetric binary (a polymer in
+        ''' a solvent). Its unstable window sits at extreme dilution of the heavy component and the feed is
+        ''' usually metastable, OUTSIDE the window, so the activity path's linear grid and feed-centred
+        ''' bracketing miss it. This scans D2 on a geometric grid dense in both corners, locates the window
+        ''' from its most-unstable point, refines the two roots, and seeds just outside them straddling the
+        ''' feed. Returns WindowFound with estimates in <paramref name="est"/>, or NotApplicable.
+        ''' </summary>
+        Private Function SeedOutsideEoSWindow(ByVal d2 As Func(Of Double, Double, Double), ByVal T As Double,
+                                              ByVal Vz As Double(), ByRef est As Object) As SpinodalState
+
+            est = Nothing
+
+            ' Geometric grid over (1e-7, 1-1e-7), refining towards both ends.
+            Dim xs As New List(Of Double)
+            Dim e As Double = 0.0000001
+            Do While e <= 0.5
+                xs.Add(e)
+                xs.Add(1.0 - e)
+                e *= 1.5
+            Loop
+            xs.Sort()
+
+            Dim vals(xs.Count - 1) As Double
+            Dim kmin As Integer = -1
+            Dim best As Double = Double.MaxValue
+            For k As Integer = 0 To xs.Count - 1
+                vals(k) = d2(T, xs(k))
+                If Not Double.IsNaN(vals(k)) AndAlso vals(k) < best Then
+                    best = vals(k) : kmin = k
+                End If
+            Next
+
+            ' No negative curvature found on the grid: nothing to seed a split from here.
+            If kmin < 0 OrElse best >= 0.0 Then Return SpinodalState.NotApplicable
+
+            ' Widen from the most-unstable node to the first stable node on each side; those pairs bracket the
+            ' two spinodal roots. If the window runs off a grid edge, use that edge as the root.
+            Dim kL As Integer = kmin
+            Do While kL > 0 AndAlso (Double.IsNaN(vals(kL - 1)) OrElse vals(kL - 1) < 0.0)
+                kL -= 1
+            Loop
+            Dim kR As Integer = kmin
+            Do While kR < xs.Count - 1 AndAlso (Double.IsNaN(vals(kR + 1)) OrElse vals(kR + 1) < 0.0)
+                kR += 1
+            Loop
+
+            Dim xs1 As Double = If(kL > 0, RefineD2Root(d2, T, xs(kL), xs(kL - 1)), xs(0))
+            Dim xs2 As Double = If(kR < xs.Count - 1, RefineD2Root(d2, T, xs(kR), xs(kR + 1)), xs(xs.Count - 1))
+            If xs2 <= xs1 Then Return SpinodalState.NotApplicable
+
+            ' Seed outside each root, straddling the feed so the balance is feasible. For a strongly
+            ' asymmetric mixture the binodal lies far outside the spinodal, so offset multiplicatively in the
+            ' dilute (heavy) mole fraction rather than by a fraction of the narrow window.
+            Const f As Double = 3.0
+            Dim x1a, x2a As Double
+            If xs1 > 0.5 AndAlso xs2 > 0.5 Then
+                ' Window at high x1: component 2 is dilute; push in its mole fraction 1 - x1.
+                x1a = 1.0 - Math.Min(f * (1.0 - xs1), 0.5)
+                x2a = 1.0 - (1.0 - xs2) / f
+            ElseIf xs1 < 0.5 AndAlso xs2 < 0.5 Then
+                ' Window at low x1: component 1 is dilute; push in x1.
+                x1a = xs1 / f
+                x2a = Math.Min(f * xs2, 0.5)
+            Else
+                ' Window spans the middle (near-symmetric): a fraction of its width is the right scale.
+                Dim wid As Double = xs2 - xs1
+                x1a = Math.Max(xs1 - 0.4 * wid, 0.5 * xs1)
+                x2a = Math.Min(xs2 + 0.4 * wid, xs2 + 0.5 * (1.0 - xs2))
+            End If
+            Dim L1 As Double = (Vz(0) - x2a) / (x1a - x2a)
+            If L1 <= 0.001 OrElse L1 >= 0.999 Then Return SpinodalState.NotApplicable
+
+            est = New Object() {L1, New Double() {x1a, 1.0 - x1a}, New Double() {x2a, 1.0 - x2a}}
+            Return SpinodalState.WindowFound
+
+        End Function
+
+        ' Bisection for the zero of D2 between an unstable point (D2 < 0) and a stable one (D2 >= 0),
+        ' to a tolerance that tightens near the composition corners where a polymer window lives.
+        Private Function RefineD2Root(ByVal d2 As Func(Of Double, Double, Double), ByVal T As Double,
+                                      ByVal xUnstable As Double, ByVal xStable As Double) As Double
+            For it As Integer = 1 To 60
+                Dim mid As Double = 0.5 * (xUnstable + xStable)
+                Dim fm As Double = d2(T, mid)
+                If Double.IsNaN(fm) Then Exit For
+                If fm < 0.0 Then xUnstable = mid Else xStable = mid
+                If Math.Abs(xUnstable - xStable) <= 0.000000001 + 0.001 * Math.Min(mid, 1.0 - mid) Then Exit For
+            Next
+            Return 0.5 * (xUnstable + xStable)
+        End Function
+
         ' Isoactivity residual norm sum|F_i|, F_i = ln(x1_i phi1_i) - ln(x2_i phi2_i). NaN if infeasible.
         Private Function LLEResidualNorm(ByVal Vz As Double(), ByVal Vn1 As Double(), ByVal T As Double,
                                          ByVal P As Double, ByVal PP As PropertyPackages.PropertyPackage) As Double
@@ -230,15 +345,145 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             For i As Integer = 0 To n
                 Vx1(i) = Vn1(i) / L1 : Vx2(i) = Vn2(i) / L2
             Next
-            Dim f1 = PP.DW_CalcFugCoeff(Vx1, T, P, State.Liquid)
-            Dim f2 = PP.DW_CalcFugCoeff(Vx2, T, P, State.Liquid)
+            ' Log fugacity coefficients, so a high segment-number polymer (phi underflows to zero) keeps a
+            ' finite residual: F_i = ln(x1_i) + lnphi1_i - ln(x2_i) - lnphi2_i.
+            Dim lnf1 = PP.DW_CalcLnFugCoeff(Vx1, T, P, State.Liquid)
+            Dim lnf2 = PP.DW_CalcLnFugCoeff(Vx2, T, P, State.Liquid)
             Dim s As Double = 0.0
             For i As Integer = 0 To n
                 If Vz(i) <= 0.0 Then Continue For
                 If Vx1(i) <= 0.0 OrElse Vx2(i) <= 0.0 Then Return Double.NaN
-                s += Math.Abs(Math.Log(Vx1(i) * f1(i)) - Math.Log(Vx2(i) * f2(i)))
+                s += Math.Abs((Math.Log(Vx1(i)) + lnf1(i)) - (Math.Log(Vx2(i)) + lnf2(i)))
             Next
             Return s
+        End Function
+
+        ''' <summary>
+        ''' Composition derivative D(i,j) = d(ln phi_i)/dn_j at total moles = 1, by finite difference: bump
+        ''' n_j (= x_j at unit total moles), renormalise, and difference the log fugacity coefficients. Used
+        ''' for the Newton step when the property package does not supply analytical derivatives.
+        ''' </summary>
+        Private Function DLnFugCoeffdnNumerical(ByVal Vx As Double(), ByVal T As Double, ByVal P As Double,
+                                                ByVal PP As PropertyPackages.PropertyPackage) As Double(,)
+            Dim n As Integer = Vx.Length - 1
+            Dim D(n, n) As Double
+            Dim delta As Double = 0.000001
+            For j As Integer = 0 To n
+                If Vx(j) <= 0.0 Then Continue For
+                ' Central difference on the mole numbers (n_j = x_j at unit total moles), renormalising the
+                ' bumped composition each side.
+                Dim npp(n), npm(n) As Double
+                For k As Integer = 0 To n
+                    npp(k) = Vx(k) : npm(k) = Vx(k)
+                Next
+                npp(j) += delta : npm(j) -= delta
+                Dim totp As Double = 1.0 + delta, totm As Double = 1.0 - delta
+                For k As Integer = 0 To n
+                    npp(k) /= totp : npm(k) /= totm
+                Next
+                Dim lnfp = PP.DW_CalcLnFugCoeff(npp, T, P, State.Liquid)
+                Dim lnfm = PP.DW_CalcLnFugCoeff(npm, T, P, State.Liquid)
+                For i As Integer = 0 To n
+                    D(i, j) = (lnfp(i) - lnfm(i)) / (2.0 * delta)
+                Next
+            Next
+            Return D
+        End Function
+
+        ''' <summary>
+        ''' Reduced two-phase Gibbs energy g/RT = sum_i [ n1_i (ln x1_i + lnphi1_i) + n2_i (ln x2_i + lnphi2_i) ],
+        ''' the quantity the split minimises. The trivial solution x1 = x2 = z is a saddle/maximum of it when
+        ''' a split exists, so a search that DESCENDS g walks away from it - unlike a residual-norm search,
+        ''' whose minimum the trivial solution also satisfies. Returns NaN for an infeasible split.
+        ''' </summary>
+        Private Function LLEGibbs(ByVal Vz As Double(), ByVal Vn1 As Double(), ByVal T As Double,
+                                  ByVal P As Double, ByVal PP As PropertyPackages.PropertyPackage) As Double
+            Dim n As Integer = Vz.Length - 1
+            Dim Vn2(n), Vx1(n), Vx2(n) As Double
+            Dim L1 As Double = 0.0, L2 As Double = 0.0
+            For i As Integer = 0 To n
+                Vn2(i) = Vz(i) - Vn1(i)
+                L1 += Vn1(i) : L2 += Vn2(i)
+            Next
+            If L1 <= 0.0 OrElse L2 <= 0.0 Then Return Double.NaN
+            For i As Integer = 0 To n
+                Vx1(i) = Vn1(i) / L1 : Vx2(i) = Vn2(i) / L2
+            Next
+            Dim lnf1 = PP.DW_CalcLnFugCoeff(Vx1, T, P, State.Liquid)
+            Dim lnf2 = PP.DW_CalcLnFugCoeff(Vx2, T, P, State.Liquid)
+            Dim g As Double = 0.0
+            For i As Integer = 0 To n
+                If Vz(i) <= 0.0 Then Continue For
+                If Vx1(i) <= 0.0 OrElse Vx2(i) <= 0.0 Then Return Double.NaN
+                g += Vn1(i) * (Math.Log(Vx1(i)) + lnf1(i)) + Vn2(i) * (Math.Log(Vx2(i)) + lnf2(i))
+            Next
+            If Double.IsNaN(g) OrElse Double.IsInfinity(g) Then Return Double.NaN
+            Return g
+        End Function
+
+        ''' <summary>
+        ''' Gradient of the reduced two-phase Gibbs energy with respect to the phase-1 mole numbers, which is
+        ''' the isoactivity residual F_i = (ln x1_i + lnphi1_i) - (ln x2_i + lnphi2_i). Nothing if infeasible.
+        ''' </summary>
+        Private Function LLEGradient(ByVal Vz As Double(), ByVal Vn1 As Double(), ByVal T As Double,
+                                     ByVal P As Double, ByVal PP As PropertyPackages.PropertyPackage) As Double()
+            Dim n As Integer = Vz.Length - 1
+            Dim Vn2(n), Vx1(n), Vx2(n) As Double
+            Dim L1 As Double = 0.0, L2 As Double = 0.0
+            For i As Integer = 0 To n
+                Vn2(i) = Vz(i) - Vn1(i)
+                L1 += Vn1(i) : L2 += Vn2(i)
+            Next
+            If L1 <= 0.0 OrElse L2 <= 0.0 Then Return Nothing
+            For i As Integer = 0 To n
+                Vx1(i) = Vn1(i) / L1 : Vx2(i) = Vn2(i) / L2
+            Next
+            Dim lnf1 = PP.DW_CalcLnFugCoeff(Vx1, T, P, State.Liquid)
+            Dim lnf2 = PP.DW_CalcLnFugCoeff(Vx2, T, P, State.Liquid)
+            Dim F(n) As Double
+            For i As Integer = 0 To n
+                If Vz(i) <= 0.0 Then
+                    F(i) = 0.0
+                Else
+                    If Vx1(i) <= 0.0 OrElse Vx2(i) <= 0.0 Then Return Nothing
+                    F(i) = (Math.Log(Vx1(i)) + lnf1(i)) - (Math.Log(Vx2(i)) + lnf2(i))
+                    If Double.IsNaN(F(i)) OrElse Double.IsInfinity(F(i)) Then Return Nothing
+                End If
+            Next
+            Return F
+        End Function
+
+        ''' <summary>
+        ''' Backtracking line search of a step direction on the two-phase Gibbs energy. Returns True and the
+        ''' accepted phase-1 mole numbers (with their Gibbs energy) if a feasible point below g0 was found.
+        ''' </summary>
+        Private Function TryGibbsStep(ByVal Vz As Double(), ByVal Vn1 As Double(), ByVal dnstep As Double(),
+                                      ByVal g0 As Double, ByVal T As Double, ByVal P As Double,
+                                      ByVal PP As PropertyPackages.PropertyPackage,
+                                      ByRef outVn1 As Double(), ByRef outG As Double) As Boolean
+            If dnstep Is Nothing Then Return False
+            Dim n As Integer = Vz.Length - 1
+            Dim lam As Double = 1.0
+            For ls As Integer = 1 To 20
+                Dim trial(n) As Double
+                Dim feasible As Boolean = True
+                For i As Integer = 0 To n
+                    If Vz(i) > 0.0 Then
+                        trial(i) = Vn1(i) + lam * dnstep(i)
+                        If trial(i) <= 0.000000001 * Vz(i) OrElse trial(i) >= 0.999999999 * Vz(i) Then feasible = False
+                    Else
+                        trial(i) = 0.0
+                    End If
+                Next
+                If feasible Then
+                    Dim gt As Double = LLEGibbs(Vz, trial, T, P, PP)
+                    If Not Double.IsNaN(gt) AndAlso gt < g0 - 0.000000000001 Then
+                        outVn1 = trial : outG = gt : Return True
+                    End If
+                End If
+                lam *= 0.5
+            Next
+            Return False
         End Function
 
         ''' <summary>
@@ -256,7 +501,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
         ''' </summary>
         Private Function NewtonStepLLE(ByVal Vz As Double(), ByVal Vn1 As Double(), ByVal T As Double,
                                        ByVal P As Double, ByVal PP As PropertyPackages.PropertyPackage,
-                                       ByRef Fnorm As Double) As Double()
+                                       ByRef Fnorm As Double, Optional ByVal forceNumerical As Boolean = False) As Double()
 
             Dim n As Integer = Vz.Length - 1
             Dim Vn2(n), Vx1(n), Vx2(n) As Double
@@ -270,10 +515,21 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 Vx1(i) = Vn1(i) / L1 : Vx2(i) = Vn2(i) / L2
             Next
 
-            Dim f1 = PP.DW_CalcFugCoeff(Vx1, T, P, State.Liquid)
-            Dim f2 = PP.DW_CalcFugCoeff(Vx2, T, P, State.Liquid)
-            Dim D1 = PP.DW_CalcdLnFugCoeffdn(Vx1, T, P, State.Liquid)
-            Dim D2m = PP.DW_CalcdLnFugCoeffdn(Vx2, T, P, State.Liquid)
+            ' Residual from log fugacity coefficients (finite for a polymer whose phi underflows):
+            ' F_i = ln(x1_i) + lnphi1_i - ln(x2_i) - lnphi2_i.
+            Dim lnf1 = PP.DW_CalcLnFugCoeff(Vx1, T, P, State.Liquid)
+            Dim lnf2 = PP.DW_CalcLnFugCoeff(Vx2, T, P, State.Liquid)
+
+            ' Composition derivatives: analytical when the package supplies them, otherwise finite-difference
+            ' (PC-SAFT does not implement analytical d(lnphi)/dn).
+            Dim D1 As Double(,), D2m As Double(,)
+            If PP.ImplementsAnalyticalDerivatives AndAlso Not forceNumerical Then
+                D1 = PP.DW_CalcdLnFugCoeffdn(Vx1, T, P, State.Liquid)
+                D2m = PP.DW_CalcdLnFugCoeffdn(Vx2, T, P, State.Liquid)
+            Else
+                D1 = DLnFugCoeffdnNumerical(Vx1, T, P, PP)
+                D2m = DLnFugCoeffdnNumerical(Vx2, T, P, PP)
+            End If
 
             Dim F(n) As Double
             Fnorm = 0.0
@@ -282,7 +538,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                     F(i) = 0.0
                 Else
                     If Vx1(i) <= 0.0 OrElse Vx2(i) <= 0.0 Then Return Nothing
-                    F(i) = Math.Log(Vx1(i) * f1(i)) - Math.Log(Vx2(i) * f2(i))
+                    F(i) = (Math.Log(Vx1(i)) + lnf1(i)) - (Math.Log(Vx2(i)) + lnf2(i))
                     Fnorm += Math.Abs(F(i))
                 End If
                 If Double.IsNaN(F(i)) OrElse Double.IsInfinity(F(i)) Then Return Nothing
@@ -428,7 +684,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 ' above its consolute temperature, where no split exists and the search for one used to
                 ' oscillate until it ran out of iterations.
                 Dim sp As Object = Nothing
-                Select Case AnalyseSpinodal(T, Vz, PP, sp)
+                Select Case AnalyseSpinodal(T, Vz, PP, P, sp)
 
                     Case SpinodalState.Convex
                         ' D2 > 0 for every composition, so g_mix is strictly convex, no common tangent can
@@ -574,6 +830,8 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 IObj2?.Paragraphs.Add(String.Format("Calculating fugacity coefficients of liquid phases:", ecount))
                 fi1 = PP.DW_CalcFugCoeff(Vx1, T, P, State.Liquid)
                 fi2 = PP.DW_CalcFugCoeff(Vx2, T, P, State.Liquid)
+                Dim lnfi1 = PP.DW_CalcLnFugCoeff(Vx1, T, P, State.Liquid)
+                Dim lnfi2 = PP.DW_CalcLnFugCoeff(Vx2, T, P, State.Liquid)
                 IObj2?.SetCurrent
                 IObj2?.Paragraphs.Add(String.Format("Fugacity coefficients phase 1: {0}", fi1.ToMathArrayString))
                 IObj2?.Paragraphs.Add(String.Format("Fugacity coefficients phase 2: {0}", fi2.ToMathArrayString))
@@ -581,7 +839,17 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 For i = 0 To n
                     If fi1(i) > 10000000000.0 Then fi1(i) = Vp(i) * 100
                     If fi2(i) > 10000000000.0 Then fi2(i) = Vp(i) * 100
-                    If Vp(i) > 0.001 Then
+                    If fi1(i) <= 0.0 OrElse fi2(i) <= 0.0 Then
+                        ' The fugacity coefficient underflowed to zero (a high segment-number polymer,
+                        ' whose ln is on the order of -1e3), which would make γ1/γ2 = φ1/φ2 = 0/0 = NaN.
+                        ' That ratio is what the isoactivity update and residual actually use, so build it
+                        ' from the log fugacity with a symmetric shift that keeps both values finite and
+                        ' preserves the ratio exp(lnφ1 - lnφ2). Checked before the Pvap branch because a
+                        ' non-volatile polymer can still report a small non-zero extrapolated Pvap.
+                        Dim half As Double = 0.5 * (lnfi1(i) - lnfi2(i))
+                        gamma1(i) = Math.Exp(half)
+                        gamma2(i) = Math.Exp(-half)
+                    ElseIf Vp(i) > 0.001 Then
                         ' Normal case: convert fugacity coefficients to activity coefficients
                         ' via the Raoult reference state (γ = P/Pvap · φ_liquid).
                         gamma1(i) = P / Vp(i) * fi1(i)
@@ -600,7 +868,25 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 err = Vx1.MultiplyY(gamma1).SubtractY(Vx2.MultiplyY(gamma2)).AbsSumY()
                 e1 = Vx1_ant.SubtractY(Vx1).AbsSumY
                 e2 = Vx2_ant.SubtractY(Vx2).AbsSumY
-                S = Vx1.SubtractY(Vx2).AbsY.MaxY
+
+                ' Phase-identity measure in MASS fractions, not mole fractions. A polymer's two liquids
+                ' differ by only ~1e-3 in mole fraction (both are almost all solvent by mole) while being
+                ' wholly distinct by mass, so a mole-fraction test would merge a genuine split. Mass
+                ' fractions separate them and are essentially unchanged for similar-molar-mass mixtures.
+                Dim mmvec = PP.RET_VMM()
+                Dim mwp1 As Double = 0.0, mwp2 As Double = 0.0
+                For i = 0 To n
+                    mwp1 += Vx1(i) * mmvec(i)
+                    mwp2 += Vx2(i) * mmvec(i)
+                Next
+                S = 0.0
+                If mwp1 > 0.0 AndAlso mwp2 > 0.0 Then
+                    For i = 0 To n
+                        S = Math.Max(S, Math.Abs(Vx1(i) * mmvec(i) / mwp1 - Vx2(i) * mmvec(i) / mwp2))
+                    Next
+                Else
+                    S = Vx1.SubtractY(Vx2).AbsY.MaxY
+                End If
 
                 IObj2?.SetCurrent
                 IObj2?.Paragraphs.Add(String.Format("<hr><b>Actual Errors:</b><br>
@@ -652,7 +938,87 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 ' substitution drifts away from it slowly enough to act as a crude safeguard there.
                 Dim ssStalled As Boolean = (dampFactor < 1.0 OrElse ecount >= NewtonFallbackIterations)
                 Dim newtonOK As Boolean = False
-                If PP.ImplementsAnalyticalDerivatives AndAlso seeded AndAlso ssStalled Then
+
+                If seeded AndAlso PP.UsesGibbsMinimizationForLLE Then
+
+                    ' Packages that ask for it (e.g. PC-SAFT) drive the split by DESCENDING the two-phase
+                    ' Gibbs energy, not the isoactivity residual norm: the trivial solution x1=x2=z is a
+                    ' saddle/maximum of g, so descent walks away from it, whereas plain substitution and a
+                    ' residual-norm Newton both collapse onto it for a polymer's shallow miscibility gap.
+                    ' The Newton step here uses the analytical d(lnphi)/dn when the package supplies it.
+                    ' This branch owns the update; a Gibbs minimum reached here ends the loop.
+                    Dim g0 As Double = LLEGibbs(Vz, Vn1, T, P, PP)
+                    Dim improved As Boolean = False
+                    If Not Double.IsNaN(g0) Then
+                        Dim fnorm As Double = 0.0
+                        Dim dnstep = NewtonStepLLE(Vz, Vn1, T, P, PP, fnorm)
+                        ' Converged: the isoactivity residual (the gradient of g) has vanished.
+                        If fnorm < 0.0000001 Then
+                            Vn2 = Vz.SubtractY(Vn1) : L1 = Vn1.Sum : L2 = 1 - L1
+                            newtonOK = True : IObj2?.Close() : Exit Do
+                        End If
+                        ' Take the better of the analytical and (exact) numerical Newton steps. The analytical
+                        ' Jacobian is fast but approximate, and its step is sometimes accepted for only a tiny
+                        ' Gibbs decrease, stalling the descent where the exact finite-difference step does far
+                        ' better - and vice versa. Line-searching both and keeping whichever lowers g most is
+                        ' robust across conditions. For a package without analytical derivatives dnstep is
+                        ' already the numerical step, so the second try is skipped.
+                        Dim bestVn1 As Double() = Nothing
+                        Dim bestG As Double = g0
+                        Dim vTry As Double() = Nothing
+                        Dim gTry As Double = 0.0
+                        If TryGibbsStep(Vz, Vn1, dnstep, g0, T, P, PP, vTry, gTry) Then
+                            improved = True : bestVn1 = vTry : bestG = gTry
+                        End If
+                        If PP.ImplementsAnalyticalDerivatives Then
+                            Dim fnum As Double = 0.0
+                            Dim dnnum = NewtonStepLLE(Vz, Vn1, T, P, PP, fnum, forceNumerical:=True)
+                            If TryGibbsStep(Vz, Vn1, dnnum, g0, T, P, PP, vTry, gTry) Then
+                                If Not improved OrElse gTry < bestG Then improved = True : bestVn1 = vTry : bestG = gTry
+                            End If
+                        End If
+                        If improved Then Vn1 = bestVn1
+                        ' Steepest descent on g when neither Newton step lowered it.
+                        If Not improved Then
+                            Dim grad = LLEGradient(Vz, Vn1, T, P, PP)
+                            If grad IsNot Nothing Then
+                                Dim gmax As Double = 0.0
+                                For i = 0 To n : gmax = Math.Max(gmax, Math.Abs(grad(i))) : Next
+                                If gmax > 0.0 Then
+                                    Dim lam As Double = 0.01 / gmax
+                                    For ls As Integer = 1 To 40
+                                        Dim trial(n) As Double
+                                        Dim feasible As Boolean = True
+                                        For i = 0 To n
+                                            If Vz(i) > 0.0 Then
+                                                trial(i) = Vn1(i) - lam * grad(i)
+                                                If trial(i) <= 0.000000001 * Vz(i) OrElse trial(i) >= 0.999999999 * Vz(i) Then feasible = False
+                                            Else
+                                                trial(i) = 0.0
+                                            End If
+                                        Next
+                                        If feasible Then
+                                            Dim gt As Double = LLEGibbs(Vz, trial, T, P, PP)
+                                            If Not Double.IsNaN(gt) AndAlso gt < g0 - 0.0000000000001 Then
+                                                Vn1 = trial : improved = True : Exit For
+                                            End If
+                                        End If
+                                        lam *= 0.5
+                                    Next
+                                End If
+                            End If
+                        End If
+                    End If
+                    newtonOK = True                 ' this branch owns the phase-1 update
+                    If Not improved Then
+                        ' No feasible move lowers g: at the Gibbs minimum (a converged split, or a merge the
+                        ' phase-identity test below will catch).
+                        Vn2 = Vz.SubtractY(Vn1) : L1 = Vn1.Sum : L2 = 1 - L1
+                        IObj2?.Close()
+                        Exit Do
+                    End If
+
+                ElseIf seeded AndAlso ssStalled Then
                     Dim f0 As Double = 0.0
                     Dim dnstep = NewtonStepLLE(Vz, Vn1, T, P, PP, f0)
                     If dnstep IsNot Nothing Then
@@ -715,6 +1081,16 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 ecount += 1
 
                 If ecount >= maxit_e Then
+                    If PP.UsesGibbsMinimizationForLLE Then
+                        ' The Gibbs descent ran out of iterations but has been lowering g throughout, so the
+                        ' current phase-1 split is the best estimate - report it (the phase-identity test at
+                        ' 'out' merges it if the two liquids actually coincided) rather than throwing away a
+                        ' nearly-converged split.
+                        Vx1 = Vn1.MultiplyConstY(1 / L1).NormalizeY
+                        Vx2 = Vn2.MultiplyConstY(1 / L2).NormalizeY
+                        IObj2?.Close()
+                        GoTo out
+                    End If
                     If seeded Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt"))
                     ' Nothing here is evidence that a split exists: the stability test found this feed
                     ' stable, the spinodal analysis offered no seed, and the heuristic perturbation - which

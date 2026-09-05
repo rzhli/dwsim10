@@ -521,6 +521,14 @@ Namespace PropertyPackages
 
         Public Overridable ReadOnly Property ImplementsAnalyticalDerivatives As Boolean = False
 
+        ''' <summary>
+        ''' When True, the liquid-liquid flash converges the split by minimizing the two-phase Gibbs energy
+        ''' (descent), rather than by successive substitution / a residual-norm Newton. Needed for packages
+        ''' whose miscibility gap is shallow enough that the ordinary methods collapse onto the trivial
+        ''' solution - e.g. a polymer in PC-SAFT.
+        ''' </summary>
+        Public Overridable ReadOnly Property UsesGibbsMinimizationForLLE As Boolean = False
+
         Public Overridable ReadOnly Property IsFunctional As Boolean = True Implements IPropertyPackage.IsFunctional
 
         Public Overridable ReadOnly Property ShouldUseKvalueMethod2 As Boolean = False Implements IPropertyPackage.ShouldUseKvalueMethod2
@@ -1477,64 +1485,48 @@ Namespace PropertyPackages
             IObj?.Paragraphs.Add(String.Format("Phase 2 composition: {0}", Vy.ToMathArrayString()))
             IObj?.Paragraphs.Add(String.Format("Calculation Type: {0}", type))
 
-            Dim fugvap As Double() = Nothing
-            Dim fugliq As Double() = Nothing
+            Dim n As Integer = Vx.Length - 1
+            Dim i As Integer
+            Dim K(n) As Double
+
+            Dim st2 As State = If(type = "LV", State.Vapor, State.Liquid)
 
             If OverrideKvalFugCoeff Then
 
                 IObj?.Paragraphs.Add(String.Format("Fugacity coefficient calculation overriden by user. Calling user-defined functions..."))
 
-                fugliq = KvalFugacityCoefficientOverride.Invoke(Vx, T, P, State.Liquid, Me)
-                If type = "LV" Then
-                    fugvap = KvalFugacityCoefficientOverride.Invoke(Vy, T, P, State.Vapor, Me)
-                Else ' LL
-                    fugvap = KvalFugacityCoefficientOverride.Invoke(Vy, T, P, State.Liquid, Me)
-                End If
+                Dim fugliq = KvalFugacityCoefficientOverride.Invoke(Vx, T, P, State.Liquid, Me)
+                Dim fugvap = KvalFugacityCoefficientOverride.Invoke(Vy, T, P, st2, Me)
+                K = fugliq.DivideY(fugvap)
 
             Else
+
+                ' K from LOG fugacity coefficients: K = exp(ln phi_L - ln phi_V). Mathematically the same
+                ' as phi_L/phi_V for a normal package, but stays finite when a coefficient underflows to
+                ' zero (a high segment-number polymer), where phi_L/phi_V would be 0/0 = NaN and break the
+                ' Rachford-Rice loop.
+                Dim lnfugliq As Double() = Nothing
+                Dim lnfugvap As Double() = Nothing
 
                 IObj?.SetCurrent()
 
                 If Settings.EnableParallelProcessing Then
-
-                    Dim t1 = Task.Run(Sub() fugliq = Me.DW_CalcFugCoeff(Vx, T, P, State.Liquid))
-
-                    Dim t2 = Task.Run(Sub()
-                                          If type = "LV" Then
-                                              fugvap = Me.DW_CalcFugCoeff(Vy, T, P, State.Vapor)
-                                          Else ' LL
-                                              fugvap = Me.DW_CalcFugCoeff(Vy, T, P, State.Liquid)
-                                          End If
-                                      End Sub)
-
+                    Dim t1 = Task.Run(Sub() lnfugliq = Me.DW_CalcLnFugCoeff(Vx, T, P, State.Liquid))
+                    Dim t2 = Task.Run(Sub() lnfugvap = Me.DW_CalcLnFugCoeff(Vy, T, P, st2))
                     Task.WaitAll(t1, t2)
-
                 Else
-
-                    fugliq = Me.DW_CalcFugCoeff(Vx, T, P, State.Liquid)
-
+                    lnfugliq = Me.DW_CalcLnFugCoeff(Vx, T, P, State.Liquid)
                     IObj?.SetCurrent()
-
-                    If type = "LV" Then
-                        fugvap = Me.DW_CalcFugCoeff(Vy, T, P, State.Vapor)
-                    Else ' LL
-                        fugvap = Me.DW_CalcFugCoeff(Vy, T, P, State.Liquid)
-                    End If
-
+                    lnfugvap = Me.DW_CalcLnFugCoeff(Vy, T, P, st2)
                 End If
+
+                For i = 0 To n
+                    K(i) = Math.Exp(lnfugliq(i) - lnfugvap(i))
+                Next
 
             End If
 
             IObj?.Paragraphs.Add(String.Format("<h2>Intermediate Calculated Parameters</h2>"))
-
-            IObj?.Paragraphs.Add(String.Format("Phase 1 fugacity coefficients: {0}", fugliq.ToMathArrayString()))
-            IObj?.Paragraphs.Add(String.Format("Phase 2 fugacity coefficients: {0}", fugvap.ToMathArrayString()))
-
-            Dim n As Integer = fugvap.Length - 1
-            Dim i As Integer
-            Dim K(n) As Double
-
-            K = fugliq.DivideY(fugvap)
 
             If Double.IsNaN(K.SumY) Or Double.IsInfinity(K.SumY) Or K.SumY = 0.0# Then
                 Dim cprops = DW_GetConstantProperties()
@@ -1780,6 +1772,28 @@ Namespace PropertyPackages
         Public MustOverride Function DW_CalcFugCoeff(ByVal Vx As Array, ByVal T As Double, ByVal P As Double, ByVal st As State) As Double()
 
         ''' <summary>
+        ''' Calculates the natural logarithm of the fugacity coefficients. The default takes the log of
+        ''' DW_CalcFugCoeff, reproducing the historical -500 sentinel for a zero coefficient. Packages
+        ''' whose coefficient can underflow to zero (e.g. a high segment-number polymer in PC-SAFT,
+        ''' whose ln is on the order of -1e3) must override this to return the log directly, so the
+        ''' stability test and phase-split estimates keep the true chemical potential.
+        ''' </summary>
+        Public Overridable Function DW_CalcLnFugCoeff(ByVal Vx As Array, ByVal T As Double, ByVal P As Double, ByVal st As State) As Double()
+            Dim fc = DW_CalcFugCoeff(Vx, T, P, st)
+            Dim ln(fc.Length - 1) As Double
+            For i As Integer = 0 To fc.Length - 1
+                If fc(i) > 0.0# Then
+                    ln(i) = Math.Log(fc(i))
+                ElseIf fc(i) < 0.0# Then
+                    ln(i) = Math.Log(Math.Abs(fc(i)))
+                Else
+                    ln(i) = -500.0
+                End If
+            Next
+            Return ln
+        End Function
+
+        ''' <summary>
         ''' Calculates fugacity coefficients for the specified composition at the specified conditions.
         ''' </summary>
         ''' <param name="Vz">Vector of doubles containing the molar composition of the mixture.</param>
@@ -1833,6 +1847,20 @@ Namespace PropertyPackages
                             End Function
 
             Dim Vz = RET_VMOL(Phase.Mixture)
+
+            ' A component present at exactly zero mole fraction makes the critical Hessian singular
+            ' (its ln(n) / 1/n terms blow up), so the determinant and criticality functions come back
+            ' NaN and the solver returns a garbage point. A trace amount has no measurable effect on
+            ' the critical point (a fraction of 1e-4 already reproduces it), so floor the zero
+            ' fractions to a tiny value and renormalize.
+            Dim vzsum As Double = 0.0
+            For iz As Integer = 0 To Vz.Length - 1
+                If Vz(iz) < 0.0001 Then Vz(iz) = 0.0001
+                vzsum += Vz(iz)
+            Next
+            For jz As Integer = 0 To Vz.Length - 1
+                Vz(jz) /= vzsum
+            Next
 
             Dim VTc = RET_VTC()
             Dim VPc = RET_VPC()
@@ -3977,6 +4005,122 @@ redirect2:                  IObj?.SetCurrent()
 
         End Sub
 
+        ''' <summary>
+        ''' Finishes the phase-envelope dew line along its retrograde branch, ending exactly on the
+        ''' analytical critical point. A fixed-temperature dew flash has no solution once the
+        ''' temperature passes the cricondentherm, so the T-stepping tracer overshoots and gets a
+        ''' spurious supercritical root there. The retrograde branch is single-valued in pressure, so
+        ''' step the pressure up to the critical pressure instead, solving for the (descending) dew
+        ''' temperature at each step, then close the curve on the critical point. Used only for the
+        ''' cubic packages, whose critical point is known analytically (stopAtCP).
+        ''' </summary>
+        Private Sub TraceDewRetrogradeToCP(Vz As Double(), PO As List(Of Double), TVD As List(Of Double),
+                                           HO As List(Of Double), SO As List(Of Double), VO As List(Of Double),
+                                           TCR As Double, PCR As Double, deltaP As Double)
+            Dim pPrev As Double = PO(PO.Count - 1)
+            Dim tPrev As Double = TVD(TVD.Count - 1)
+            ' Which side of the critical temperature the retrograde branch runs on: from below for a
+            ' mixture whose dew temperature rises to Tc (no cricondentherm above it), from above for one
+            ' with a cricondentherm past Tc.
+            If tPrev < TCR Then
+                ' Rising dew line: the near-critical dew flash from below does not converge (both the
+                ' fixed-T and fixed-P forms hit their iteration limit above ~Tc-8 K, or latch onto a
+                ' spurious root past Tc), and forcing it is prohibitively slow. Draw a shape-preserving
+                ' curve from the last converged point to the analytical critical point instead.
+                FillDewToCP(Vz, PO, TVD, HO, SO, VO, TCR, PCR)
+                Return
+            End If
+            ' A cricondentherm above Tc: past it the retrograde branch is single-valued in pressure and
+            ' the dew flash converges cheaply. Step pressure up to Pc, solving for the dew temperature
+            ' (Flash_PV), seeded by the local slope so the flash stays on the branch.
+            Dim pStep As Double = If(deltaP > 0, deltaP, 25000.0)
+            Dim pPrev2 As Double = If(PO.Count >= 2, PO(PO.Count - 2), pPrev)
+            Dim tPrev2 As Double = If(TVD.Count >= 2, TVD(TVD.Count - 2), tPrev)
+            Dim prevDist As Double = Math.Abs(tPrev - TCR)
+            Dim pR As Double = pPrev + pStep
+            Do While pR < PCR * 0.999
+                Dim tGuess As Double = tPrev
+                If Math.Abs(pPrev - pPrev2) > 1.0 Then
+                    tGuess = tPrev + (tPrev - tPrev2) / (pPrev - pPrev2) * (pR - pPrev)
+                End If
+                Dim tR As Double
+                Try
+                    Dim rr = Me.FlashBase.Flash_PV(Vz, pR, 1, tGuess, Me)
+                    tR = CDbl(rr(4))
+                Catch
+                    Exit Do
+                End Try
+                If tR <= 0.0 Then Exit Do
+                ' a root that has dropped below Tc while still below Pc is the spurious near-critical root
+                If tR < TCR Then Exit Do
+                Dim dist As Double = Math.Abs(tR - TCR)
+                ' the distance to Tc must keep shrinking; a farther root, or one that disagrees with the
+                ' branch extrapolation, is a stray root - stop and close on the critical point.
+                If dist > prevDist + 0.1 Then Exit Do
+                If Math.Abs(tR - tGuess) > 5.0 Then Exit Do
+                If dist < 0.35 Then Exit Do
+                TVD.Add(tR)
+                PO.Add(pR)
+                HO.Add(Me.DW_CalcEnthalpy(Vz, tR, pR, State.Vapor))
+                SO.Add(Me.DW_CalcEntropy(Vz, tR, pR, State.Vapor))
+                VO.Add(1 / Me.AUX_VAPDENS(tR, pR) * Me.AUX_MMM(Phase.Mixture))
+                pPrev2 = pPrev : tPrev2 = tPrev
+                pPrev = pR : tPrev = tR
+                prevDist = dist
+                pR += pStep
+            Loop
+            ' A residual gap below Pc (the pressure-stepping stopped short where the roots merge) is
+            ' closed with the same shape-preserving nose so the descending branch meets the CP smoothly.
+            FillDewToCP(Vz, PO, TVD, HO, SO, VO, TCR, PCR)
+        End Sub
+
+        ''' <summary>
+        ''' Close the dew line from its last converged point onto the analytical critical point with a
+        ''' cubic-Hermite nose. The dew line meets the critical point tangent to the pressure axis (dew
+        ''' temperature flat in pressure there, the retrograde nose), so the end slope dT/dP is zero; the
+        ''' start slope is taken from the last two points. Property values along the fill are ordinary
+        ''' single-phase vapour evaluations. If the last point already sits on the CP, only the CP is added.
+        ''' </summary>
+        Private Sub FillDewToCP(Vz As Double(), PO As List(Of Double), TVD As List(Of Double),
+                                HO As List(Of Double), SO As List(Of Double), VO As List(Of Double),
+                                TCR As Double, PCR As Double)
+            Dim pLast As Double = PO(PO.Count - 1)
+            Dim tLast As Double = TVD(TVD.Count - 1)
+            Dim dp As Double = PCR - pLast
+            If dp > 5000.0 AndAlso Math.Abs(TCR - tLast) > 0.05 Then
+                Dim pPrev2 As Double = If(PO.Count >= 2, PO(PO.Count - 2), pLast)
+                Dim tPrev2 As Double = If(TVD.Count >= 2, TVD(TVD.Count - 2), tLast)
+                Dim mLast As Double = 0.0
+                If Math.Abs(pLast - pPrev2) > 1.0 Then mLast = (tLast - tPrev2) / (pLast - pPrev2)
+                Dim nFill As Integer = 15
+                For s As Integer = 1 To nFill - 1
+                    Dim u As Double = s / CDbl(nFill)
+                    Dim pF As Double = pLast + dp * u
+                    Dim h00 As Double = 2 * u ^ 3 - 3 * u ^ 2 + 1
+                    Dim h10 As Double = u ^ 3 - 2 * u ^ 2 + u
+                    Dim h01 As Double = -2 * u ^ 3 + 3 * u ^ 2
+                    Dim tF As Double = h00 * tLast + h10 * dp * mLast + h01 * TCR
+                    ' never overshoot the critical temperature (the nose approaches it, does not cross it)
+                    If tLast < TCR Then
+                        tF = Math.Min(tF, TCR)
+                    Else
+                        tF = Math.Max(tF, TCR)
+                    End If
+                    TVD.Add(tF)
+                    PO.Add(pF)
+                    HO.Add(Me.DW_CalcEnthalpy(Vz, tF, pF, State.Vapor))
+                    SO.Add(Me.DW_CalcEntropy(Vz, tF, pF, State.Vapor))
+                    VO.Add(1 / Me.AUX_VAPDENS(tF, pF) * Me.AUX_MMM(Phase.Mixture))
+                Next
+            End If
+            ' close the dew line exactly on the analytical critical point
+            TVD.Add(TCR)
+            PO.Add(PCR)
+            HO.Add(Me.DW_CalcEnthalpy(Vz, TCR, PCR, State.Vapor))
+            SO.Add(Me.DW_CalcEntropy(Vz, TCR, PCR, State.Vapor))
+            VO.Add(1 / Me.AUX_VAPDENS(TCR, PCR) * Me.AUX_MMM(Phase.Mixture))
+        End Sub
+
         Public Overridable Function DW_ReturnPhaseEnvelope(ByVal peoptions As PhaseEnvelopeOptions, Optional ByVal bw As System.ComponentModel.BackgroundWorker = Nothing) As Object
 
             Dim i As Integer
@@ -4613,6 +4757,14 @@ redirect2:                  IObj?.SetCurrent()
                                 ' latched onto a spurious root. The genuine retrograde extrema each cross only one
                                 ' critical coordinate, so crossing both means the curve has run past its end - stop.
                                 If Tresult > TCR AndAlso P > PCR Then Exit Do
+                                ' Near a known critical point the pressure-stepping flash can latch onto a root on
+                                ' the far side of the critical temperature - the dew temperature jumping past Tc
+                                ' while the pressure is still below Pc - which draws a spurious spike above the
+                                ' envelope (seen on ethane-rich mixtures whose dew line rises to Tc with no
+                                ' cricondentherm above it). When the dew line is still approaching Tc from below,
+                                ' such a crossing is not physical here: stop and let the retrograde finish (which
+                                ' seeds each flash by extrapolating along the branch) close smoothly on the CP.
+                                If stopAtCP AndAlso Tresult > TCR AndAlso P < PCR AndAlso TVD(TVD.Count - 1) < TCR Then Exit Do
                                 Dim dewTdeviation = If(Tguess > 0, Math.Abs(Tresult - Tguess) / Tguess, 0.0)
                                 If dewValidate AndAlso dewTdeviation > 0.02 Then
                                     Flowsheet?.ShowMessage("Phase Envelope generation: Dew PVF point rejected (T=" & Tresult.ToString("G6") & " vs expected " & Tguess.ToString("G6") & ")", IFlowsheet.MessageType.Warning)
@@ -4675,6 +4827,15 @@ redirect2:                  IObj?.SetCurrent()
 
                         Dim pastCricondentherm = (TVD.Count >= 3 AndAlso TVD(TVD.Count - 1) < TVD(TVD.Count - 2))
 
+                        ' Once the dew line turns back past the cricondentherm within reach of a known
+                        ' critical point, hand off to the pressure-stepping retrograde finish. The
+                        ' temperature-stepping tracer here solves the dew pressure from the temperature,
+                        ' and past the cricondentherm that has two roots - it takes the low-pressure one
+                        ' and retraces its way back down instead of climbing the retrograde branch to the
+                        ' critical point (seen on methane-rich mixtures, whose cricondentherm sits above
+                        ' the critical temperature). The retrograde branch is single-valued in pressure.
+                        If stopAtCP AndAlso pastCricondentherm AndAlso dewRelDistCP < 0.5 Then Exit Do
+
                         If pastCricondentherm AndAlso dewRelDistCP < 0.15 Then
                             Dim absDeltaT = If(dewRelDistCP < 0.05, 0.5, 1.0)
                             Dim absDeltaP = If(dewRelDistCP < 0.05, 10000.0, 50000.0)
@@ -4718,6 +4879,20 @@ redirect2:                  IObj?.SetCurrent()
 
                 Loop Until i >= options.DewCurveMaximumPoints Or PO(PO.Count - 1) = 0 Or PO(PO.Count - 1) < 0 Or TVD(TVD.Count - 1) < 0 Or
                         Double.IsNaN(PO(PO.Count - 1)) = True Or Double.IsNaN(TVD(TVD.Count - 1)) = True Or T >= options.DewCurveMaximumTemperature
+
+                ' The temperature-stepping tracer cannot cross the cricondentherm, so on a package
+                ' with an analytical critical point (stopAtCP) the dew line stops short of it - at the
+                ' cricondentherm, or where the genuine pressure steepening outruns the barycentric
+                ' guess and the point gets rejected. Whatever ended the loop, if the last dew point is
+                ' near the critical point but not on it, finish the line along its retrograde branch
+                ' (single-valued in pressure) up to the critical point.
+                If stopAtCP AndAlso PO.Count > 0 AndAlso TVD.Count > 0 Then
+                    Dim dewLastRelCP = Math.Max(Math.Abs(TVD(TVD.Count - 1) - TCR) / TCR, Math.Abs(PO(PO.Count - 1) - PCR) / PCR)
+                    Dim dewAtCP = (Math.Abs(PO(PO.Count - 1) - PCR) / PCR < 0.001 AndAlso Math.Abs(TVD(TVD.Count - 1) - TCR) / TCR < 0.001)
+                    If Not dewAtCP AndAlso dewLastRelCP < 0.5 AndAlso PO(PO.Count - 1) < PCR Then
+                        TraceDewRetrogradeToCP(Vz, PO, TVD, HO, SO, VO, TCR, PCR, options.DewCurveDeltaP)
+                    End If
+                End If
 
                 If recalcCP OrElse (Not TypeOf Me Is PengRobinsonPropertyPackage And Not TypeOf Me Is PengRobinson1978PropertyPackage And Not TypeOf Me Is SRKPropertyPackage) Then
 

@@ -51,6 +51,33 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Private numC As Integer
 
+        ' Universal dispersion-term constants (Gross & Sadowski 2001, Tables 1-2), 1-indexed with a
+        ' dummy 0 slot. Hoisted to shared read-only arrays so they are not re-assigned on every call
+        ' of Z_disp / mu_Disp / the density objective (which runs many times per fugacity evaluation).
+        Private Shared ReadOnly adisp0 As Double() = {0.0, 0.9105631445, 0.6361281449, 2.6861347891, -26.547362491, 97.759208784, -159.59154087, 91.297774084}
+        Private Shared ReadOnly adisp1 As Double() = {0.0, -0.3084016918, 0.1860531159, -2.5030047259, 21.419793629, -65.25588533, 83.318680481, -33.74692293}
+        Private Shared ReadOnly adisp2 As Double() = {0.0, -0.0906148351, 0.4527842806, 0.5962700728, -1.7241829131, -4.1302112531, 13.77663187, -8.6728470368}
+        Private Shared ReadOnly bdisp0 As Double() = {0.0, 0.7240946941, 2.2382791861, -4.0025849485, -21.003576815, 26.855641363, 206.55133841, -355.60235612}
+        Private Shared ReadOnly bdisp1 As Double() = {0.0, -0.5755498075, 0.6995095521, 3.892567339, -17.215471648, 192.67226447, -161.82646165, -165.20769346}
+        Private Shared ReadOnly bdisp2 As Double() = {0.0, 0.0976883116, -0.2557574982, -9.155856153, 20.642075974, -38.804430052, 93.626774077, -29.666905585}
+
+        ' The temperature-dependent segment diameter d(i) is a function of T only (Eq. 3), but it was
+        ' recomputed - each with an Exp - in every Z_hc/Z_disp/Z_ass/mu call, i.e. once per component
+        ' on every density-solver iteration. mix is fixed for the life of this instance, so cache d by T.
+        Private _dCacheT As Double = Double.NaN
+        Private _dCache As Double()
+
+        Private Function GetD(T As Double) As Double()
+            If _dCache IsNot Nothing AndAlso _dCacheT = T Then Return _dCache
+            Dim d = zeros(mix.numC)
+            For i = 1 To mix.numC
+                d(i) = HardSphereDiameter(T, mix.comp(i).EoSParam(1), mix.comp(i).EoSParam(2), mix.comp(i).EoSParam(3))
+            Next
+            _dCache = d
+            _dCacheT = T
+            Return d
+        End Function
+
         Public Sub New(pp As PCSAFT2PropertyPackage, molefractions() As Double)
 
 
@@ -142,13 +169,19 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
                 Dim cproxy As New pccompound
 
+                Dim prm = pp.CompoundParameters(c.CAS_Number)
+
+                ' A polymer (m_over_M > 0) has a segment number proportional to its molar mass:
+                ' m = (m/M) * Molar_Weight. Small molecules keep their tabulated absolute m.
+                Dim mSeg As Double = If(prm.m_over_M > 0.0, prm.m_over_M * c.Molar_Weight, prm.m)
+
                 cproxy.EosParam = New List(Of Object)
                 cproxy.EosParam.Add(0.0)
-                cproxy.EosParam.Add(pp.CompoundParameters(c.CAS_Number).m) 'm
-                cproxy.EosParam.Add(pp.CompoundParameters(c.CAS_Number).sigma) 'sigma
-                cproxy.EosParam.Add(pp.CompoundParameters(c.CAS_Number).epsilon) 'epsilon/k
+                cproxy.EosParam.Add(mSeg) 'm
+                cproxy.EosParam.Add(prm.sigma) 'sigma
+                cproxy.EosParam.Add(prm.epsilon) 'epsilon/k
 
-                assocparam = pp.CompoundParameters(c.CAS_Number).associationparams
+                assocparam = prm.associationparams
 
                 If assocparam <> "" Then
 
@@ -206,6 +239,12 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         Public Function CalcFugCoeff(T As Double, P As Double, liq_or_gas As String, Zestimate As Double) As Double()
 
             Return FugF(T, P, mix, liq_or_gas, Zestimate)
+
+        End Function
+
+        Public Function CalcLnFugCoeff(T As Double, P As Double, liq_or_gas As String, Zestimate As Double) As Double()
+
+            Return LogFugF(T, P, mix, liq_or_gas, Zestimate)
 
         End Function
 
@@ -746,6 +785,13 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         End Function
 
         Friend Function FugF(T, P, mix, phase, Zestimate)
+            ' Fugacity coefficients. A high segment-number polymer has a log coefficient on the order
+            ' of -1e3, so the exponential underflows to zero here; callers that must keep the true
+            ' chemical potential (stability test, phase-split estimates) use LogFugF instead.
+            Return LogFugF(T, P, mix, phase, Zestimate).Select(Function(lf) Math.Exp(lf)).ToArray()
+        End Function
+
+        Friend Function LogFugF(T, P, mix, phase, Zestimate) As Double()
 
             'Calculates the fugacity And compresibility coefficient of mixture mix at temperature T
             'And pressure P using PC-SAFT EoS
@@ -791,7 +837,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             '**************************************************************************
             'Constants
 
-            Dim kb, Z, muHC(), muDisp(), NumAss(), muAss(), dens_num, logfi, f() As Double
+            Dim kb, Z, muHC(), muDisp(), NumAss(), muAss(), dens_num, logf() As Double
 
             kb = 1.3806504E-23 'Boltzmann K (J/K)
 
@@ -832,15 +878,52 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'Calculates the fugacity coefficient
             '**************************************************************************
 
-            f = zeros(mix.numC - 1)
+            logf = zeros(mix.numC - 1)
             For i = 1 To mix.numC
-                logfi = muHC(i) + muDisp(i) + muAss(i) - Log(Z) 'Eq. A32 Of reference
-                f(i - 1) = Exp(logfi)
+                logf(i - 1) = muHC(i) + muDisp(i) + muAss(i) - Log(Z) 'Eq. A32 Of reference
             Next
 
-            Return f
+            Return logf
 
         End Function
+
+        ''' <summary>
+        ''' Log fugacity coefficients and pressure at a GIVEN number density, without solving for the
+        ''' density. This is the closed-form EoS evaluated at a fixed rho, used by the analytical
+        ''' composition derivative to avoid a density solve on every perturbation.
+        ''' </summary>
+        Friend Function EvalAtDens(T As Double, dens_num As Double, mixt As mixture, ByRef Pcalc As Double) As Double()
+
+            Dim kb As Double = 1.3806504E-23
+
+            Dim muHC() As Double = mu_HC(T, dens_num, mixt)
+            Dim muDisp() As Double = mu_Disp(T, dens_num, mixt)
+
+            Dim NumAss = zeros(mixt.numC)
+            For i = 1 To mixt.numC
+                NumAss(i) = mixt.comp(i).EoSParam(4)
+            Next
+            Dim muAss() As Double = If(sum(NumAss) > 0, mu_Ass(T, dens_num, mixt), zeros(mixt.numC))
+
+            Dim Z As Double = 1.0 + Z_hc(T, dens_num, mixt) + Z_disp(T, dens_num, mixt) + Z_ass(T, dens_num, mixt)
+
+            Pcalc = Z * kb * T * dens_num * (10000000000.0) ^ 3
+
+            Dim logf = zeros(mixt.numC - 1)
+            For i = 1 To mixt.numC
+                logf(i - 1) = muHC(i) + muDisp(i) + muAss(i) - Log(Z)
+            Next
+            Return logf
+
+        End Function
+
+        ''' <summary>Sets the mixture mole fractions (1-indexed internally) without rebuilding parameters,
+        ''' for the composition perturbations of the analytical derivative. The mean molar mass is not
+        ''' needed by the chemical-potential/compressibility terms, so it is left untouched.</summary>
+        Public Sub SetComposition(molefractions() As Double)
+            mix.x = zeros(molefractions.Length)
+            molefractions.CopyTo(mix.x, 1)
+        End Sub
 
         Friend Function HardSphereDiameter(T, m, sigma, epsilon)
 
@@ -986,51 +1069,8 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'You should have received a copy of the GNU General Public License
             'along with this program.  If Not, see <http://www.gnu.org/licenses/>.
 
-            Dim a0(8), a1(8), a2(8), b0(8), b1(8), b2(8) As Double
+            Dim a0 = adisp0, a1 = adisp1, a2 = adisp2, b0 = bdisp0, b1 = bdisp1, b2 = bdisp2
 
-            'Equation constants
-            a0(1) = 0.9105631445
-            a0(2) = 0.6361281449
-            a0(3) = 2.6861347891
-            a0(4) = -26.547362491
-            a0(5) = 97.759208784
-            a0(6) = -159.59154087
-            a0(7) = 91.297774084
-            a1(1) = -0.3084016918
-            a1(2) = 0.1860531159
-            a1(3) = -2.5030047259
-            a1(4) = 21.419793629
-            a1(5) = -65.25588533
-            a1(6) = 83.318680481
-            a1(7) = -33.74692293
-            a2(1) = -0.0906148351
-            a2(2) = 0.4527842806
-            a2(3) = 0.5962700728
-            a2(4) = -1.7241829131
-            a2(5) = -4.1302112531
-            a2(6) = 13.77663187
-            a2(7) = -8.6728470368
-            b0(1) = 0.7240946941
-            b0(2) = 2.2382791861
-            b0(3) = -4.0025849485
-            b0(4) = -21.003576815
-            b0(5) = 26.855641363
-            b0(6) = 206.55133841
-            b0(7) = -355.60235612
-            b1(1) = -0.5755498075
-            b1(2) = 0.6995095521
-            b1(3) = 3.892567339
-            b1(4) = -17.215471648
-            b1(5) = 192.67226447
-            b1(6) = -161.82646165
-            b1(7) = -165.20769346
-            b2(1) = 0.0976883116
-            b2(2) = -0.2557574982
-            b2(3) = -9.155856153
-            b2(4) = 20.642075974
-            b2(5) = -38.804430052
-            b2(6) = 93.626774077
-            b2(7) = -29.666905585
 
             Dim x, m, sigma, epsilon, d As Double()
             Dim k1(,) As Double
@@ -1049,10 +1089,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             k1 = mix.k1
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom As Double
 
@@ -1169,10 +1206,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom As Double
 
@@ -1251,51 +1285,8 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'You should have received a copy of the GNU General Public License
             'along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-            Dim a0(8), a1(8), a2(8), b0(8), b1(8), b2(8) As Double
+            Dim a0 = adisp0, a1 = adisp1, a2 = adisp2, b0 = bdisp0, b1 = bdisp1, b2 = bdisp2
 
-            'Equation constants
-            a0(1) = 0.9105631445
-            a0(2) = 0.6361281449
-            a0(3) = 2.6861347891
-            a0(4) = -26.547362491
-            a0(5) = 97.759208784
-            a0(6) = -159.59154087
-            a0(7) = 91.297774084
-            a1(1) = -0.3084016918
-            a1(2) = 0.1860531159
-            a1(3) = -2.5030047259
-            a1(4) = 21.419793629
-            a1(5) = -65.25588533
-            a1(6) = 83.318680481
-            a1(7) = -33.74692293
-            a2(1) = -0.0906148351
-            a2(2) = 0.4527842806
-            a2(3) = 0.5962700728
-            a2(4) = -1.7241829131
-            a2(5) = -4.1302112531
-            a2(6) = 13.77663187
-            a2(7) = -8.6728470368
-            b0(1) = 0.7240946941
-            b0(2) = 2.2382791861
-            b0(3) = -4.0025849485
-            b0(4) = -21.003576815
-            b0(5) = 26.855641363
-            b0(6) = 206.55133841
-            b0(7) = -355.60235612
-            b1(1) = -0.5755498075
-            b1(2) = 0.6995095521
-            b1(3) = 3.892567339
-            b1(4) = -17.215471648
-            b1(5) = 192.67226447
-            b1(6) = -161.82646165
-            b1(7) = -165.20769346
-            b2(1) = 0.0976883116
-            b2(2) = -0.2557574982
-            b2(3) = -9.155856153
-            b2(4) = 20.642075974
-            b2(5) = -38.804430052
-            b2(6) = 93.626774077
-            b2(7) = -29.666905585
 
             Dim m, sigma, epsilon, d As Double()
 
@@ -1310,10 +1301,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(mix.numC)
-            For i = 1 To mix.numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom As Double
 
@@ -1502,10 +1490,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(mix.numC)
-            For i = 1 To mix.numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom, auxil(), ghs(,), term1, term2, term3 As Double
 
@@ -1645,10 +1630,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim sum1, dens_Num, ZHc, Zdisp, Zass, kb, Zcalc, Pcalc, result As Double
 
@@ -1708,51 +1690,8 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'You should have received a copy of the GNU General Public License
             'along with this program.  If Not, see <http://www.gnu.org/licenses/>.
 
-            Dim a0(7), a1(7), a2(7), b0(7), b1(7), b2(7) As Double
+            Dim a0 = adisp0, a1 = adisp1, a2 = adisp2, b0 = bdisp0, b1 = bdisp1, b2 = bdisp2
 
-            'Equation constants
-            a0(1) = 0.9105631445
-            a0(2) = 0.6361281449
-            a0(3) = 2.6861347891
-            a0(4) = -26.547362491
-            a0(5) = 97.759208784
-            a0(6) = -159.59154087
-            a0(7) = 91.297774084
-            a1(1) = -0.3084016918
-            a1(2) = 0.1860531159
-            a1(3) = -2.5030047259
-            a1(4) = 21.419793629
-            a1(5) = -65.25588533
-            a1(6) = 83.318680481
-            a1(7) = -33.74692293
-            a2(1) = -0.0906148351
-            a2(2) = 0.4527842806
-            a2(3) = 0.5962700728
-            a2(4) = -1.7241829131
-            a2(5) = -4.1302112531
-            a2(6) = 13.77663187
-            a2(7) = -8.6728470368
-            b0(1) = 0.7240946941
-            b0(2) = 2.2382791861
-            b0(3) = -4.0025849485
-            b0(4) = -21.003576815
-            b0(5) = 26.855641363
-            b0(6) = 206.55133841
-            b0(7) = -355.60235612
-            b1(1) = -0.5755498075
-            b1(2) = 0.6995095521
-            b1(3) = 3.892567339
-            b1(4) = -17.215471648
-            b1(5) = 192.67226447
-            b1(6) = -161.82646165
-            b1(7) = -165.20769346
-            b2(1) = 0.0976883116
-            b2(2) = -0.2557574982
-            b2(3) = -9.155856153
-            b2(4) = 20.642075974
-            b2(5) = -38.804430052
-            b2(6) = 93.626774077
-            b2(7) = -29.666905585
 
             Dim x, m, sigma, epsilon, d As Double()
             Dim k1(,) As Double
@@ -1772,10 +1711,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom, a(), b(), dens_red, sigmaij(,), epsilonij(,) As Double
 
@@ -1891,10 +1827,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim m_prom, auxil() As Double
 
@@ -2047,27 +1980,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
             'Calculates the molar fraction of molecules Not bonded at association
 
-            Dim iniL = New List(Of Double)
-
-            For i = 0 To NumAss.Sum
-                iniL.Add(0.001)
-            Next
-
-            Dim ini = iniL.ToArray
-
-            Dim ovars As New List(Of DotNumerics.Optimization.OptSimplexVariable)
-            For Each item In ini
-                ovars.Add(New DotNumerics.Optimization.OptSimplexVariable(item))
-            Next
-
-            Dim opt As New DotNumerics.Optimization.Simplex()
-            opt.MaxFunEvaluations = 10000
-            opt.Tolerance = 1.0E-20
-            Dim result = opt.ComputeMin(Function(myv() As Double)
-                                            Return obj_HelmholtzAss(myv, mix, T, NumAss, sigma, d, ghs, dens_num)
-                                        End Function, ovars.ToArray)
-
-            Dim Xa = result
+            Dim Xa = SolveXa(mix, T, NumAss, sigma, d, ghs, dens_num)
 
             Dim dgij_drok(,,), term4, term5, term6, term7 As Double
 
@@ -2388,10 +2301,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'Calculates the temperature-depNextant segment diameter
-            d = zeros(numC)
-            For i = 1 To numC
-                d(i) = HardSphereDiameter(T, m(i), sigma(i), epsilon(i))
-            Next
+            d = GetD(T)
 
             Dim auxil(), ghs(,), term1, term2, term3 As Double
 
@@ -2419,28 +2329,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
             'Calculates the molar fraction of molecules Not bonded at association
 
-            Dim iniL = New List(Of Double)
-
-            For i = 0 To NumAss.Sum
-                iniL.Add(0.001)
-            Next
-
-            Dim ini = iniL.ToArray
-
-            Dim ovars As New List(Of DotNumerics.Optimization.OptSimplexVariable)
-            For Each item In ini
-                ovars.Add(New DotNumerics.Optimization.OptSimplexVariable(item))
-            Next
-
-            Dim opt As New DotNumerics.Optimization.Simplex
-            opt.MaxFunEvaluations = 10000
-            opt.Tolerance = 1.0E-20
-            Dim result = opt.ComputeMin(Function(myv() As Double)
-                                            Return obj_HelmholtzAss(myv, mix, T, NumAss, sigma, d, ghs, dens_num)
-                                        End Function,
-                                    ovars.ToArray)
-
-            Dim Xa = result
+            Dim Xa = SolveXa(mix, T, NumAss, sigma, d, ghs, dens_num)
 
             'Association contribution to Helmholtz energy
             Aass = 0
@@ -2577,19 +2466,50 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
             'Else
 
-            Dim ovars As New List(Of DotNumerics.Optimization.OptSimplexBoundVariable)
-            ovars.Add(New DotNumerics.Optimization.OptSimplexBoundVariable(ini, ini * 0.001, ini * 200))
+            ' The variable is the reduced density (packing fraction eta), physically in (0, ~0.74).
+            ' obj_SAFT(eta) = P - Pcalc(eta) is finite over that range and crosses zero at each real
+            ' root; beyond close packing the hard-sphere (1 - eta) terms turn singular and it goes NaN.
+            ' Scan for sign changes and pick the liquid (highest-eta) or gas (lowest-eta) root - robust
+            ' for a polymer-rich phase, where the old simplex-on-squared-objective slid onto a spurious
+            ' low-density root or wandered into the NaN region.
+            Dim etaMax As Double = 0.7404
+            Dim etaMin As Double = 0.000001
+            Dim npts As Integer = 60
+            Dim roots As New List(Of Double)
+            Dim etaPrev As Double = etaMin
+            Dim fPrev As Double = obj_SAFT(etaPrev, T, P, mix)(0)
+            For k As Integer = 1 To npts
+                Dim eta As Double = etaMin + (etaMax - etaMin) * k / npts
+                Dim fCur As Double = obj_SAFT(eta, T, P, mix)(0)
+                If Not Double.IsNaN(fPrev) AndAlso Not Double.IsNaN(fCur) AndAlso fPrev * fCur < 0.0 Then
+                    Dim a As Double = etaPrev, b As Double = eta, fa As Double = fPrev
+                    For it As Integer = 1 To 60
+                        Dim mmid As Double = 0.5 * (a + b)
+                        If (b - a) < 0.000000000001 Then Exit For
+                        Dim fm As Double = obj_SAFT(mmid, T, P, mix)(0)
+                        If Double.IsNaN(fm) Then Exit For
+                        If fa * fm <= 0.0 Then
+                            b = mmid
+                        Else
+                            a = mmid : fa = fm
+                        End If
+                    Next
+                    roots.Add(0.5 * (a + b))
+                End If
+                etaPrev = eta : fPrev = fCur
+            Next
 
-            Dim opt As New DotNumerics.Optimization.Simplex()
-            opt.MaxFunEvaluations = 100000
-            opt.Tolerance = 1.0E-20
+            Dim etaSol As Double
+            If roots.Count = 0 Then
+                ' No bracketed root (e.g. numerical noise): fall back to the ideal-density guess.
+                etaSol = Math.Min(Math.Max(ini, etaMin), etaMax)
+            ElseIf phase = "liq" Then
+                etaSol = roots.Max
+            Else
+                etaSol = roots.Min
+            End If
 
-            Dim result = opt.ComputeMin(Function(myv() As Double)
-                                            Return obj_SAFT(myv(0), T, P, mix)(0) ^ 2
-                                        End Function,
-                                        ovars.ToArray)
-
-            Return obj_SAFT(result(0), T, P, mix)(1)
+            Return obj_SAFT(etaSol, T, P, mix)(1)
 
             'End If
 
@@ -2607,6 +2527,81 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         Public Function eval_h(ByVal n As Integer, ByVal x As Double(), ByVal new_x As Boolean, ByVal obj_factor As Double, ByVal m As Integer, ByVal lambda As Double(),
          ByVal new_lambda As Boolean, ByVal nele_hess As Integer, ByRef iRow As Integer(), ByRef jCol As Integer(), ByRef values As Double()) As Boolean
             Return False
+        End Function
+
+        Friend Function SolveXa(mix, T, NumAss, sigma, d, ghs, dens_num) As Double()
+
+            'Solves the fraction of non-bonded association sites Xa by successive substitution of
+            'Xa_a = 1 / (1 + sum_b rho x_b Xa_b delta_ab). The iteration keeps every fraction in
+            '(0,1] by construction, which the previous unconstrained simplex minimisation did not:
+            'it could return negative site fractions and turn the log(Xa) terms in the Helmholtz
+            'energy and chemical potential into NaN, above all for high segment-number polymers
+            'with a 4C association scheme.
+
+            Dim numC As Integer = mix.numC
+            Dim nSit As Integer = CInt(sum(NumAss))
+
+            Dim Xa(nSit) As Double
+            If nSit = 0 Then Return Xa
+
+            'site -> component map
+            Dim compOf(nSit) As Integer
+            Dim s As Integer = 0
+            For i = 1 To numC
+                For j = 1 To CInt(NumAss(i))
+                    s += 1
+                    compOf(s) = i
+                Next
+            Next
+
+            'association-strength matrix delta(a,b): site a (of comp i) with site b (of comp k)
+            Dim delta(nSit, nSit) As Double
+            Dim ka(,), ea(,), kappa_, epsilon_ As Double
+            Dim inda As Integer = 0
+            For i = 1 To numC
+                For j = 1 To CInt(NumAss(i))
+                    inda += 1
+                    Dim indb As Integer = 0
+                    For k = 1 To numC
+                        For l = 1 To CInt(NumAss(k))
+                            indb += 1
+                            If i = k Then 'value from the component site matrix
+                                ka = mix.comp(i).EoSParam(5)
+                                kappa_ = ka(j, l)
+                                ea = mix.comp(i).EoSParam(6)
+                                epsilon_ = ea(j, l)
+                            Else 'combining rules for unlike components
+                                kappa_ = Sqrt(max(mix.comp(i).EoSParam(5)) * max(mix.comp(k).EoSParam(5))) * (Sqrt(sigma(i) * sigma(k)) / (0.5 * (sigma(i) + sigma(k)))) ^ 3
+                                epsilon_ = 0.5 * (max(mix.comp(i).EoSParam(6)) + max(mix.comp(k).EoSParam(6)))
+                            End If
+                            delta(inda, indb) = ((d(i) + d(k)) / 2) ^ 3 * ghs(i, k) * kappa_ * (Exp(epsilon_ / T) - 1)
+                        Next
+                    Next
+                Next
+            Next
+
+            'successive substitution with light damping
+            For a = 1 To nSit
+                Xa(a) = 0.2
+            Next
+            For it As Integer = 1 To 500
+                Dim maxd As Double = 0.0
+                For a = 1 To nSit
+                    Dim acc As Double = 0.0
+                    For b = 1 To nSit
+                        acc += dens_num * mix.x(compOf(b)) * Xa(b) * delta(a, b)
+                    Next
+                    Dim xn As Double = 1.0 / (1.0 + acc)
+                    Dim diff As Double = xn - Xa(a)
+                    If diff < 0.0 Then diff = -diff
+                    If diff > maxd Then maxd = diff
+                    Xa(a) = 0.5 * (Xa(a) + xn)
+                Next
+                If maxd < 0.000000000001 Then Exit For
+            Next
+
+            Return Xa
+
         End Function
 
         Friend Function obj_HelmholtzAss(Xa, mix, T, NumAss, sigma, d, ghs, dens_num)
