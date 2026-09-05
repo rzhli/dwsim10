@@ -37,6 +37,24 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Property MW As Double
 
+        ' Segment-level representation (Gross, Spuhl, Tumakaka & Sadowski, Ind. Eng. Chem. Res. 42 (2003)
+        ' 1266, copolymer PC-SAFT). Each compound contributes one segment type unless it is a copolymer,
+        ' which contributes one segment per repeat unit. All arrays are 1-based (index 0 is a dummy) and
+        ' are built by BuildSegments once the compounds are set. A one-segment-per-compound mixture makes
+        ' the segment sums reduce exactly to the original per-compound sums.
+        Public Property nseg As Integer
+        Public Property segParent As Integer()   ' parent compound (1-based) of each segment
+        Public Property segM As Double()         ' segment count m_iR of each segment type
+        Public Property segSigma As Double()
+        Public Property segEps As Double()
+        Public Property segK As Double(,)        ' segment-segment kij (1-based, nseg x nseg)
+        ' Hard-chain bonds, per compound (element i-1 holds compound i, 1-based). A homopolymer or small
+        ' molecule has a single self-bond with bonding fraction 1; a copolymer has the Table 1 bonds.
+        Public Property bondA As List(Of Integer())   ' global segment index of bond end A
+        Public Property bondB As List(Of Integer())   ' global segment index of bond end B
+        Public Property bondF As List(Of Double())    ' bonding fraction B of each bond
+        Public Property hasCopolymer As Boolean        ' true if any compound expands to more than one segment
+
     End Class
 
     Public Class pccompound
@@ -76,6 +94,204 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             _dCache = d
             _dCacheT = T
             Return d
+        End Function
+
+        Private _segDCacheT As Double = Double.NaN
+        Private _segDCache As Double()
+
+        ' Temperature-dependent diameter d of every SEGMENT type (Eq. 3, independent of m). Cached by T on
+        ' the instance, like GetD. For a one-segment-per-compound mixture these equal the compound diameters.
+        Private Function GetSegD(mixt As mixture, T As Double) As Double()
+            If _segDCache IsNot Nothing AndAlso _segDCacheT = T Then Return _segDCache
+            Dim d = zeros(mixt.nseg)
+            For s = 1 To mixt.nseg
+                d(s) = mixt.segSigma(s) * (1 - 0.12 * Exp(-3 * mixt.segEps(s) / T))
+            Next
+            _segDCache = d
+            _segDCacheT = T
+            Return d
+        End Function
+
+        ' Segment-segment interaction parameter, looked up in pcsaft_ip.dat by the two segment CAS numbers
+        ' in either order. Covers both the copolymer's internal repeat-unit correction and the ordinary
+        ' cross-molecule kij; a missing pair is zero.
+        Private Function SegKij(pp As PCSAFT2PropertyPackage, casA As String, casB As String) As Double
+            If pp.InteractionParameters.ContainsKey(casA) AndAlso pp.InteractionParameters(casA).ContainsKey(casB) Then
+                Return pp.InteractionParameters(casA)(casB).kij
+            End If
+            If pp.InteractionParameters.ContainsKey(casB) AndAlso pp.InteractionParameters(casB).ContainsKey(casA) Then
+                Return pp.InteractionParameters(casB)(casA).kij
+            End If
+            Return 0.0
+        End Function
+
+        ' Builds the segment-level view of the mixture (Gross et al. 2003). An ordinary compound is one
+        ' segment (its own parameters and CAS, a self-bond of fraction 1). A copolymer (PCSParam.copolymer
+        ' set) expands to one segment per repeat unit: segment parameters come from the homopolymer keyed by
+        ' the repeat-unit CAS, the segment number is m_iR = w_iR * M_copoly * (m/M)_R, the segment fractions
+        ' and Table 1 bonding fractions follow, and the segment-segment kij is read from pcsaft_ip.dat by
+        ' CAS. A one-segment-per-compound mixture reproduces the per-compound sums exactly.
+        Private Sub BuildSegments(pp As PCSAFT2PropertyPackage, compounds As Object, mixt As mixture)
+            Dim nc = mixt.numC
+
+            Dim casByComp As New List(Of List(Of String))
+            Dim mByComp As New List(Of List(Of Double))
+            Dim sigByComp As New List(Of List(Of Double))
+            Dim epsByComp As New List(Of List(Of Double))
+            Dim bLocA As New List(Of List(Of Integer))
+            Dim bLocB As New List(Of List(Of Integer))
+            Dim bFrac As New List(Of List(Of Double))
+
+            For i = 1 To nc
+                Dim c = compounds(i - 1)
+                Dim cas As String = c.CAS_Number
+                Dim prm = pp.CompoundParameters(cas)
+                Dim casL As New List(Of String), mL As New List(Of Double), sigL As New List(Of Double), epsL As New List(Of Double)
+                Dim bA As New List(Of Integer), bB As New List(Of Integer), bF As New List(Of Double)
+
+                If prm.copolymer Is Nothing OrElse prm.copolymer.Trim() = "" Then
+                    casL.Add(cas)
+                    mL.Add(mixt.comp(i).EoSParam(1))
+                    sigL.Add(mixt.comp(i).EoSParam(2))
+                    epsL.Add(mixt.comp(i).EoSParam(3))
+                    bA.Add(0) : bB.Add(0) : bF.Add(1.0)
+                Else
+                    For Each part In prm.copolymer.Split(";"c)
+                        Dim kv = part.Split(":"c)
+                        Dim scas = kv(0).Trim()
+                        Dim wR = Double.Parse(kv(1).Trim(), Globalization.CultureInfo.InvariantCulture)
+                        Dim sprm = pp.CompoundParameters(scas)
+                        casL.Add(scas)
+                        mL.Add(wR * c.Molar_Weight * sprm.m_over_M)
+                        sigL.Add(sprm.sigma)
+                        epsL.Add(sprm.epsilon)
+                    Next
+                    Dim mtot = mL.Sum()
+                    mixt.comp(i).EoSParam(1) = mtot
+                    Dim savg = 0.0, eavg = 0.0
+                    For si = 0 To mL.Count - 1
+                        savg += (mL(si) / mtot) * sigL(si)
+                        eavg += (mL(si) / mtot) * epsL(si)
+                    Next
+                    mixt.comp(i).EoSParam(2) = savg
+                    mixt.comp(i).EoSParam(3) = eavg
+
+                    If mL.Count = 2 Then
+                        Dim z0 = mL(0) / mtot, z1 = mL(1) / mtot
+                        Dim seq As String = If(prm.coseq Is Nothing, "", prm.coseq.Trim().ToLowerInvariant())
+                        Dim Brr, Brb, Bbb As Double
+                        If seq = "alternating" Then
+                            Brb = 1.0 : Brr = 0.0 : Bbb = 0.0
+                        ElseIf z1 <= z0 Then
+                            Brb = 2.0 * z1 * mtot / (mtot - 1.0) : Bbb = 0.0 : Brr = 1.0 - Brb
+                        Else
+                            Brb = 2.0 * z0 * mtot / (mtot - 1.0) : Brr = 0.0 : Bbb = 1.0 - Brb
+                        End If
+                        If Brr > 0.0 Then bA.Add(0) : bB.Add(0) : bF.Add(Brr)
+                        If Brb > 0.0 Then bA.Add(0) : bB.Add(1) : bF.Add(Brb)
+                        If Bbb > 0.0 Then bA.Add(1) : bB.Add(1) : bF.Add(Bbb)
+                    Else
+                        bA.Add(0) : bB.Add(0) : bF.Add(1.0)
+                    End If
+                End If
+
+                casByComp.Add(casL) : mByComp.Add(mL) : sigByComp.Add(sigL) : epsByComp.Add(epsL)
+                bLocA.Add(bA) : bLocB.Add(bB) : bFrac.Add(bF)
+            Next
+
+            Dim total = 0
+            For i = 0 To nc - 1
+                total += casByComp(i).Count
+            Next
+            mixt.nseg = total
+            mixt.segParent = New Integer(total) {}
+            mixt.segM = New Double(total) {}
+            mixt.segSigma = New Double(total) {}
+            mixt.segEps = New Double(total) {}
+            Dim segCasFlat(total) As String
+            Dim compFirstSeg(nc) As Integer
+            Dim g = 0
+            For i = 1 To nc
+                compFirstSeg(i) = g + 1
+                For si = 0 To casByComp(i - 1).Count - 1
+                    g += 1
+                    mixt.segParent(g) = i
+                    mixt.segM(g) = mByComp(i - 1)(si)
+                    mixt.segSigma(g) = sigByComp(i - 1)(si)
+                    mixt.segEps(g) = epsByComp(i - 1)(si)
+                    segCasFlat(g) = casByComp(i - 1)(si)
+                Next
+            Next
+
+            mixt.bondA = New List(Of Integer())
+            mixt.bondB = New List(Of Integer())
+            mixt.bondF = New List(Of Double())
+            For i = 1 To nc
+                Dim la = bLocA(i - 1), lb = bLocB(i - 1), lf = bFrac(i - 1)
+                Dim ga(lf.Count - 1) As Integer, gb(lf.Count - 1) As Integer, gf(lf.Count - 1) As Double
+                For bi = 0 To lf.Count - 1
+                    ga(bi) = compFirstSeg(i) + la(bi)
+                    gb(bi) = compFirstSeg(i) + lb(bi)
+                    gf(bi) = lf(bi)
+                Next
+                mixt.bondA.Add(ga) : mixt.bondB.Add(gb) : mixt.bondF.Add(gf)
+            Next
+
+            mixt.segK = New Double(total, total) {}
+            For a = 1 To total
+                For b = 1 To total
+                    mixt.segK(a, b) = SegKij(pp, segCasFlat(a), segCasFlat(b))
+                Next
+            Next
+
+            mixt.hasCopolymer = (total > nc)
+        End Sub
+
+        ' Segment-view reduced density (Eq. 9) and the two dispersion perturbation sums (Eqs. A12, A13),
+        ' summed over segment types with weight w_s = x_i * m_iR and the segment-pair combining rules
+        ' (Eqs. A14, A15). For a one-segment-per-compound mixture these reduce to the per-compound sums.
+        Private Sub SegDispSums(mixt As mixture, T As Double, dens_num As Double,
+                                ByRef dens_red As Double, ByRef prom1 As Double, ByRef prom2 As Double)
+            Dim segd = GetSegD(mixt, T)
+            Dim ns = mixt.nseg
+            Dim w = zeros(ns)
+            Dim sa, sb As Integer
+            For sa = 1 To ns
+                w(sa) = mixt.x(mixt.segParent(sa)) * mixt.segM(sa)
+            Next
+            dens_red = 0
+            For sa = 1 To ns
+                dens_red = dens_red + w(sa) * segd(sa) ^ 3
+            Next
+            dens_red = dens_red * PI / 6 * dens_num
+            prom1 = 0
+            prom2 = 0
+            For sa = 1 To ns
+                For sb = 1 To ns
+                    Dim sij As Double = 0.5 * (mixt.segSigma(sa) + mixt.segSigma(sb))
+                    Dim eij As Double = Sqrt(mixt.segEps(sa) * mixt.segEps(sb)) * (1 - mixt.segK(sa, sb))
+                    prom1 = prom1 + w(sa) * w(sb) * eij / T * sij ^ 3
+                    prom2 = prom2 + w(sa) * w(sb) * (eij / T) ^ 2 * sij ^ 3
+                Next
+            Next
+        End Sub
+
+        ' Hard-sphere radial distribution at contact for a bonded segment pair of diameters da, db (Eq. 8),
+        ' given the zeta auxiliaries (1-based: auxil(1..4) = zeta_0..zeta_3).
+        Private Function GhsSeg(da As Double, db As Double, auxil As Double()) As Double
+            Dim t1 As Double = 1 / (1 - auxil(4))
+            Dim t2 As Double = da * db / (da + db) * 3 * auxil(3) / (1 - auxil(4)) ^ 2
+            Dim t3 As Double = (da * db / (da + db)) ^ 2 * 2 * auxil(3) ^ 2 / (1 - auxil(4)) ^ 3
+            Return t1 + t2 + t3
+        End Function
+
+        ' Density derivative of the hard-sphere radial distribution at a bonded segment-pair contact
+        ' (Eq. A27), used by the hard-chain compressibility.
+        Private Function DensDgDensSeg(da As Double, db As Double, auxil As Double()) As Double
+            Dim t1 As Double = auxil(4) / (1 - auxil(4)) ^ 2
+            Dim t2 As Double = (da * db) / (da + db) * (3 * auxil(3) / (1 - auxil(4)) ^ 2 + 6 * auxil(3) * auxil(4) / (1 - auxil(4)) ^ 3)
+            Dim t3 As Double = (da * db / (da + db)) ^ 2 * (4 * auxil(3) ^ 2 / (1 - auxil(4)) ^ 3 + 6 * auxil(3) ^ 2 * auxil(4) / (1 - auxil(4)) ^ 4)
+            Return t1 + t2 + t3
         End Function
 
         Public Sub New(pp As PCSAFT2PropertyPackage, molefractions() As Double)
@@ -255,6 +471,8 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 mix.comp.Add(cproxy)
 
             Next
+
+            BuildSegments(pp, compounds, mix)
 
         End Sub
 
@@ -877,30 +1095,48 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'Calculates the contributions to the chemical potential
             '**************************************************************************
 
-            Dim t1, t2, t3 As Task
+            If mix.hasCopolymer Then
 
-            'Hard chain contribution
-            t1 = TaskHelper.Run(Sub() muHC = mu_HC(T, dens_num, mix))
+                ' A copolymer's segments make the per-compound analytical hard-chain and dispersion
+                ' derivatives invalid, so take the residual chemical potential of those two terms as a
+                ' finite difference of the segment-based Helmholtz energy. Run serially, since it perturbs
+                ' mix.x. The association term (zero for the non-associating copolymers) stays analytical.
+                muHC = NumMuHCDisp(T, dens_num, mix)
+                muDisp = zeros(mix.numC)
+                NumAss = zeros(mix.numC)
+                For i = 1 To mix.numC
+                    NumAss(i) = mix.comp(i).EoSParam(4)
+                Next
+                If sum(NumAss) > 0 Then muAss = mu_Ass(T, dens_num, mix) Else muAss = zeros(mix.numC)
 
-            'Dispersive contribution
-            t2 = TaskHelper.Run(Sub() muDisp = mu_Disp(T, dens_num, mix))
+            Else
 
-            'Association contribution
-            t3 = TaskHelper.Run(Sub()
-                                    NumAss = zeros(mix.numC)
+                Dim t1, t2, t3 As Task
 
-                                    For i = 1 To mix.numC
-                                        NumAss(i) = mix.comp(i).EoSParam(4)
-                                    Next
+                'Hard chain contribution
+                t1 = TaskHelper.Run(Sub() muHC = mu_HC(T, dens_num, mix))
 
-                                    If sum(NumAss) > 0 Then
-                                        muAss = mu_Ass(T, dens_num, mix)
-                                    Else
-                                        muAss = zeros(mix.numC)
-                                    End If
-                                End Sub)
+                'Dispersive contribution
+                t2 = TaskHelper.Run(Sub() muDisp = mu_Disp(T, dens_num, mix))
 
-            Task.WaitAll(t1, t2, t3)
+                'Association contribution
+                t3 = TaskHelper.Run(Sub()
+                                        NumAss = zeros(mix.numC)
+
+                                        For i = 1 To mix.numC
+                                            NumAss(i) = mix.comp(i).EoSParam(4)
+                                        Next
+
+                                        If sum(NumAss) > 0 Then
+                                            muAss = mu_Ass(T, dens_num, mix)
+                                        Else
+                                            muAss = zeros(mix.numC)
+                                        End If
+                                    End Sub)
+
+                Task.WaitAll(t1, t2, t3)
+
+            End If
 
             '**************************************************************************
             'Calculates the fugacity coefficient
@@ -913,6 +1149,42 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
             Return logf
 
+        End Function
+
+        ' Residual chemical potential of the hard-chain plus dispersion terms, per compound, by a central
+        ' finite difference of the segment-based Helmholtz energy at constant temperature and volume
+        ' (mu_i = d(n a_res)/dn_i). Used for copolymer mixtures, where the per-compound analytical
+        ' derivatives do not hold; it reproduces mu_HC + mu_Disp for ordinary mixtures.
+        Private Function NumMuHCDisp(T As Double, dens_num As Double, mixt As mixture) As Double()
+            Dim nc = mixt.numC
+            Dim x0 = mixt.x
+            ' Step each mole number relative to its own value: a high-molar-mass polymer has a tiny mole
+            ' fraction, so a fixed absolute step would be a large fraction of it and swamp the derivative.
+            Dim rel As Double = 0.00001
+            Dim mu = zeros(nc)
+            For k = 1 To nc
+                Dim hk As Double = rel * Math.Max(x0(k), 0.0000000001)
+                mu(k) = (NA_HCDisp(T, dens_num, mixt, x0, k, hk) - NA_HCDisp(T, dens_num, mixt, x0, k, -hk)) / (2.0 * hk)
+            Next
+            mixt.x = x0
+            Return mu
+        End Function
+
+        ' n*a_res (hard chain + dispersion) with the mole number of compound k perturbed by dh at constant
+        ' volume: the total mole count becomes 1+dh, the mole fractions rescale, and the number density
+        ' scales with the mole count. Restores nothing (the caller resets mixt.x).
+        Private Function NA_HCDisp(T As Double, dens_num As Double, mixt As mixture, x0 As Double(), k As Integer, dh As Double) As Double
+            Dim nc = mixt.numC
+            Dim Np As Double = 1.0 + dh
+            Dim xp = zeros(nc)
+            For i = 1 To nc
+                xp(i) = x0(i) / Np
+            Next
+            xp(k) = (x0(k) + dh) / Np
+            Dim rhop = dens_num * Np
+            mixt.x = xp
+            Dim a = HelmholtzHC(T, rhop, mixt) + HelmholtzDisp(T, rhop, mixt)
+            Return Np * a
         End Function
 
         ''' <summary>
@@ -1137,40 +1409,17 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 b(j) = b0(j) + (m_prom - 1) / m_prom * b1(j) + (m_prom - 1) / m_prom * (m_prom - 2) / m_prom * b2(j) 'Eq. 19 Of reference
             Next
 
-            Dim dens_red, sigmaij(,), epsilonij(,) As Double
+            Dim dens_red, prom1, prom2 As Double
 
-            'Reduced density
-            dens_red = 0
-            For i = 1 To numC
-                dens_red = dens_red + x(i) * m(i) * d(i) ^ 3
-            Next
-            dens_red = dens_red * PI / 6 * dens_num 'Eq. 9 Of reference
+            'Reduced density (Eq. 9) and the dispersion perturbation sums (Eqs. A12, A13), over segments.
+            SegDispSums(mix, T, dens_num, dens_red, prom1, prom2)
 
-            'Mixing rules
-            sigmaij = zeros(numC, numC)
-            epsilonij = zeros(numC, numC)
-            For i = 1 To numC
-                For j = 1 To numC
-                    sigmaij(i, j) = 0.5 * (sigma(i) + sigma(j)) 'Eq. A14 of reference
-                    epsilonij(i, j) = Sqrt(epsilon(i) * epsilon(j)) * (1 - k1(i, j)) 'Eq A15 of reference            
-                Next
-            Next
-
-            Dim term1, term2, C1, prom1, prom2 As Double
+            Dim term1, term2, C1 As Double
 
             'Dispersion Contribution
             term1 = (m_prom) * (8 * dens_red - 2 * dens_red ^ 2) / (1 - dens_red) ^ 4
             term2 = (1 - m_prom) * (20 * dens_red - 27 * dens_red ^ 2 + 12 * dens_red ^ 3 - 2 * dens_red ^ 4) / ((1 - dens_red) * (2 - dens_red)) ^ 2
             C1 = (1 + term1 + term2) ^ -1 'Eq. A11 of reference
-
-            prom1 = 0
-            prom2 = 0
-            For i = 1 To numC
-                For j = 1 To numC
-                    prom1 = prom1 + x(i) * x(j) * m(i) * m(j) * epsilonij(i, j) / T * sigmaij(i, j) ^ 3 'Eq. A12 of reference
-                    prom2 = prom2 + x(i) * x(j) * m(i) * m(j) * (epsilonij(i, j) / T) ^ 2 * sigmaij(i, j) ^ 3 'Eq. A13 of reference
-                Next
-            Next
 
             Dim I1, I2 As Double, Adisp
 
@@ -1244,26 +1493,24 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 m_prom = m_prom + m(i) * x(i) 'Eq. 6 of reference
             Next
 
-            Dim auxil(), ghs(,), term1, term2, term3, a_hs, sum1, Ahc As Double
+            Dim auxil(), term1, term2, term3, a_hs, sum1, Ahc As Double
 
-            'auxiliary functions
-            auxil = zeros(4)
-            For j = 1 To 4
-                For i = 1 To numC
-                    auxil(j) = auxil(j) + x(i) * m(i) * d(i) ^ (j - 1)
-                Next
-                auxil(j) = auxil(j) * PI / 6 * dens_num 'Eq. 9 of reference
+            'Segment weights w_s = x_i m_iR and segment diameters (copolymer segment view).
+            Dim segd = GetSegD(mix, T)
+            Dim ns = mix.nseg
+            Dim w = zeros(ns)
+            Dim sa As Integer
+            For sa = 1 To ns
+                w(sa) = x(mix.segParent(sa)) * mix.segM(sa)
             Next
 
-            'radial distribution function
-            ghs = zeros(numC, numC)
-            For i = 1 To numC
-                For j = 1 To numC
-                    term1 = 1 / (1 - auxil(4))
-                    term2 = d(i) * d(j) / (d(i) + d(j)) * 3 * auxil(3) / (1 - auxil(4)) ^ 2
-                    term3 = (d(i) * d(j) / (d(i) + d(j))) ^ 2 * 2 * auxil(3) ^ 2 / (1 - auxil(4)) ^ 3
-                    ghs(i, j) = term1 + term2 + term3 'Eq. 8 of reference
+            'auxiliary functions (zeta_0..zeta_3), summed over segment types (Eq. 9 / A.10)
+            auxil = zeros(4)
+            For j = 1 To 4
+                For sa = 1 To ns
+                    auxil(j) = auxil(j) + w(sa) * segd(sa) ^ (j - 1)
                 Next
+                auxil(j) = auxil(j) * PI / 6 * dens_num
             Next
 
             'Helmholtz energy
@@ -1272,9 +1519,18 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             term3 = (auxil(3) ^ 3 / auxil(4) ^ 2 - auxil(1)) * Log(1 - auxil(4))
             a_hs = (1 / auxil(1)) * (term1 + term2 + term3)
 
+            'Hard-chain term (Eq. A.6): each molecule's bonds weighted by the bonding fraction B and the
+            'radial distribution at the bonded segment-pair contact. A homopolymer/small molecule has one
+            'self-bond of fraction 1, reducing to (m_i - 1) ln g_ii.
             sum1 = 0
+            Dim bi As Integer
             For i = 1 To numC
-                sum1 = sum1 + x(i) * (m(i) - 1) * Log(ghs(i, i))
+                Dim bAcc As Double = 0.0
+                Dim ba = mix.bondA(i - 1), bb = mix.bondB(i - 1), bf = mix.bondF(i - 1)
+                For bi = 0 To bf.Length - 1
+                    bAcc = bAcc + bf(bi) * Log(GhsSeg(segd(ba(bi)), segd(bb(bi)), auxil))
+                Next
+                sum1 = sum1 + x(i) * (m(i) - 1) * bAcc
             Next
 
             Ahc = m_prom * a_hs - sum1 'Eq. A4 of reference
@@ -1757,30 +2013,15 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 b(j) = b0(j) + (m_prom - 1) / m_prom * b1(j) + (m_prom - 1) / m_prom * (m_prom - 2) / m_prom * b2(j) 'Eq. 19 Of reference
             Next
 
-            'Reduced density
-            dens_red = 0
-            For i = 1 To numC
-                dens_red = dens_red + x(i) * m(i) * d(i) ^ 3
-            Next
-            dens_red = dens_red * PI / 6 * dens_num 'Eq. 9 Of reference
-
-            '**************************************************************************
-            'Mixing rules
-            '**************************************************************************
-            sigmaij = zeros(numC, numC)
-            epsilonij = zeros(numC, numC)
-            For i = 1 To numC
-                For j = 1 To numC
-                    sigmaij(i, j) = 0.5 * (sigma(i) + sigma(j)) 'Eq. A14 Of reference
-                    epsilonij(i, j) = Sqrt(epsilon(i) * epsilon(j)) * (1 - k1(i, j)) 'Eq A15 Of reference     	
-                Next
-            Next
+            'Reduced density and the dispersion sums are computed over segment types below (SegDispSums).
 
             '**************************************************************************
             'Zdisp
             '**************************************************************************
 
             Dim dnuI1_dnu, dnuI2_dnu, term1, term2, C1, C2, prom1, prom2, I2, Zdisp As Double
+
+            SegDispSums(mix, T, dens_num, dens_red, prom1, prom2)
 
             dnuI1_dnu = 0
             dnuI2_dnu = 0
@@ -1797,15 +2038,6 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             term1 = m_prom * (-4 * dens_red ^ 2 + 20 * dens_red + 8) / (1 - dens_red) ^ 5
             term2 = (1 - m_prom) * (2 * dens_red ^ 3 + 12 * dens_red ^ 2 - 48 * dens_red + 40) / ((1 - dens_red) * (2 - dens_red)) ^ 3
             C2 = -C1 ^ 2 * (term1 + term2) 'Eq. A31 Of reference
-
-            prom1 = 0
-            prom2 = 0
-            For i = 1 To numC
-                For j = 1 To numC
-                    prom1 = prom1 + x(i) * x(j) * m(i) * m(j) * epsilonij(i, j) / T * sigmaij(i, j) ^ 3 'Eq. A12 Of reference
-                    prom2 = prom2 + x(i) * x(j) * m(i) * m(j) * (epsilonij(i, j) / T) ^ 2 * sigmaij(i, j) ^ 3 'Eq. A13 Of reference
-                Next
-            Next
 
             I2 = 0
             For j = 1 To 7
@@ -1865,27 +2097,25 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 m_prom = m_prom + m(i) * x(i) 'Eq. 6 of reference
             Next
 
-            'auxiliary functions
+            'Segment weights w_s = x_i m_iR and segment diameters (copolymer segment view).
+            Dim segd = GetSegD(mix, T)
+            Dim ns = mix.nseg
+            Dim w = zeros(ns)
+            Dim sa As Integer
+            For sa = 1 To ns
+                w(sa) = x(mix.segParent(sa)) * mix.segM(sa)
+            Next
+
+            'auxiliary functions (zeta_0..zeta_3), over segment types
             auxil = zeros(4)
             For j = 1 To 4
-                For i = 1 To numC
-                    auxil(j) = auxil(j) + x(i) * m(i) * d(i) ^ (j - 1)
+                For sa = 1 To ns
+                    auxil(j) = auxil(j) + w(sa) * segd(sa) ^ (j - 1)
                 Next
-                auxil(j) = auxil(j) * PI / 6 * dens_num 'Eq. 9 of reference
+                auxil(j) = auxil(j) * PI / 6 * dens_num
             Next
 
-            Dim ghs(,), term1, term2, term3, Zhs, dens_dg_ddens(,) As Double
-
-            'radial distribution function
-            ghs = zeros(numC, numC)
-            For i = 1 To numC
-                For j = 1 To numC
-                    term1 = 1 / (1 - auxil(4))
-                    term2 = d(i) * d(j) / (d(i) + d(j)) * 3 * auxil(3) / (1 - auxil(4)) ^ 2
-                    term3 = (d(i) * d(j) / (d(i) + d(j))) ^ 2 * 2 * auxil(3) ^ 2 / (1 - auxil(4)) ^ 3
-                    ghs(i, j) = term1 + term2 + term3 'Eq. 8 of reference
-                Next
-            Next
+            Dim term1, term2, term3, Zhs As Double
 
             '**************************************************************************
             'Zhc
@@ -1895,21 +2125,20 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             term3 = (3 * auxil(3) ^ 3 - auxil(4) * auxil(3) ^ 3) / (auxil(1) * (1 - auxil(4)) ^ 3)
             Zhs = term1 + term2 + term3 'Eq. A26 of reference
 
-            dens_dg_ddens = zeros(mix.numC, mix.numC)
-            For i = 1 To numC
-                For j = 1 To numC
-                    term1 = auxil(4) / (1 - auxil(4)) ^ 2
-                    term2 = (d(i) * d(j)) / (d(i) + d(j)) * (3 * auxil(3) / (1 - auxil(4)) ^ 2 + 6 * auxil(3) * auxil(4) / (1 - auxil(4)) ^ 3)
-                    term3 = (d(i) * d(j) / (d(i) + d(j))) ^ 2 * (4 * auxil(3) ^ 2 / (1 - auxil(4)) ^ 3 + 6 * auxil(3) ^ 2 * auxil(4) / (1 - auxil(4)) ^ 4)
-                    dens_dg_ddens(i, j) = term1 + term2 + term3 'Eq. A27 of reference
-                Next
-            Next
-
             Dim sum1, Zhc As Double
 
+            'Hard-chain compressibility (Eq. A25): sum over each molecule's bonds, at the bonded segment-pair
+            'contact. A homopolymer/small molecule has one self-bond of fraction 1.
             sum1 = 0
+            Dim bi As Integer
             For i = 1 To numC
-                sum1 = sum1 + x(i) * (m(i) - 1) * ghs(i, i) ^ (-1) * dens_dg_ddens(i, i)
+                Dim bAcc As Double = 0.0
+                Dim ba = mix.bondA(i - 1), bb = mix.bondB(i - 1), bf = mix.bondF(i - 1)
+                For bi = 0 To bf.Length - 1
+                    Dim gg As Double = GhsSeg(segd(ba(bi)), segd(bb(bi)), auxil)
+                    bAcc = bAcc + bf(bi) * (gg ^ (-1)) * DensDgDensSeg(segd(ba(bi)), segd(bb(bi)), auxil)
+                Next
+                sum1 = sum1 + x(i) * (m(i) - 1) * bAcc
             Next
 
             Zhc = m_prom * Zhs - sum1 'Eq. A25 of reference

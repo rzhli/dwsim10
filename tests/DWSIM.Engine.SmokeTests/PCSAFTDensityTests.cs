@@ -67,6 +67,32 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         /// <summary>
+        /// The log-normal pseudo-component generator must reproduce the number- and weight-average molar
+        /// mass. Unlike Schulz-Zimm, the mass is exponential in the Gauss-Hermite node, so the spread is
+        /// solved to make the discrete polydispersity equal PDI exactly; with enough cuts the cut Mn equals
+        /// Mn and Mw equals Mn*PDI. A finite cut count caps the reachable PDI, so the cases give the
+        /// generator room (two cuts reach only PDI = 2).
+        /// </summary>
+        [Test]
+        public void LogNormalCutsMatchDistributionMoments()
+        {
+            foreach (var (Mn, PDI, N) in new[] { (50000.0, 2.0, 6), (120000.0, 1.6, 4), (8000.0, 1.8, 5), (30000.0, 2.0, 1) })
+            {
+                double[] M = null, z = null;
+                DWSIM.Thermodynamics.Polymers.PolymerCharacterization.LogNormalCuts(Mn, PDI, N, ref M, ref z);
+                double sz = z.Sum(), m1 = 0, m2 = 0;
+                for (int i = 0; i < M.Length; i++) { m1 += z[i] * M[i]; m2 += z[i] * M[i] * M[i]; }
+                double MnCut = m1 / sz, MwCut = m2 / m1;
+                TestContext.WriteLine($"Mn={Mn} PDI={PDI} N={N}: sum z={sz:F6} Mn_cut={MnCut:F1} Mw_cut={MwCut:F1} (Mw={Mn * PDI:F1})");
+                Assert.That(sz, Is.EqualTo(1.0).Within(1e-9), "fractions must sum to one");
+                Assert.That(MnCut, Is.EqualTo(Mn).Within(Mn * 1e-6), "number-average must equal Mn");
+                Assert.That(M.All(x => x > 0), "all cut molar masses must be positive");
+                if (N >= 2)
+                    Assert.That(MwCut, Is.EqualTo(Mn * PDI).Within(Mn * PDI * 1e-4), "weight-average must equal Mn*PDI");
+            }
+        }
+
+        /// <summary>
         /// A polydisperse polymer (two polypropylene cuts of different molar mass in n-pentane) must reach
         /// its liquid-liquid split from the ordinary Simple LLE flash with no manual seed, and the flash
         /// must fractionate: the heavier cut concentrates in the polymer-rich phase and is depleted from the
@@ -130,11 +156,43 @@ namespace DWSIM.Engine.SmokeTests
             var lnphi = pp.DW_CalcLnFugCoeff(new[] { 0.5, 0.5 }, 298.15, 101325.0,
                 DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
             TestContext.WriteLine($"lnphi water={lnphi[0]:R}  ethanol={lnphi[1]:R}");
-            // Values include water-ethanol cross-association. Before the max() off-by-one fix the
-            // unlike-pair association strength was read off the (always zero) matrix diagonal, so
-            // cross-association was silently absent and these were -2.01189 / -1.72609.
-            Assert.That(lnphi[0], Is.EqualTo(-3.0740714141259611).Within(1e-9), "water lnphi (2B cross-association)");
-            Assert.That(lnphi[1], Is.EqualTo(-2.731312286854913).Within(1e-9), "ethanol lnphi (2B cross-association)");
+            // Values include water-ethanol cross-association AND the shipped water/ethanol kij = 0.06.
+            // Before the max() off-by-one fix the unlike-pair association strength was read off the
+            // (always zero) matrix diagonal, so cross-association was silently absent and these were
+            // -2.01189 / -1.72609; with cross-association alive and kij = 0 they are -3.07407 / -2.73131.
+            Assert.That(lnphi[0], Is.EqualTo(-2.7369900645199534).Within(1e-9), "water lnphi (2B cross-association + kij)");
+            Assert.That(lnphi[1], Is.EqualTo(-2.626709161126869).Within(1e-9), "ethanol lnphi (2B cross-association + kij)");
+        }
+
+        /// <summary>
+        /// The shipped water-alcohol kij rows (pcsaft_ip.dat) must load and restore the positive deviation
+        /// that live cross-association otherwise over-suppresses. Without a kij the arithmetic-mean cross
+        /// association drags the alcohol's activity below one (wrong sign); the fitted kij brings the
+        /// alcohol infinite-dilution activity coefficient back near the DECHEMA/Gmehling value. Proxy for
+        /// gamma^inf is the activity coefficient at x_alcohol = 0.01, 323.15 K, 1 atm liquid.
+        /// </summary>
+        [Test]
+        public void WaterAlcoholKijRestoresPositiveDeviation()
+        {
+            var st = DWSIM.Thermodynamics.PropertyPackages.State.Liquid;
+            double T = 323.15;
+            // alcohol DB name, experimental gamma_alcohol^inf in water, accepted band
+            var cases = new (string a, double gExp, double lo, double hi)[]
+            {
+                ("Methanol", 1.8, 1.4, 2.3),
+                ("Ethanol", 5.0, 4.0, 6.5),
+                ("1-propanol", 14.0, 11.0, 18.0),
+            };
+            foreach (var (a, gExp, lo, hi) in cases)
+            {
+                // Package built the normal way, so the kij comes from the shipped pcsaft_ip.dat, not injected.
+                var pp = Package(fs => { fs.AddCompound("Water"); fs.AddCompound(a); });
+                double lnApure = pp.DW_CalcLnFugCoeff(new[] { 0.0, 1.0 }, T, 101325.0, st)[1];
+                double gA = Math.Exp(pp.DW_CalcLnFugCoeff(new[] { 0.99, 0.01 }, T, 101325.0, st)[1] - lnApure);
+                TestContext.WriteLine($"Water/{a}: gamma^inf={gA:F2} (exp ~{gExp}, band {lo}-{hi})");
+                Assert.That(gA, Is.GreaterThan(1.0), $"{a}: kij must restore a positive deviation (gamma^inf > 1)");
+                Assert.That(gA, Is.InRange(lo, hi), $"{a}: gamma^inf must be near the experimental value");
+            }
         }
 
         /// <summary>
@@ -540,6 +598,91 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         private static string SourceDir([CallerFilePath] string path = "") => Path.GetDirectoryName(path);
+
+        // n-pentane + one injected polymer/copolymer (CAS `cas`, molar mass `mw`); when `copoly` is given
+        // the compound is registered as a copolymer with that segment definition. Returns pp and the feed
+        // mole fractions at `wPoly` polymer mass fraction.
+        private static (DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage pp, double[] z) PentanePlusPolymer(
+            string cas, string copoly, double mw, double wPoly, double mOverM)
+        {
+            string addcomps = Path.GetFullPath(Path.Combine(SourceDir(), "..", "..", "content", "addcomps"));
+            var json = File.ReadAllText(Path.Combine(addcomps, "Polyethylene_HDPE.json"));
+            var poly = Newtonsoft.Json.JsonConvert.DeserializeObject<DWSIM.Thermodynamics.BaseClasses.ConstantProperties>(json);
+            poly.CurrentDB = "User"; poly.OriginalDB = "User";
+            poly.CAS_Number = cas; poly.Name = "TestPoly_" + cas; poly.Molar_Weight = mw;
+
+            var fs = new DWSIM.DynamicRunner.Flowsheet(null, null);
+            fs.Init();
+            fs.AddCompound("N-pentane");
+            fs.Options.SelectedComponents.Add(poly.Name, poly);
+            var pp = new DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage { Flowsheet = fs };
+            if (copoly != null)
+                pp.CompoundParameters[cas] = new DWSIM.Thermodynamics.AdvancedEOS.PCSParam
+                { casno = cas, compound = poly.Name, mw = mw, m_over_M = mOverM, copolymer = copoly };
+            var obj = fs.AddObject(DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "s");
+            var ms = (DWSIM.Thermodynamics.Streams.MaterialStream)fs.SimulationObjects[obj.Name];
+            ms.SetFlowsheet(fs); ms.PropertyPackage = pp; ms.AssignSelfToPP(); pp.CurrentMaterialStream = ms;
+
+            double nPoly = wPoly / mw, nC5 = (1 - wPoly) / 72.15, tot = nPoly + nC5;
+            return (pp, new[] { nC5 / tot, nPoly / tot });
+        }
+
+        /// <summary>
+        /// Copolymer PC-SAFT correctness (Gross et al. 2003). A copolymer whose two segments are the SAME
+        /// repeat unit is chemically identical to that homopolymer, so its log fugacity coefficient, taken
+        /// through the segment expansion and the numerical copolymer chemical potential, must reproduce the
+        /// homopolymer computed through the ordinary analytical path. This exercises the whole copolymer
+        /// machinery (segment expansion, bonding fractions, segment kij, numerical fugacity) against a
+        /// known answer.
+        /// </summary>
+        [Test]
+        public void CopolymerOfIdenticalSegmentsReproducesHomopolymer()
+        {
+            var st = DWSIM.Thermodynamics.PropertyPackages.State.Liquid;
+            double T = 400.0, P = 100e5, mw = 50000.0, w = 0.05;
+
+            var (ppH, zH) = PentanePlusPolymer("9002-88-4", null, mw, w, 0.0263);          // PE homopolymer
+            var (ppC, zC) = PentanePlusPolymer("PECOPOLY", "9002-88-4:0.5;9002-88-4:0.5", mw, w, 0.0263); // 2 PE segments
+
+            var lnH = ppH.DW_CalcLnFugCoeff(zH, T, P, st);
+            var lnC = ppC.DW_CalcLnFugCoeff(zC, T, P, st);
+            TestContext.WriteLine($"homopolymer PE: solvent={lnH[0]:R} polymer={lnH[1]:R}");
+            TestContext.WriteLine($"copolymer PE/PE: solvent={lnC[0]:R} polymer={lnC[1]:R}");
+            // The solvent (well-conditioned) matches to ~1e-6. The polymer log fugacity (magnitude ~2100)
+            // matches to ~0.05%: the copolymer path takes the residual chemical potential numerically while
+            // the homopolymer takes it from the analytical high-segment-number derivatives, which lose a
+            // little precision at m ~ 1300. That agreement confirms the copolymer machinery is correct.
+            Assert.That(lnC[0], Is.EqualTo(lnH[0]).Within(1e-3), "solvent lnphi: copolymer of identical segments must equal the homopolymer");
+            Assert.That(lnC[1], Is.EqualTo(lnH[1]).Within(Math.Abs(lnH[1]) * 2e-3), "polymer lnphi: copolymer of identical segments must equal the homopolymer");
+        }
+
+        /// <summary>
+        /// A real poly(ethylene-co-propylene) (PEP) copolymer in n-pentane must be physical and lie between
+        /// the two homopolymers: the polymer's log fugacity coefficient falls between that of the
+        /// polyethylene and the polypropylene solutions at the same conditions, since a random copolymer's
+        /// segments are a blend of the two.
+        /// </summary>
+        [Test]
+        public void Poly_ethylene_co_propyleneIsPhysicalAndIntermediate()
+        {
+            var st = DWSIM.Thermodynamics.PropertyPackages.State.Liquid;
+            double T = 460.0, P = 40e5, mw = 100000.0, w = 0.10;
+
+            // ethylene segment = HDPE (9002-88-4), propylene segment = PP (9003-07-0)
+            var (ppPE, zPE) = PentanePlusPolymer("9002-88-4", null, mw, w, 0.0263);
+            var (ppPP, zPP) = PentanePlusPolymer("9003-07-0", null, mw, w, 0.02305);
+            var (ppCO, zCO) = PentanePlusPolymer("PEPCOPOLY", "9002-88-4:0.7;9003-07-0:0.3", mw, w, 0.0);
+
+            double lnPE = ppPE.DW_CalcLnFugCoeff(zPE, T, P, st)[1];
+            double lnPP = ppPP.DW_CalcLnFugCoeff(zPP, T, P, st)[1];
+            var lnCO = ppCO.DW_CalcLnFugCoeff(zCO, T, P, st);
+            TestContext.WriteLine($"polymer lnphi: PE={lnPE:F2} PEP={lnCO[1]:F2} PP={lnPP:F2}  (solvent PEP={lnCO[0]:F3})");
+
+            Assert.That(lnCO.All(v => !double.IsNaN(v) && !double.IsInfinity(v)), "PEP log fugacity must be finite");
+            double lo = Math.Min(lnPE, lnPP), hi = Math.Max(lnPE, lnPP);
+            Assert.That(lnCO[1], Is.InRange(lo - 0.02 * Math.Abs(lo), hi + 0.02 * Math.Abs(hi)),
+                        "the PEP polymer log fugacity must lie between the PE and PP homopolymers");
+        }
 
         /// <summary>
         /// Validation against Tumakaka, Gross and Sadowski, Fluid Phase Equilibria 194-197 (2002) 541, Fig. 5:
