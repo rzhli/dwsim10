@@ -61,6 +61,23 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Property EosParam() As Object
 
+        ' Typed cache of the association kappa (EoSParam(5)) and epsilon (EoSParam(6)) matrices, extracted
+        ' once from the Object-typed EoSParam list so the association hot loops read them without late-bound
+        ' list indexing. The matrices are constant for the life of the compound proxy (rebuilt per flash setup).
+        Public assocKappa As Double(,)
+        Public assocEps As Double(,)
+        Private assocCached As Boolean
+
+        Public Sub EnsureAssocCache()
+            If assocCached Then Return
+            Dim ep = TryCast(EosParam, System.Collections.IList)
+            If ep IsNot Nothing AndAlso ep.Count > 6 Then
+                assocKappa = TryCast(ep(5), Double(,))
+                assocEps = TryCast(ep(6), Double(,))
+            End If
+            assocCached = True
+        End Sub
+
     End Class
 
     Public Class PCSAFT2
@@ -1340,7 +1357,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function HelmholtzDisp(T, dens_num, mix)
+        Friend Function HelmholtzDisp(T As Double, dens_num As Double, mix As mixture)
 
             'Calculates the dispersion contribution to the residual Helmholtz energy 
             'of mixture mix at temperature T And pressure P using PC-SAFT EoS
@@ -1439,7 +1456,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function HelmholtzHC(T, dens_num, mix)
+        Friend Function HelmholtzHC(T As Double, dens_num As Double, mix As mixture)
 
             'Calculates the Hard Chain contribution to the residual Helmholtz energy 
             'of mixture mix at temperature T and pressure P using PC-SAFT EoS
@@ -1539,7 +1556,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function mu_Disp(T, dens_num, mix)
+        Friend Function mu_Disp(T As Double, dens_num As Double, mix As mixture)
 
             'Calculates the dispersion contribution to the residual chemical potential 
             'of mixture mix at temperature T and pressure P using PC-SAFT EoS
@@ -1731,7 +1748,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function mu_HC(T, dens_num, mix)
+        Friend Function mu_HC(T As Double, dens_num As Double, mix As mixture)
 
             'Calculates the hard chain contribution to the residual chemical potential 
             'of mixture mix at temperature T and pressure P using PC-SAFT EoS
@@ -1879,7 +1896,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function obj_SAFT(dens_red, T, P, mix)
+        Friend Function obj_SAFT(dens_red As Double, T As Double, P As Double, mix As mixture)
 
             'Objective function for the calculation of Z with PC-SAFT EoS
             'Auxiliary function, not to be used directly
@@ -1955,7 +1972,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function Z_disp(T, dens_num, mix)
+        Friend Function Z_disp(T As Double, dens_num As Double, mix As mixture)
 
             'Dispersive contribution to the compressibility coefficient with PC-SAFT EoS
             'Auxiliary function, Not to be used directly
@@ -2053,7 +2070,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function Z_hc(T, dens_num, mix)
+        Friend Function Z_hc(T As Double, dens_num As Double, mix As mixture)
 
             'Hard-chain contribution to the compressibility coefficient with PC-SAFT EoS
             'Auxiliary function, not to be used directly
@@ -2147,9 +2164,9 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function mu_Ass(T, dens_num, mix)
+        Friend Function mu_Ass(T As Double, dens_num As Double, mix As mixture) As Double()
 
-            'Calculates the association contribution to the residual chemical potential 
+            'Calculates the association contribution to the residual chemical potential
             'of mixture mix at temperature T And pressure P using SAFT EoS
             '
             'Parameters:
@@ -2275,15 +2292,15 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                             For l = 1 To NumAss(k)
                                 indx2 = indx2 + 1
                                 If i = k Then 'retrieves value from component matrix
-                                    kappa = mix.comp(i).EoSParam(5)
+                                    kappa = mix.comp(i).assocKappa
                                     kappa_ = kappa(j, l)
-                                    epsilon = mix.comp(i).EoSParam(6)
+                                    epsilon = mix.comp(i).assocEps
                                     epsilon_ = epsilon(j, l)
                                 Else 'applies mixing rules
-                                    kappa1 = max(mix.comp(i).EoSParam(5))
-                                    epsilon1 = max(mix.comp(i).EoSParam(6))
-                                    kappa2 = max(mix.comp(k).EoSParam(5))
-                                    epsilon2 = max(mix.comp(k).EoSParam(6))
+                                    kappa1 = max(mix.comp(i).assocKappa)
+                                    epsilon1 = max(mix.comp(i).assocEps)
+                                    kappa2 = max(mix.comp(k).assocKappa)
+                                    epsilon2 = max(mix.comp(k).assocEps)
                                     kappa_ = Sqrt(kappa1 * kappa2) * (Sqrt(sigma(i) * sigma(k)) / (0.5 * (sigma(i) + sigma(k)))) ^ 3
                                     epsilon_ = 0.5 * (epsilon1 + epsilon2)
                                 End If
@@ -2350,7 +2367,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function obj_muAss(mix, Xa, ddeltaAB_droi, T, NumAss, sigma, d, ghs, dens_num)
+        Friend Function obj_muAss(mix As mixture, Xa As Double(), ddeltaAB_droi As Double(,,), T As Double, NumAss As Double(), sigma As Double(), d As Double(), ghs As Double(,), dens_num As Double) As Double()
 
             'Auxiliary function for the calculation of associaton chemical potential
             'with SAFT (calculates eq. A3 of reference)
@@ -2370,6 +2387,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             'along with this program.  If Not, see <http://www.gnu.org/licenses/>.
 
             numC = mix.numC
+            For ci As Integer = 1 To CInt(numC) : mix.comp(ci).EnsureAssocCache() : Next
 
             Dim A(,), B(), indx1, indx2, indx3, sum1, kappa, epsilon, kappa_(,), epsilon_(,) As Double
             Dim epsilon1, epsilon2, kappa1, kappa2 As Double
@@ -2396,15 +2414,15 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                             For l = 1 To NumAss(k)
                                 indx2 = indx2 + 1
                                 If i = k Then 'retrieves value from component matrix
-                                    kappa_ = mix.comp(i).EoSParam(5)
+                                    kappa_ = mix.comp(i).assocKappa
                                     kappa = kappa_(j, l)
-                                    epsilon_ = mix.comp(i).EoSParam(6)
+                                    epsilon_ = mix.comp(i).assocEps
                                     epsilon = epsilon_(j, l)
                                 Else 'applies mixing rules
-                                    kappa1 = max(mix.comp(i).EoSParam(5))
-                                    epsilon1 = max(mix.comp(i).EoSParam(6))
-                                    kappa2 = max(mix.comp(k).EoSParam(5))
-                                    epsilon2 = max(mix.comp(k).EoSParam(6))
+                                    kappa1 = max(mix.comp(i).assocKappa)
+                                    epsilon1 = max(mix.comp(i).assocEps)
+                                    kappa2 = max(mix.comp(k).assocKappa)
+                                    epsilon2 = max(mix.comp(k).assocEps)
                                     kappa = Sqrt(kappa1 * kappa2) * (Sqrt(sigma(i) * sigma(k)) / (0.5 * (sigma(i) + sigma(k)))) ^ 3
                                     epsilon = 0.5 * (epsilon1 + epsilon2)
                                 End If
@@ -2417,15 +2435,15 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                         sum2 = 0
                         For k = 1 To NumAss(i2)
                             If i = i2 Then 'retrieves value from component matrix
-                                kappa_ = mix.comp(i).EoSParam(5)
+                                kappa_ = mix.comp(i).assocKappa
                                 kappa = kappa_(j, k)
-                                epsilon_ = mix.comp(i).EoSParam(6)
+                                epsilon_ = mix.comp(i).assocEps
                                 epsilon = epsilon_(j, k)
                             Else 'applies mixing rules
-                                kappa1 = max(mix.comp(i).EoSParam(5))
-                                epsilon1 = max(mix.comp(i).EoSParam(6))
-                                kappa2 = max(mix.comp(i2).EoSParam(5))
-                                epsilon2 = max(mix.comp(i2).EoSParam(6))
+                                kappa1 = max(mix.comp(i).assocKappa)
+                                epsilon1 = max(mix.comp(i).assocEps)
+                                kappa2 = max(mix.comp(i2).assocKappa)
+                                epsilon2 = max(mix.comp(i2).assocEps)
                                 kappa = Sqrt(kappa1 * kappa2) * (Sqrt(sigma(i) * sigma(i2)) / (0.5 * (sigma(i) + sigma(i2)))) ^ 3
                                 epsilon = 0.5 * (epsilon1 + epsilon2)
                             End If
@@ -2462,7 +2480,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function Z_ass(T, dens_num, mix)
+        Friend Function Z_ass(T As Double, dens_num As Double, mix As mixture) As Double
 
             'Associating contribution to the compressibility coefficient with SAFT EoS
             'Auxiliary function, Not to be used directly
@@ -2516,9 +2534,9 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function HelmholtzAss(T, dens_num, mix)
+        Friend Function HelmholtzAss(T As Double, dens_num As Double, mix As mixture) As Double
 
-            'Calculates the association contribution to the residual Helmholtz energy 
+            'Calculates the association contribution to the residual Helmholtz energy
             'of mixture mix at temperature T And pressure P using SAFT EoS
             '
             'Parameters:
@@ -2613,7 +2631,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function compr(T, P, mix, phase, Zestimate)
+        Friend Function compr(T As Double, P As Double, mix As mixture, phase As String, Zestimate As Double)
 
             'Calculates the compressibility coefficient of mixture mix at temperature T
             'And pressure P using SAFT EoS
@@ -2826,7 +2844,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         End Function
 
-        Friend Function SolveXa(mix, T, NumAss, sigma, d, ghs, dens_num) As Double()
+        Friend Function SolveXa(mix As mixture, T As Double, NumAss As Double(), sigma As Double(), d As Double(), ghs As Double(,), dens_num As Double) As Double()
 
             'Solves the fraction of non-bonded association sites Xa by successive substitution of
             'Xa_a = 1 / (1 + sum_b rho x_b n_b Xa_b delta_ab), where n_b is the site multiplicity. The
@@ -2854,6 +2872,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Next
 
             'association-strength matrix delta(a,b): site a (of comp i) with site b (of comp k)
+            For ci As Integer = 1 To numC : mix.comp(ci).EnsureAssocCache() : Next
             Dim delta(nSit, nSit) As Double
             Dim ka(,), ea(,), kappa_, epsilon_ As Double
             Dim inda As Integer = 0
@@ -2865,13 +2884,13 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                         For l = 1 To CInt(NumAss(k))
                             indb += 1
                             If i = k Then 'value from the component site matrix
-                                ka = mix.comp(i).EoSParam(5)
+                                ka = mix.comp(i).assocKappa
                                 kappa_ = ka(j, l)
-                                ea = mix.comp(i).EoSParam(6)
+                                ea = mix.comp(i).assocEps
                                 epsilon_ = ea(j, l)
                             Else 'combining rules for unlike components
-                                kappa_ = Sqrt(max(mix.comp(i).EoSParam(5)) * max(mix.comp(k).EoSParam(5))) * (Sqrt(sigma(i) * sigma(k)) / (0.5 * (sigma(i) + sigma(k)))) ^ 3
-                                epsilon_ = 0.5 * (max(mix.comp(i).EoSParam(6)) + max(mix.comp(k).EoSParam(6)))
+                                kappa_ = Sqrt(max(mix.comp(i).assocKappa) * max(mix.comp(k).assocKappa)) * (Sqrt(sigma(i) * sigma(k)) / (0.5 * (sigma(i) + sigma(k)))) ^ 3
+                                epsilon_ = 0.5 * (max(mix.comp(i).assocEps) + max(mix.comp(k).assocEps))
                             End If
                             delta(inda, indb) = ((d(i) + d(k)) / 2) ^ 3 * ghs(i, k) * kappa_ * (Exp(epsilon_ / T) - 1)
                         Next
