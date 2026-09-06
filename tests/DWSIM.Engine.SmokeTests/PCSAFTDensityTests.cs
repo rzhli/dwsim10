@@ -525,6 +525,64 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         /// <summary>
+        /// Devolatilization flash: a polystyrene solution in ethylbenzene stripped under vacuum. The polymer
+        /// is non-volatile, so a vapour-liquid flash must keep it entirely in the liquid and let the solvent
+        /// flash off. Two things break a naive flash here: a Newton step on the vapour fraction overshoots to
+        /// V = 1 and reports the whole feed (polymer included) as vapour; and the solvent K-value swings over
+        /// orders of magnitude between a solvent-rich and a polymer-rich liquid, so the true two-phase root is
+        /// an unstable fixed point that plain successive substitution oscillates around. The fix caps the
+        /// vapour fraction at 1 - sum(z_nonvol) and solves the vapour fraction by a damped bracketed
+        /// Rachford-Rice step. This pins the physical result: nearly all the solvent vaporizes, the vapour
+        /// carries no polymer, the liquid is a concentrated melt, and the whole polymer feed is conserved.
+        /// </summary>
+        [Test]
+        public void PolymerDevolatilizationFlashKeepsPolymerInLiquid()
+        {
+            string addcomps = Path.GetFullPath(Path.Combine(SourceDir(), "..", "..", "content", "addcomps"));
+            var poly = Newtonsoft.Json.JsonConvert.DeserializeObject<DWSIM.Thermodynamics.BaseClasses.ConstantProperties>(
+                File.ReadAllText(Path.Combine(addcomps, "Polystyrene.json")));
+            poly.CurrentDB = "User"; poly.OriginalDB = "User"; poly.Molar_Weight = 50000.0;
+
+            var fs = new DWSIM.DynamicRunner.Flowsheet(null, null);
+            fs.Init();
+            fs.AddCompound("Ethylbenzene");
+            fs.Options.SelectedComponents.Add(poly.Name, poly);
+            var pp = new DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage { Flowsheet = fs };
+            var obj = fs.AddObject(DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "s");
+            var ms = (DWSIM.Thermodynamics.Streams.MaterialStream)fs.SimulationObjects[obj.Name];
+            ms.SetFlowsheet(fs); ms.PropertyPackage = pp; ms.AssignSelfToPP(); pp.CurrentMaterialStream = ms;
+            double nEB = 0.75 / 106.165, nPS = 0.25 / 50000.0, tot = nEB + nPS;
+            ms.SetMassFlow(1.0);
+            ms.SetOverallComposition(new[] { nEB / tot, nPS / tot });
+
+            // 470 K under vacuum (0.15 bar), a representative devolatilizer operating point.
+            ms.SetTemperature(470.0); ms.SetPressure(15000.0); ms.SetFlashSpec("PT");
+            ms.Calculate();
+
+            double vf = ms.Phases[2].Properties.molarfraction.GetValueOrDefault();
+            double psVmass = ms.Phases[2].Compounds["Polystyrene"].MassFraction.GetValueOrDefault();
+            double psLmass = ms.Phases[3].Compounds["Polystyrene"].MassFraction.GetValueOrDefault();
+
+            // Polymer mole balance: everything fed must end up in the liquid, not lost to a clamp artifact.
+            double zPS = ms.Phases[0].Compounds["Polystyrene"].MoleFraction.GetValueOrDefault();
+            double L = 1.0 - vf;
+            double xPS = ms.Phases[3].Compounds["Polystyrene"].MoleFraction.GetValueOrDefault();
+            double polymerInLiquidFraction = L * xPS / zPS;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(vf, Is.GreaterThan(0.9).And.LessThan(1.0),
+                    "almost all solvent moles vaporize, but the flash must not collapse to all-vapour");
+                Assert.That(psVmass, Is.LessThan(1.0e-6),
+                    "the non-volatile polymer must not appear in the vapour");
+                Assert.That(psLmass, Is.GreaterThan(0.9),
+                    "the liquid left behind is a concentrated polymer melt");
+                Assert.That(polymerInLiquidFraction, Is.EqualTo(1.0).Within(0.01),
+                    "the whole polymer feed is conserved in the liquid (no mass lost to a vapour-fraction clamp)");
+            });
+        }
+
+        /// <summary>
         /// Every polymer shipped as an addcomps JSON must deserialize the way DWSIM's user-compound loader
         /// does, match its pcsaft.dat CAS number, and run through a PC-SAFT flash in a solvent to give
         /// physical phase properties. This is the path a user takes: pick the polymer from the list, set Mn,
@@ -598,6 +656,54 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         private static string SourceDir([CallerFilePath] string path = "") => Path.GetDirectoryName(path);
+
+        private static DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage PegWaterPP(double mn)
+        {
+            string addcomps = Path.GetFullPath(Path.Combine(SourceDir(), "..", "..", "content", "addcomps"));
+            var peg = Newtonsoft.Json.JsonConvert.DeserializeObject<DWSIM.Thermodynamics.BaseClasses.ConstantProperties>(
+                File.ReadAllText(Path.Combine(addcomps, "Poly_ethylene_glycol.json")));
+            peg.CurrentDB = "User"; peg.OriginalDB = "User"; peg.Molar_Weight = mn;
+            var fs = new DWSIM.DynamicRunner.Flowsheet(null, null);
+            fs.Init();
+            fs.AddCompound("Water");
+            fs.Options.SelectedComponents.Add(peg.Name, peg);
+            var pp = new DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2PropertyPackage { Flowsheet = fs };
+            var obj = fs.AddObject(DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "s");
+            var ms = (DWSIM.Thermodynamics.Streams.MaterialStream)fs.SimulationObjects[obj.Name];
+            ms.SetFlowsheet(fs); ms.PropertyPackage = pp; ms.AssignSelfToPP(); pp.CurrentMaterialStream = ms;
+            return pp;
+        }
+
+        /// <summary>
+        /// PEG dewatering flash: water flashed off an aqueous poly(ethylene glycol) solution under vacuum.
+        /// PEG associates strongly with water (its hydroxyl end groups plus the ether oxygens), so water's
+        /// activity in the solution is steeply, strongly non-ideal - its K-value swings by orders of magnitude
+        /// and near unity across the composition, which makes a frozen-K successive-substitution flash
+        /// oscillate and never converge. The PC-SAFT flash solves the vapour fraction directly (the solvent
+        /// K-value recomputed at each trial composition), which is monotonic and converges. This pins the
+        /// result: the water vaporizes, the non-volatile PEG stays and is conserved in a concentrated liquid.
+        /// </summary>
+        [Test]
+        public void PegWaterDewateringFlashConvergesAndConservesPolymer()
+        {
+            var pp = PegWaterPP(10000.0);
+            double mW = 0.80 / 18.015, mP = 0.20 / 10000.0, tt = mW + mP;
+            var z = new[] { mW / tt, mP / tt };
+
+            var r = (object[])pp.FlashBase.Flash_PT(z, 40000.0, 355.0, pp);
+            double V = Convert.ToDouble(r[1]), L = Convert.ToDouble(r[0]);
+            var Vx = (double[])r[2];
+            var Vy = (double[])r[3];
+            double pegInLiquid = L * Vx[1] / z[1];
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(V, Is.GreaterThan(0.5).And.LessThan(1.0), "the water vaporizes but the flash does not collapse to all-vapour");
+                Assert.That(Vy[1], Is.LessThan(1.0e-8), "the non-volatile PEG must not appear in the vapour");
+                Assert.That(pegInLiquid, Is.EqualTo(1.0).Within(0.01), "the whole PEG feed is conserved in the liquid");
+                Assert.That(pp.UsesGibbsMinimizationForLLE, Is.False, "an associating polymer declines the slow, unreliable Gibbs-min LLE search");
+            });
+        }
 
         // n-pentane + one injected polymer/copolymer (CAS `cas`, molar mass `mw`); when `copoly` is given
         // the compound is registered as a copolymer with that segment definition. Returns pp and the feed

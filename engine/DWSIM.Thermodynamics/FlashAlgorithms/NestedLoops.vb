@@ -58,6 +58,11 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
         Public Property LimitVaporFraction As Boolean = True
 
+        'Upper bound on the vapour fraction for the current flash. It is 1.0 for an ordinary mixture and
+        '1 - sum(non-volatile mole fractions) when the feed carries a non-volatile compound (e.g. a polymer),
+        'which cannot enter the vapour. Set per call in Flash_PT_1.
+        Public Property MaxVaporFraction As Double = 1.0
+
         Public PTFlashFunction As Func(Of Double(), Double, Double, PropertyPackages.PropertyPackage, Boolean, Double(), Object)
 
         Sub New()
@@ -257,6 +262,27 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
             Vp = PP.RET_VPVAP(T)
 
+            ' Non-volatile components (e.g. a polymer) stay in the liquid. The single-component shortcut
+            ' below keys off the largest mole fraction, which for a polymer solution is the solvent (a
+            ' polymer has a tiny mole fraction), so it would collapse the flash to a pure-solvent bubble/dew
+            ' and never form the solvent-vapour + polymer-liquid split. Skip that shortcut when present.
+            Dim nonvol = PP.RET_VNONVOLATILE()
+            Dim hasNonVol As Boolean = False
+            Dim sumnonvol As Double = 0.0
+            For i = 0 To n
+                If nonvol(i) Then
+                    hasNonVol = True
+                    sumnonvol += Vz(i)
+                End If
+            Next
+            ' The vapour cannot hold the non-volatiles, so the largest possible vapour fraction is the
+            ' one that puts every volatile in the vapour: Vmax = 1 - sum(non-volatile mole fractions).
+            ' Without this cap the Newton step overshoots to V = 1, where the whole feed (polymer included)
+            ' is reported as vapour and the liquid product vanishes.
+            Dim VmaxCap As Double = 1.0
+            If hasNonVol Then VmaxCap = 1.0 - sumnonvol
+            MaxVaporFraction = VmaxCap
+
             If Not ReuseKI Then
                 Ki = Vp.MultiplyConstY(1 / P)
                 For i = 0 To n
@@ -281,7 +307,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
             'Estimate V
 
-            If T > MathEx.Common.Max(VTc, Vz) Then
+            If T > MathEx.Common.Max(VTc, Vz) And Not hasNonVol Then
                 Vy = Vz
                 Vx = Vy.DivideY(Ki).NormalizeY
                 Vx = Vx.ReplaceInvalidsWithZeroes()
@@ -309,7 +335,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             Pb = Pmax
             Pd = Pmin
 
-            If Abs(Pb - Pd) / Pb < 0.0000001 And Vz.Max > 0.99 Then
+            If Abs(Pb - Pd) / Pb < 0.0000001 And Vz.Max > 0.99 And Not hasNonVol Then
                 'one comp only
                 Px = Vp.MultiplyY(Vz).Sum
                 d2 = Date.Now
@@ -364,6 +390,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             If Vmin = 1.0# Then Vmin = 0.0#
             If Vmax = 0.0# Then Vmax = 1.0#
             If Vmax > 1.0# Then Vmax = 1.0#
+            If Vmax > VmaxCap Then Vmax = VmaxCap
 
             If Vest >= 0 Then
                 V = Vest
@@ -615,33 +642,64 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     ' Secondary criterion: V stabilized
                     If Math.Abs(e3) < 0.000001 And ecount > 0 Then Exit Do
 
-                    If damplevel = 1 Then
-                        dfac = (ecount + 1) * 0.2
-                        If dfac > 1.0 Then dfac = 1.0
-                        If -F / dF * dfac + Vant > 1.0 Or -F / dF * dfac + Vant < 0.0 Then
-                            dfac /= 10
-                        End If
-                    ElseIf damplevel = 2 Then
-                        dfac = (ecount + 1) * 0.05
-                        If dfac > 1.0 Then dfac = 1.0
-                        If -F / dF * dfac + Vant > 1.0 Or -F / dF * dfac + Vant < 0.0 Then
-                            dfac /= 50
-                        End If
-                    End If
+                    If MaxVaporFraction < 1.0# Then
 
-                    V = -F / dF * dfac + Vant
+                        ' A non-volatile component is present. The Rachford-Rice function is monotonic in V, so
+                        ' solve it by bracketing over [0, MaxVaporFraction] instead of a Newton step that
+                        ' overshoots the near-unity root. The volatile K-value swings over orders of magnitude
+                        ' between a solvent-rich and a polymer-rich liquid, so the physical two-phase root is an
+                        ' unstable fixed point of plain successive substitution (it oscillates between all-liquid
+                        ' and all-vapour). Damp the liquid fraction geometrically (it spans decades) to spiral in.
+                        Dim Kloc = Ki
+                        Dim rrf As Func(Of Double, Double) =
+                            Function(vv) Vz.MultiplyY(Kloc.AddConstY(-1).DivideY(Kloc.AddConstY(-1).MultiplyConstY(vv).AddConstY(1))).SumY
+                        Dim Vsolve As Double
+                        If rrf(0.0#) <= 0.0# Then
+                            Vsolve = 0.0#
+                        ElseIf rrf(MaxVaporFraction) >= 0.0# Then
+                            Vsolve = MaxVaporFraction
+                        Else
+                            Vsolve = Brent.BrentOpt3(0.0#, MaxVaporFraction, 20, 0.0000001, 100, rrf)
+                        End If
+                        Dim Lant As Double = 1.0# - Vant
+                        Dim Lsolve As Double = 1.0# - Vsolve
+                        If Lant > 0.0# AndAlso Lsolve > 0.0# Then
+                            V = 1.0# - Lant * (Lsolve / Lant) ^ 0.3
+                        Else
+                            V = Vant + 0.3 * (Vsolve - Vant)
+                        End If
 
-                    If LimitVaporFraction Then
-                        If V < 0.0 Then
-                            overshoot = True
-                            V = 0.0
-                            Exit Do
+                    Else
+
+                        If damplevel = 1 Then
+                            dfac = (ecount + 1) * 0.2
+                            If dfac > 1.0 Then dfac = 1.0
+                            If -F / dF * dfac + Vant > 1.0 Or -F / dF * dfac + Vant < 0.0 Then
+                                dfac /= 10
+                            End If
+                        ElseIf damplevel = 2 Then
+                            dfac = (ecount + 1) * 0.05
+                            If dfac > 1.0 Then dfac = 1.0
+                            If -F / dF * dfac + Vant > 1.0 Or -F / dF * dfac + Vant < 0.0 Then
+                                dfac /= 50
+                            End If
                         End If
-                        If V > 1.0 Then
-                            overshoot = True
-                            V = 1.0
-                            Exit Do
+
+                        V = -F / dF * dfac + Vant
+
+                        If LimitVaporFraction Then
+                            If V < 0.0 Then
+                                overshoot = True
+                                V = 0.0
+                                Exit Do
+                            End If
+                            If V > MaxVaporFraction Then
+                                overshoot = True
+                                V = MaxVaporFraction
+                                Exit Do
+                            End If
                         End If
+
                     End If
 
                     IObj2?.Paragraphs.Add(String.Format("Updated Vapor Fraction (<math_inline>\beta</math_inline>) value: {0}", V))

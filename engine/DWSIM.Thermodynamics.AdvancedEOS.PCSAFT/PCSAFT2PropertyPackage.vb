@@ -655,7 +655,29 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides ReadOnly Property UsesGibbsMinimizationForLLE As Boolean
             Get
-                Return True
+                ' The Gibbs-minimization liquid-liquid flash relies on the analytical composition derivative,
+                ' which is only valid for a single-segment compound. A copolymer takes its residual chemical
+                ' potential numerically (segment model), so its liquid-liquid split needs the convex-hull
+                ' binodal instead - not this path. Decline it for a copolymer mixture so the flash routes to a
+                ' plain vapour-liquid calculation (which is what a copolymer devolatilization needs anyway).
+                ' Also decline it for an associating polymer (PEG in water): its liquid-liquid search is both
+                ' very slow (the association site-fraction solve runs on every trial) and unreliable (the model
+                ' gives the wrong sign of the aqueous demixing), and its practical process is vapour-liquid.
+                Return Not (MixtureHasCopolymer() OrElse MixtureHasAssociatingPolymer())
+            End Get
+        End Property
+
+        ' Use the PC-SAFT-specific flash: it owns the polymer phase behaviour (a liquid-liquid cloud-point
+        ' split and a non-volatile vapour-liquid devolatilization flash) that the general flash cannot do.
+        ' Only the ordinary universal-flash case is replaced; single-component and Gibbs-minimization choices
+        ' and the forced-phase handling in the base property carry through untouched.
+        Public Overrides ReadOnly Property FlashBase As FlashAlgorithms.FlashAlgorithm
+            Get
+                Dim fb = MyBase.FlashBase
+                If fb IsNot Nothing AndAlso fb.GetType() Is GetType(FlashAlgorithms.UniversalFlash) Then
+                    Return New FlashAlgorithms.PCSAFTFlash() With {.FlashSettings = fb.FlashSettings}
+                End If
+                Return fb
             End Get
         End Property
 
@@ -788,6 +810,82 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Private Function IsPolymer(cas As String) As Boolean
             Return CompoundParameters.ContainsKey(cas) AndAlso CompoundParameters(cas).m_over_M > 0.0
+        End Function
+
+        Private Function IsCopolymer(cas As String) As Boolean
+            Return CompoundParameters.ContainsKey(cas) AndAlso
+                   Not String.IsNullOrWhiteSpace(CompoundParameters(cas).copolymer)
+        End Function
+
+        Private Function MixtureHasCopolymer() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    If IsCopolymer(c.ConstantProperties.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsCopolymer(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
+        End Function
+
+        Private Function MixtureHasAssociatingPolymer() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    Dim cas = c.ConstantProperties.CAS_Number
+                    If IsPolymer(cas) AndAlso IsAssociating(cas) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsPolymer(c.CAS_Number) AndAlso IsAssociating(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
+        End Function
+
+        ' A polymer is non-volatile. These overrides keep it in the liquid during a vapour-liquid flash
+        ' (devolatilization): it is flagged non-volatile, its vapour pressure is zeroed, and its vapour-liquid
+        ' K-value is pinned to (near) zero. The liquid-liquid case ("LL") is untouched, since a polymer
+        ' genuinely partitions between two liquid phases.
+        Public Overrides Function RET_VNONVOLATILE() As Boolean()
+            Dim comps = CurrentMaterialStream.Phases(0).Compounds.Values
+            Dim flags(comps.Count - 1) As Boolean
+            Dim i As Integer = 0
+            For Each c In comps
+                flags(i) = IsPolymer(c.ConstantProperties.CAS_Number)
+                i += 1
+            Next
+            Return flags
+        End Function
+
+        Public Overrides Function RET_VPVAP(T As Double) As Double()
+            Dim val = MyBase.RET_VPVAP(T)
+            If CurrentMaterialStream IsNot Nothing Then
+                Dim i As Integer = 0
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    If IsPolymer(c.ConstantProperties.CAS_Number) Then val(i) = 0.0
+                    i += 1
+                Next
+            End If
+            Return val
+        End Function
+
+        Public Overrides Function DW_CalcKvalue(Vx() As Double, Vy() As Double, T As Double, P As Double, Optional type As String = "LV") As Double()
+            Dim K = MyBase.DW_CalcKvalue(Vx, Vy, T, P, type)
+            If type = "LV" Then
+                Dim comps = DW_GetConstantProperties()
+                For i = 0 To comps.Count - 1
+                    If IsPolymer(comps(i).CAS_Number) Then K(i) = 0.000000000000001
+                Next
+            End If
+            Return K
         End Function
 
         Private Function IsAssociating(cas As String) As Boolean
