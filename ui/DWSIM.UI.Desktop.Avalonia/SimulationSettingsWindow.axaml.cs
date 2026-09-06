@@ -180,7 +180,7 @@ public partial class SimulationSettingsWindow : Window
     {
         _allCompoundRows.Clear();
 
-        var available = _flowsheet.AvailableCompounds?.Values.OrderBy(x => x.Name).ToList()
+        var available = _flowsheet.AvailableCompounds?.Values.OrderBy(x => x.ChemSepFamily).ToList()
                         ?? new List<ICompoundConstantProperties>();
 
         foreach (var compound in available)
@@ -190,10 +190,13 @@ public partial class SimulationSettingsWindow : Window
             _allCompoundRows.Add(row);
         }
 
-        // added ones first, as the WinForms grid sorts itself on load
-        _allCompoundRows.Sort((a, b) => a.Added == b.Added
-            ? string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase)
-            : b.Added.CompareTo(a.Added));
+        // added ones first (as the WinForms grid sorts itself on load); a stable partition keeps the
+        // ChemSep-family grouping and the database order within each family (the rows are already in that
+        // order from the stable OrderBy above, which List.Sort would scramble)
+        var reordered = _allCompoundRows.Where(r => r.Added)
+            .Concat(_allCompoundRows.Where(r => !r.Added)).ToList();
+        _allCompoundRows.Clear();
+        _allCompoundRows.AddRange(reordered);
 
         GridCompounds.ItemsSource = _compoundRows;
         FilterCompounds("");

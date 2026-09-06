@@ -22,10 +22,21 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         ' Polymers: segment number per unit molar mass (mol/g). When > 0 the compound is a polymer and
         ' its segment number is m = m_over_M * Molar_Weight, so a single row covers any chain length.
         <FieldOptional()> <FieldNullValue(0.0#)> Public m_over_M As Double = 0.0#
-        ' Association scheme (Huang-Radosz): empty/2B = one donor + one acceptor site; 4C = two donor + two
-        ' acceptor sites (like water and the glycols/PEG), where only unlike sites associate.
+        ' Association scheme (Huang-Radosz): empty/2B = one donor + one acceptor site; 4C = two donors and
+        ' two acceptors (like water and the glycols); 4C/ETHER = a PEG-type chain, 4C end groups plus
+        ' N_ether = 0.022*Mn - 1.409 extra ether-oxygen acceptor sites (Kontogeorgis & Folas eq. 14.9).
+        ' Only unlike sites (donor-acceptor) associate. Site counts are applied as a multiplicity in InitPP.
         <FieldOptional()> <FieldNullValue("")> Public scheme As String = ""
         <FieldHidden()> Public associationparams As String = ""
+        ' Copolymer definition (Gross, Spuhl, Tumakaka & Sadowski 2003). A random or alternating copolymer
+        ' is defined at runtime, not shipped in pcsaft.dat, as the repeat-unit segment CAS numbers and their
+        ' mass fractions: "casR:wR;casS:wS". Each segment reuses the homopolymer parameters keyed by its CAS,
+        ' and the segment-segment kij (including the internal repeat-unit correction) is looked up in
+        ' pcsaft_ip.dat by the segment CAS pair. Empty for an ordinary compound.
+        <FieldHidden()> Public copolymer As String = ""
+        ' Copolymer sequence: "" or "random" (default) applies the Table 1 random bonding fractions;
+        ' "alternating" applies the strictly alternating ones.
+        <FieldHidden()> Public coseq As String = ""
 
     End Class
 
@@ -108,16 +119,13 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 For Each pcsaftdata As PCSParam In pcsaftdatac
                     Dim ci = Globalization.CultureInfo.InvariantCulture
                     Dim k As String = pcsaftdata.kAiBi.ToString(ci), e As String = pcsaftdata.epsilon2.ToString(ci)
-                    If pcsaftdata.scheme.Trim().ToUpperInvariant() = "4C" Then
-                        ' Two acceptor (A) and two donor (B) sites; only unlike sites (A-B) associate, so the
-                        ' 4x4 kappa and epsilon matrices are zero on the A-A and B-B blocks.
-                        pcsaftdata.associationparams = "4" & Environment.NewLine &
-                            $"[0 0 {k} {k}; 0 0 {k} {k}; {k} {k} 0 0; {k} {k} 0 0]" & Environment.NewLine &
-                            $"[0 0 {e} {e}; 0 0 {e} {e}; {e} {e} 0 0; {e} {e} 0 0]"
-                    Else
-                        pcsaftdata.associationparams = "2" & Environment.NewLine &
-                            $"[0 {k}; {k} 0]" & Environment.NewLine & $"[0 {e}; {e} 0]"
-                    End If
+                    ' Association is a two-site-type donor/acceptor (A-B) scheme. How many of each site type
+                    ' there are - 2B: one each; 4C: two donors and two acceptors; PEG: two donors and
+                    ' 2 + N_ether acceptors (the ether oxygens, Kontogeorgis & Folas eq. 14.9) - is applied
+                    ' as a per-type MULTIPLICITY in InitPP from the scheme column, so the kappa and epsilon
+                    ' matrices are always the 2x2 A-B form here regardless of scheme.
+                    pcsaftdata.associationparams = "2" & Environment.NewLine &
+                        $"[0 {k}; {k} 0]" & Environment.NewLine & $"[0 {e}; {e} 0]"
                     If Not CompoundParameters.ContainsKey(pcsaftdata.casno) Then
                         CompoundParameters.Add(pcsaftdata.casno, pcsaftdata)
                     End If
@@ -177,7 +185,10 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                     If Not CompoundParameters.ContainsKey(comp) Then
                         Throw New Exception(String.Format("Missing PC-SAFT parameters for {0}. Calculation results will be unreliable", names(i)))
                     Else
-                        If CompoundParameters(comp).sigma = 0.0 And CompoundParameters(comp).epsilon = 0.0 And CompoundParameters(comp).m = 0.0 Then
+                        ' A copolymer has no single sigma/epsilon/m of its own; its parameters come from the
+                        ' repeat-unit segments, so exempt it from the empty-parameter check.
+                        Dim isCopoly = Not String.IsNullOrEmpty(CompoundParameters(comp).copolymer)
+                        If Not isCopoly AndAlso CompoundParameters(comp).sigma = 0.0 And CompoundParameters(comp).epsilon = 0.0 And CompoundParameters(comp).m = 0.0 Then
                             Throw New Exception(String.Format("Missing PC-SAFT parameters for {0}. Calculation results will be unreliable", names(i)))
                         End If
                     End If
@@ -541,7 +552,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcEnthalpy(Vx As Array, T As Double, P As Double, st As State) As Double
 
-            If UseLeeKeslerEnthalpy Then
+            If UseLeeKeslerEnthalpy AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Dim H As Double
                 If st = State.Liquid Then
                     H = lk.H_LK_MIX("L", T, P, Vx, RET_VKij(), RET_VTC, RET_VPC, RET_VW, RET_VMM, Me.RET_Hid(298.15, T, Vx))
@@ -574,7 +585,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcEntropy(Vx As Array, T As Double, P As Double, st As State) As Double
 
-            If UseLeeKeslerEnthalpy Then
+            If UseLeeKeslerEnthalpy AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Dim S As Double
                 If st = State.Liquid Then
                     S = lk.S_LK_MIX("L", T, P, Vx, RET_VKij(), RET_VTC, RET_VPC, RET_VW, RET_VMM, Me.RET_Sid(298.15, T, P, Vx))
@@ -644,7 +655,29 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides ReadOnly Property UsesGibbsMinimizationForLLE As Boolean
             Get
-                Return True
+                ' The Gibbs-minimization liquid-liquid flash relies on the analytical composition derivative,
+                ' which is only valid for a single-segment compound. A copolymer takes its residual chemical
+                ' potential numerically (segment model), so its liquid-liquid split needs the convex-hull
+                ' binodal instead - not this path. Decline it for a copolymer mixture so the flash routes to a
+                ' plain vapour-liquid calculation (which is what a copolymer devolatilization needs anyway).
+                ' Also decline it for an associating polymer (PEG in water): its liquid-liquid search is both
+                ' very slow (the association site-fraction solve runs on every trial) and unreliable (the model
+                ' gives the wrong sign of the aqueous demixing), and its practical process is vapour-liquid.
+                Return Not (MixtureHasCopolymer() OrElse MixtureHasAssociatingPolymer())
+            End Get
+        End Property
+
+        ' Use the PC-SAFT-specific flash: it owns the polymer phase behaviour (a liquid-liquid cloud-point
+        ' split and a non-volatile vapour-liquid devolatilization flash) that the general flash cannot do.
+        ' Only the ordinary universal-flash case is replaced; single-component and Gibbs-minimization choices
+        ' and the forced-phase handling in the base property carry through untouched.
+        Public Overrides ReadOnly Property FlashBase As FlashAlgorithms.FlashAlgorithm
+            Get
+                Dim fb = MyBase.FlashBase
+                If fb IsNot Nothing AndAlso fb.GetType() Is GetType(FlashAlgorithms.UniversalFlash) Then
+                    Return New FlashAlgorithms.PCSAFTFlash() With {.FlashSettings = fb.FlashSettings}
+                End If
+                Return fb
             End Get
         End Property
 
@@ -777,6 +810,110 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Private Function IsPolymer(cas As String) As Boolean
             Return CompoundParameters.ContainsKey(cas) AndAlso CompoundParameters(cas).m_over_M > 0.0
+        End Function
+
+        Private Function IsCopolymer(cas As String) As Boolean
+            Return CompoundParameters.ContainsKey(cas) AndAlso
+                   Not String.IsNullOrWhiteSpace(CompoundParameters(cas).copolymer)
+        End Function
+
+        Private Function MixtureHasCopolymer() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    If IsCopolymer(c.ConstantProperties.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsCopolymer(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
+        End Function
+
+        Private Function MixtureHasAssociatingPolymer() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    Dim cas = c.ConstantProperties.CAS_Number
+                    If IsPolymer(cas) AndAlso IsAssociating(cas) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsPolymer(c.CAS_Number) AndAlso IsAssociating(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
+        End Function
+
+        ' A polymer is non-volatile. These overrides keep it in the liquid during a vapour-liquid flash
+        ' (devolatilization): it is flagged non-volatile, its vapour pressure is zeroed, and its vapour-liquid
+        ' K-value is pinned to (near) zero. The liquid-liquid case ("LL") is untouched, since a polymer
+        ' genuinely partitions between two liquid phases.
+        Public Overrides Function RET_VNONVOLATILE() As Boolean()
+            Dim comps = CurrentMaterialStream.Phases(0).Compounds.Values
+            Dim flags(comps.Count - 1) As Boolean
+            Dim i As Integer = 0
+            For Each c In comps
+                flags(i) = IsPolymer(c.ConstantProperties.CAS_Number)
+                i += 1
+            Next
+            Return flags
+        End Function
+
+        Public Overrides Function RET_VPVAP(T As Double) As Double()
+            Dim val = MyBase.RET_VPVAP(T)
+            If CurrentMaterialStream IsNot Nothing Then
+                Dim i As Integer = 0
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    If IsPolymer(c.ConstantProperties.CAS_Number) Then val(i) = 0.0
+                    i += 1
+                Next
+            End If
+            Return val
+        End Function
+
+        Public Overrides Function DW_CalcKvalue(Vx() As Double, Vy() As Double, T As Double, P As Double, Optional type As String = "LV") As Double()
+            Dim K = MyBase.DW_CalcKvalue(Vx, Vy, T, P, type)
+            If type = "LV" Then
+                Dim comps = DW_GetConstantProperties()
+                For i = 0 To comps.Count - 1
+                    If IsPolymer(comps(i).CAS_Number) Then K(i) = 0.000000000000001
+                Next
+            End If
+            Return K
+        End Function
+
+        Private Function IsAssociating(cas As String) As Boolean
+            Return CompoundParameters.ContainsKey(cas) AndAlso
+                   CompoundParameters(cas).kAiBi > 0.0 AndAlso CompoundParameters(cas).epsilon2 > 0.0
+        End Function
+
+        ' The Lee-Kesler caloric route uses Tc/Pc/omega corresponding states: it cannot represent the
+        ' enthalpy of hydrogen bonding, and its critical constants are only placeholders for a polymer
+        ' pseudo-compound. So whenever the mixture contains an associating compound or a polymer, the
+        ' PC-SAFT departure (segment + association model) is used for H/S/Cp/Cv instead, regardless of the
+        ' Use Lee-Kesler options. Checks the actual mixture compounds, not the parameter table (which always
+        ' holds every built-in associating compound and polymer).
+        Private Function MixtureNeedsPCSAFTCaloric() As Boolean
+            Try
+                For Each c In CurrentMaterialStream.Phases(0).Compounds.Values
+                    Dim cas = c.ConstantProperties.CAS_Number
+                    If IsPolymer(cas) OrElse IsAssociating(cas) Then Return True
+                Next
+            Catch
+            End Try
+            Try
+                For Each c In Flowsheet.SelectedCompounds.Values
+                    If IsPolymer(c.CAS_Number) OrElse IsAssociating(c.CAS_Number) Then Return True
+                Next
+            Catch
+            End Try
+            Return False
         End Function
 
         Private Shared Function NoUserViscosityData(cp As Interfaces.ICompoundConstantProperties) As Boolean
@@ -958,7 +1095,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcCp_ISOL(Phase1 As Phase, T As Double, P As Double) As Double
 
-            If UseLeeKeslerCpCv Then
+            If UseLeeKeslerCpCv AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Select Case Phase1
                     Case Phase.Vapor
                         Return lk.CpCvR_LK("V", T, P, RET_VMOL(Phase1), RET_VKij(), RET_VMAS(Phase1), RET_VTC, RET_VPC, RET_VCP(T), RET_VMM, RET_VW, RET_VZRa)(1)
@@ -983,7 +1120,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
 
         Public Overrides Function DW_CalcCv_ISOL(Phase1 As Phase, T As Double, P As Double) As Double
 
-            If UseLeeKeslerCpCv Then
+            If UseLeeKeslerCpCv AndAlso Not MixtureNeedsPCSAFTCaloric() Then
                 Select Case Phase1
                     Case Phase.Vapor
                         Return lk.CpCvR_LK("V", T, P, RET_VMOL(Phase1), RET_VKij(), RET_VMAS(Phase1), RET_VTC, RET_VPC, RET_VCP(T), RET_VMM, RET_VW, RET_VZRa)(2)
@@ -1188,7 +1325,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             For Each kvp As KeyValuePair(Of String, PCSParam) In CompoundParameters
                 If (Not (Me.CurrentMaterialStream) Is Nothing) Then
                     If casnos.Contains(kvp.Key) Then
-                        data((data.Count - 1)).Add(New XElement("CompoundParameterSet", New XAttribute("Compound", kvp.Value.compound), New XAttribute("CAS_ID", kvp.Value.casno), New XAttribute("MW", kvp.Value.mw.ToString(ci)), New XAttribute("m", kvp.Value.m.ToString(ci)), New XAttribute("sigma", kvp.Value.sigma.ToString(ci)), New XAttribute("epsilon_k", kvp.Value.epsilon.ToString(ci)), New XAttribute("assocparam", kvp.Value.associationparams.Replace(System.Environment.NewLine, "|"))))
+                        data((data.Count - 1)).Add(New XElement("CompoundParameterSet", New XAttribute("Compound", kvp.Value.compound), New XAttribute("CAS_ID", kvp.Value.casno), New XAttribute("MW", kvp.Value.mw.ToString(ci)), New XAttribute("m", kvp.Value.m.ToString(ci)), New XAttribute("sigma", kvp.Value.sigma.ToString(ci)), New XAttribute("epsilon_k", kvp.Value.epsilon.ToString(ci)), New XAttribute("assocparam", kvp.Value.associationparams.Replace(System.Environment.NewLine, "|")), New XAttribute("m_over_M", kvp.Value.m_over_M.ToString(ci)), New XAttribute("scheme", If(kvp.Value.scheme, "")), New XAttribute("copolymer", If(kvp.Value.copolymer, "")), New XAttribute("coseq", If(kvp.Value.coseq, ""))))
                     End If
                 End If
             Next
@@ -1248,6 +1385,12 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                     .sigma = Double.Parse(xel.Attribute("sigma").Value, ci)
                     .epsilon = Double.Parse(xel.Attribute("epsilon_k").Value, ci)
                     .associationparams = xel.Attribute("assocparam").Value.Replace("|", System.Environment.NewLine)
+                    ' Newer fields (absent in files saved before they existed): polymer m/M, association
+                    ' scheme, and the copolymer definition, so a copolymer round-trips through a save.
+                    Dim aMoM = xel.Attribute("m_over_M") : If aMoM IsNot Nothing Then .m_over_M = Double.Parse(aMoM.Value, ci)
+                    Dim aSch = xel.Attribute("scheme") : If aSch IsNot Nothing Then .scheme = aSch.Value
+                    Dim aCop = xel.Attribute("copolymer") : If aCop IsNot Nothing Then .copolymer = aCop.Value
+                    Dim aSeq = xel.Attribute("coseq") : If aSeq IsNot Nothing Then .coseq = aSeq.Value
                 End With
 
                 If Not Me.CompoundParameters.ContainsKey(xel.Attribute("CAS_ID").Value) Then
