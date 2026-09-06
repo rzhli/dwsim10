@@ -65,7 +65,8 @@ Namespace GraphicObjects.Shapes
 
             MyBase.Draw(g)
 
-            Dim f = Height / 50.0
+            'Keep the live values readable on compact controller symbols.
+            Dim f = Math.Max(0.9, Height / 50.0)
 
             If Owner IsNot Nothing Then
                 Dim SimObject = DirectCast(Owner, Interfaces.IAdjust)

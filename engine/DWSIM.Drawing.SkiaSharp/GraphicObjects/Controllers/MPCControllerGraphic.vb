@@ -81,7 +81,8 @@ Namespace GraphicObjects.Shapes
 
             End If
 
-            Dim f = Height / 50.0
+            'Keep the live values readable on compact controller symbols.
+            Dim f = Math.Max(0.9, Height / 50.0)
 
             Using paint As New SKPaint With {.TextSize = 10.0 * f, .Color = GetForeColor(), .IsAntialias = True, .TextEncoding = SKTextEncoding.Utf8}
                 Select Case GlobalSettings.Settings.RunningPlatform

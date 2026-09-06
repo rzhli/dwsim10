@@ -126,6 +126,8 @@
         <MenuItem Header="Zoom _Out"       Name="MenuZoomOut" />
         <MenuItem Header="Fit to _Window"  Name="MenuZoomFit" />
         <MenuItem Header="_Reset Zoom"     Name="MenuZoomReset" />
+        <Separator />
+        <MenuItem Header="Size Symbols by Equipment Type" Name="MenuSizeSymbolsByType" />
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="_User Guide (HTML)..."   Name="MenuHelpHtml" />

@@ -302,8 +302,8 @@ internal static class FlowsheetObjectIcons
 
         // ShapeGraphics with an embedded photo would otherwise fall through to the native
         // DrawPhoto, which stretches the artwork across the whole block. Routing them through
-        // here too is what makes every icon scale by the same rule - the columns' tall artwork
-        // is letterboxed in the square box instead of being squashed into it. Connector
+        // here too preserves the artwork's aspect ratio within its type-specific bounds - the
+        // columns' tall artwork is letterboxed instead of being squashed into the box. Connector
         // positions are set by the surface in its own pass, so nothing is lost by not calling
         // the native Draw.
 
@@ -342,9 +342,9 @@ internal static class FlowsheetObjectIcons
     }
 
     /// <summary>
-    /// The largest rectangle with the icon's aspect ratio that fits the block, centred on it. Every
-    /// block now spawns in the same square box, so artwork that is not square (the columns, the PFR
-    /// tube) is letterboxed instead of stretched to fill it.
+    /// The largest rectangle with the icon's aspect ratio that fits the block, centred on it.
+    /// GraphicObjectSizing sets the default size tier; artwork that is not square (the columns,
+    /// the PFR tube) is letterboxed instead of stretched to fill the block.
     /// </summary>
     private static SKRect FitRect(SKImage icon, IGraphicObject gobj)
     {

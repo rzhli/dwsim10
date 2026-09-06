@@ -245,22 +245,62 @@ Public Class GraphicsSurface
 
     Public Property MultiSelectMode As Boolean = False
 
+    ''' <summary>
+    ''' Draws the alignment grid, in the same coordinate space as the objects.
+    ''' </summary>
+    ''' <remarks>
+    ''' Called after the canvas has been scaled by Zoom, so a grid square is GridSize model units and
+    ''' lines up with what SnapToGrid rounds to. Drawing it before the scale, as this used to, pinned
+    ''' the grid to 20 screen pixels while the objects grew with the zoom: opening a flowsheet runs
+    ''' ZoomAll, and at the 3x it typically picks the grid read as a fine mesh under oversized objects,
+    ''' and snapping moved objects to positions that did not match any visible line.
+    '''
+    ''' The extent comes from the canvas rather than a fixed 10000: at Zoom below 1 a fixed extent
+    ''' stops short of the corner and leaves the rest of the surface blank.
+    ''' </remarks>
     Private Sub DrawGrid(canvas As SKCanvas)
 
-        Dim gpaint As New SKPaint
+        If GridSize <= 0 OrElse Zoom <= 0 OrElse Single.IsNaN(Zoom) OrElse Single.IsInfinity(Zoom) Then Exit Sub
 
-        With gpaint
-            .Color = If(GlobalSettings.Settings.DarkMode, SKColors.SlateGray.WithAlpha(60), SKColors.LightSteelBlue.WithAlpha(50))
-            .StrokeWidth = 1
-            .IsStroke = True
-            .IsAntialias = GlobalSettings.Settings.DrawingAntiAlias
-        End With
+        'Keep a readable grid when zoomed out by drawing a subset of the alignment lines.
+        Dim spacing As Double = GridSize
+        While spacing * Zoom < MinimumGridSize
+            spacing *= 5
+        End While
 
-        Dim i As Integer
-        For i = 0 To 10000 Step GridSize
-            canvas.DrawLine(i, 0, i, 10000, gpaint)
-            canvas.DrawLine(0, i, 10000, i, gpaint)
-        Next
+        Using gpaint As New SKPaint
+
+            With gpaint
+                .Color = If(GlobalSettings.Settings.DarkMode, New SKColor(80, 88, 100), New SKColor(200, 208, 220))
+                'A crisp hairline stays visible without thickening as the objects grow with zoom.
+                .StrokeWidth = 0
+                .IsStroke = True
+                .IsAntialias = False
+            End With
+
+            'The visible region in model units. LocalClipBounds already accounts for the scale, so this
+            'covers the whole surface at any zoom. SVG and PDF canvases can report an unbounded clip;
+            'fall back to the surface size over the zoom in that case.
+            Dim clip = canvas.LocalClipBounds
+
+            If clip.IsEmpty OrElse Single.IsInfinity(clip.Width) OrElse Single.IsInfinity(clip.Height) OrElse
+               Single.IsNaN(clip.Width) OrElse Single.IsNaN(clip.Height) OrElse clip.Width > 100000.0F OrElse clip.Height > 100000.0F Then
+                clip = New SKRect(0, 0, Size.Width / Zoom, Size.Height / Zoom)
+            End If
+
+            Dim x = Math.Floor(clip.Left / spacing) * spacing
+            While x <= clip.Right
+                canvas.DrawLine(CSng(x), clip.Top, CSng(x), clip.Bottom, gpaint)
+                x += spacing
+            End While
+
+            Dim y = Math.Floor(clip.Top / spacing) * spacing
+            While y <= clip.Bottom
+                canvas.DrawLine(clip.Left, CSng(y), clip.Right, CSng(y), gpaint)
+                y += spacing
+            End While
+
+        End Using
 
     End Sub
 
@@ -320,9 +360,10 @@ Public Class GraphicsSurface
 
         DrawingCanvas.Clear(BackgroundColor)
 
-        If ShowGrid Then DrawGrid(DrawingCanvas)
-
         DrawingCanvas.Scale(Me.Zoom, Me.Zoom)
+
+        'After the scale, so a grid square is GridSize model units and matches what SnapToGrid rounds to.
+        If ShowGrid Then DrawGrid(DrawingCanvas)
 
         RaiseEvent StartedDrawing(DrawingCanvas)
 

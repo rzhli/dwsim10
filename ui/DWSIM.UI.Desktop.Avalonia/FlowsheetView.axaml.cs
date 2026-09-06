@@ -1504,6 +1504,7 @@ public partial class FlowsheetView : UserControl
         IconHelper.Set(MenuZoomOut,  "\U0001F50D");
         IconHelper.Set(MenuZoomFit,  "⬜");     // white large square
         IconHelper.Set(MenuZoomReset,"1⃣"); // 1 keycap
+        IconHelper.Set(MenuSizeSymbolsByType, "📐");
 
         // Tools
         IconHelper.Set(MenuSensitivity,    "\U0001F4C8"); // chart increasing
@@ -2034,6 +2035,7 @@ public partial class FlowsheetView : UserControl
         MenuZoomOut.Click += (_, _) => ZoomOut();
         MenuZoomFit.Click += (_, _) => ZoomFit();
         MenuZoomReset.Click += (_, _) => ZoomReset();
+        MenuSizeSymbolsByType.Click += (_, _) => SizeSymbolsByType();
 
         MenuScripts.Click += (_, _) => OpenScriptEditor();
 
@@ -2208,6 +2210,16 @@ public partial class FlowsheetView : UserControl
             _surface.Zoom = 1.0f;
         SetZoom(1.0f);
         Canvas.Refresh();
+    }
+
+    private void SizeSymbolsByType(IEnumerable<Interfaces.IGraphicObject>? objects = null)
+    {
+        if (_flowsheet == null) return;
+        var count = DWSIM.Drawing.SkiaSharp.GraphicObjects.GraphicObjectSizing.ApplyDefaultSizes(
+            _flowsheet, objects ?? _flowsheet.GraphicObjects.Values);
+        Canvas.Refresh();
+        AppendLog(count == 0 ? "Symbols already use the recommended sizes."
+            : $"Updated {count} symbol sizes by equipment type.");
     }
 
     // -------------------------------------------------------------------------
@@ -2480,6 +2492,11 @@ public partial class FlowsheetView : UserControl
             appearance.Click += (_, _) => { if (simObj != null) ShowAppearanceEditor(simObj); };
             ctx.Items.Add(appearance);
 
+            var sizeSymbols = new MenuItem { Header = "Size Selected Symbols by Equipment Type", Icon = IconHelper.MIcon("📐") };
+            sizeSymbols.Click += (_, _) => SizeSymbolsByType(
+                _surface?.SelectedObjects.Count > 0 ? _surface.SelectedObjects.Values : new[] { obj });
+            ctx.Items.Add(sizeSymbols);
+
             var copyData = new MenuItem { Header = "Copy Data to Clipboard", Icon = IconHelper.MIcon("\U0001F4CB") }; // clipboard
             copyData.Click += async (_, _) =>
             {
@@ -2716,6 +2733,10 @@ public partial class FlowsheetView : UserControl
             ctx.Items.Add(new Separator());
 
             // Layout operations
+            var sizeSymbols = new MenuItem { Header = "Size Symbols by Equipment Type", Icon = IconHelper.MIcon("📐") };
+            sizeSymbols.Click += (_, _) => SizeSymbolsByType();
+            ctx.Items.Add(sizeSymbols);
+
             var autoLayout = new MenuItem { Header = "Perform Auto-Layout", Icon = IconHelper.MIcon("\U0001F4D0") }; // ruler
             autoLayout.Click += (_, _) =>
             {
@@ -2820,8 +2841,8 @@ public partial class FlowsheetView : UserControl
     // Object palette population (ComboBox category selector + ListBox with icons)
     // -------------------------------------------------------------------------
 
-    /// <summary>Category name -> list of (displayName, iconBytes) pairs.</summary>
-    private readonly Dictionary<string, List<(string name, byte[]? icon, string? tip)>> _paletteCategories = new();
+    /// <summary>Category name -> palette artwork, description and relative symbol size.</summary>
+    private readonly Dictionary<string, List<(string name, byte[]? icon, string? tip, double scale)>> _paletteCategories = new();
 
     /// <summary>Static fallback categories used when ObjectList is empty (before Initialize).</summary>
     private static readonly (string category, string[] items)[] FallbackCategories =
@@ -2889,6 +2910,17 @@ public partial class FlowsheetView : UserControl
         _                                                       => "Other"
     };
 
+    private static double GetPaletteIconScale(ObjectType objectType,
+        Interfaces.Enums.SimulationObjectClass objectClass = Interfaces.Enums.SimulationObjectClass.None)
+    {
+        // Instrument thumbnails share the compact Controller Block size in the Logical palette.
+        if (objectType is ObjectType.AnalogGauge or ObjectType.DigitalGauge
+            or ObjectType.OT_InformationCarrier or ObjectType.LevelGauge)
+            objectType = ObjectType.OT_Adjust;
+
+        return DWSIM.Drawing.SkiaSharp.GraphicObjects.GraphicObjectSizing.GetScale(objectType, objectClass);
+    }
+
     private void PopulatePalette()
     {
         _paletteCategories.Clear();
@@ -2938,10 +2970,12 @@ public partial class FlowsheetView : UserControl
                 try { iconBytes = obj.GetIconBitmapBytes(); } catch { }
                 string? tip = null;
                 try { tip = obj.GetDisplayDescription(); } catch { }
+                var objectType = obj.GraphicObject?.ObjectType ?? PaletteNameToObjectType(displayName) ?? ObjectType.External;
+                var iconScale = GetPaletteIconScale(objectType, obj.ObjectClass);
 
                 if (!_paletteCategories.ContainsKey(category))
-                    _paletteCategories[category] = new List<(string, byte[]?, string?)>();
-                _paletteCategories[category].Add((displayName, iconBytes, tip));
+                    _paletteCategories[category] = new List<(string, byte[]?, string?, double)>();
+                _paletteCategories[category].Add((displayName, iconBytes, tip, iconScale));
             }
         }
 
@@ -2950,7 +2984,8 @@ public partial class FlowsheetView : UserControl
         {
             foreach (var (cat, items) in FallbackCategories)
             {
-                _paletteCategories[cat] = items.Select(n => (name: n, icon: (byte[]?)null, tip: (string?)null)).ToList();
+                _paletteCategories[cat] = items.Select(n => (name: n, icon: (byte[]?)null, tip: (string?)null,
+                    scale: GetPaletteIconScale(PaletteNameToObjectType(n) ?? ObjectType.Nenhum))).ToList();
             }
         }
 
@@ -2961,7 +2996,8 @@ public partial class FlowsheetView : UserControl
             && columnItems.All(it => it.name != "ChemSep Column"))
         {
             var icon = columnItems.FirstOrDefault(it => it.name == "Distillation Column").icon;
-            columnItems.Add(("ChemSep Column", icon, "ChemSep Rigorous Separation Column (CAPE-OPEN)"));
+            columnItems.Add(("ChemSep Column", icon, "ChemSep Rigorous Separation Column (CAPE-OPEN)",
+                GetPaletteIconScale(ObjectType.DistillationColumn)));
         }
 
         // Build collapsible sections for each category, in the classic palette order, with any
@@ -3013,7 +3049,7 @@ public partial class FlowsheetView : UserControl
                 Margin = new Thickness(4, 2, 4, 6)
             };
 
-            foreach (var (name, iconBytes, tip) in items)
+            foreach (var (name, iconBytes, tip, iconScale) in items)
             {
                 var cell = new StackPanel
                 {
@@ -3029,8 +3065,10 @@ public partial class FlowsheetView : UserControl
                 if (!string.IsNullOrWhiteSpace(tip))
                     global::Avalonia.Controls.ToolTip.SetTip(cell, tip);
 
-                // Icon
-                Control iconCtrl;
+                // Smaller devices share the canvas size tiers. A fixed slot keeps labels aligned
+                // and the whole cell clickable even when its artwork occupies less space.
+                var iconSize = DWSIM.UI.Shared.Avalonia.UiScale.Size(40 * iconScale);
+                Control iconCtrl = new Border { Background = Brushes.LightGray };
                 if (iconBytes != null && iconBytes.Length > 0)
                 {
                     try
@@ -3040,31 +3078,22 @@ public partial class FlowsheetView : UserControl
                         iconCtrl = new Image
                         {
                             Source = bmp,
-                            Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(40),
-                            Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(40),
-                            HorizontalAlignment = HorizontalAlignment.Center
+                            Stretch = Stretch.Uniform
                         };
                     }
-                    catch
-                    {
-                        iconCtrl = new Border
-                        {
-                            Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(40), Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(40),
-                            Background = Brushes.LightGray,
-                            HorizontalAlignment = HorizontalAlignment.Center
-                        };
-                    }
+                    catch { }
                 }
-                else
+                iconCtrl.Width = iconSize;
+                iconCtrl.Height = iconSize;
+                iconCtrl.HorizontalAlignment = HorizontalAlignment.Center;
+                iconCtrl.VerticalAlignment = VerticalAlignment.Center;
+                cell.Children.Add(new Border
                 {
-                    iconCtrl = new Border
-                    {
-                        Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(40), Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(40),
-                        Background = Brushes.LightGray,
-                        HorizontalAlignment = HorizontalAlignment.Center
-                    };
-                }
-                cell.Children.Add(iconCtrl);
+                    Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(56),
+                    Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(56),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Child = iconCtrl
+                });
 
                 // Label
                 cell.Children.Add(new TextBlock

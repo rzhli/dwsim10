@@ -2221,8 +2221,12 @@ Imports DWSIM.ExtensionMethods
 
         If Not gObj Is Nothing Then
             gObj.Flowsheet = Me
-            gObj.PositionConnectors()
             gObj.Owner = SimulationObjects(gObj.Name)
+            'Apply the size tier once at creation, before positioning ports or adding streams.
+            'Saved layouts and subsequent manual resizing retain their explicit dimensions.
+            Dim symbolScale = GraphicObjectSizing.GetScale(type, gObj.Owner.ObjectClass)
+            gObj.SetSize(New SKSize(CInt(gObj.Width * symbolScale), CInt(gObj.Height * symbolScale)))
+            gObj.PositionConnectors()
             'External unit operations are identified by the graphic's description when the
             'file is loaded back; only Draw() sets it, so a headless save leaves it empty
             'and the saved connectors cannot be restored.
@@ -2232,6 +2236,8 @@ Imports DWSIM.ExtensionMethods
             End If
             SimulationObjects(gObj.Name).SetFlowsheet(Me)
             FlowsheetSurface.AddObject(gObj)
+            'The surface can move a symbol to avoid overlaps; ports need its final position and size.
+            gObj.PositionConnectors()
         End If
 
         If CreateConnected Then
@@ -6525,4 +6531,3 @@ Label_00CC:
 
 
 End Class
-
