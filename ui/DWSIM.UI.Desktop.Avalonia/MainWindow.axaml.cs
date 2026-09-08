@@ -266,6 +266,7 @@ public partial class MainWindow : Window
         LnkApiDocs.Click += (_, _) => OpenUrl("https://dwsim.org/api_help/html/R_Project_DWSIM_Class_Library_Documentation.htm");
 
         // Support
+        BtnSupportPatreon.Click += (_, _) => OpenUrl("https://www.patreon.com/cw/dwsim/membership");
         BtnSponsorGitHub.Click += (_, _) => OpenUrl("https://github.com/sponsors/DanWBR");
         BtnSponsorPatreon.Click += (_, _) => OpenUrl("https://www.patreon.com/join/dwsim?");
         BtnSponsorCoffee.Click += (_, _) => OpenUrl("https://www.buymeacoffee.com/dwsim");
@@ -808,6 +809,9 @@ public partial class MainWindow : Window
         if (MenuBarExtensions != null)
         {
             MenuBarExtensions.Children.Clear();
+            // The Support button is persistent: it rides the strip on the welcome screen and on every
+            // flowsheet, to the left of the flowsheet's own extension buttons (e.g. the assistant).
+            if (BtnSupportPatreon != null) MenuBarExtensions.Children.Add(BtnSupportPatreon);
             if (view != null)
                 foreach (var button in view.ExtensionButtons)
                     MenuBarExtensions.Children.Add(button);
@@ -823,6 +827,7 @@ public partial class MainWindow : Window
     {
         if (ActiveFlowsheet != view || MenuBarExtensions == null) return;
         MenuBarExtensions.Children.Clear();
+        if (BtnSupportPatreon != null) MenuBarExtensions.Children.Add(BtnSupportPatreon);
         foreach (var button in view.ExtensionButtons)
             MenuBarExtensions.Children.Add(button);
     }
