@@ -129,9 +129,7 @@
     restore a project it does not reference.
   -->
   <Target Name="_ResolveAssistantExtender">
-    <MSBuild Projects="$(AssistantExtenderProject)"
-             Targets="Restore;Build"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=;SelfContained=false;PublishReadyToRun=false">
+    <MSBuild Projects="$(AssistantExtenderProject)" Targets="Restore;Build" Properties="Configuration=$(Configuration);RuntimeIdentifier=;SelfContained=false;PublishReadyToRun=false">
       <Output TaskParameter="TargetOutputs" ItemName="AssistantExtenderDll" />
     </MSBuild>
   </Target>
