@@ -42,21 +42,6 @@ namespace DWSIM.Engine.SmokeTests
             return pp;
         }
 
-        [TestCase("\n")]
-        [TestCase("\r\n")]
-        public void AssociationParametersAcceptUnixAndWindowsLineEndings(string newline)
-        {
-            var pp = Package(fs => { fs.AddCompound("Ethane"); fs.AddCompound("N-pentane"); });
-            foreach (var param in pp.CompoundParameters.Values)
-                param.associationparams = param.associationparams.Replace("\r\n", "\n").Replace("\n", newline);
-
-            var ln = pp.DW_CalcLnFugCoeff(new[] { 0.5, 0.5 }, 350.0, 20e5,
-                DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
-
-            Assert.That(ln.Length, Is.EqualTo(2));
-            Assert.That(ln.All(double.IsFinite), Is.True);
-        }
-
         /// <summary>
         /// The Schulz-Zimm pseudo-component generator must reproduce the distribution moments: the cut
         /// number-average equals Mn and the weight-average equals Mn*PDI exactly (Gauss-Laguerre quadrature

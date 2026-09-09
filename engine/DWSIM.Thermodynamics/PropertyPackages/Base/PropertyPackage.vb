@@ -973,6 +973,13 @@ Namespace PropertyPackages
 
         End Sub
 
+        ''' <summary>Pressure increment in Pa used to differentiate the compressibility factor.</summary>
+        Protected Overridable Function IsothermalCompressibilityPressureStep(pressure As Double) As Double
+
+            Return 100.0
+
+        End Function
+
         Public Overridable Function CalcIsothermalCompressibility(p As IPhase) As Double
 
             Dim Z, P0, P1, T, Z1 As Double
@@ -997,7 +1004,7 @@ Namespace PropertyPackages
 
             IObj?.SetCurrent
 
-            P1 = P0 + 100
+            P1 = P0 + IsothermalCompressibilityPressureStep(P0)
 
             Select Case p.Name
                 Case "Mixture"
@@ -1039,7 +1046,7 @@ Namespace PropertyPackages
 
             IObj?.SetCurrent
 
-            P1 = P0 + 100
+            P1 = P0 + IsothermalCompressibilityPressureStep(P0)
 
             Z1 = AUX_Z(Vz, T, P1, state)
 

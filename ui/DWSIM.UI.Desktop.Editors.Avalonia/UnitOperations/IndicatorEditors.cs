@@ -166,7 +166,9 @@ namespace DWSIM.UI.Desktop.Editors
 
             ReloadProperties();
 
-            propertyPicker = panel.CreateAndAddDropDownRow("Property", properties.ToList(),
+            // Display readable names while keeping the property IDs for selection and storage.
+            propertyPicker = panel.CreateAndAddDropDownRow("Property",
+                properties.Select(p => flowsheet.GetTranslatedString(p)).ToList(),
                 Math.Max(0, properties.IndexOf(target.GetProperty() ?? "")), (dd, e) =>
                 {
                     if (dd.SelectedIndex < 0 || dd.SelectedIndex >= properties.Count) return;
@@ -209,7 +211,7 @@ namespace DWSIM.UI.Desktop.Editors
                 target.SetObjectID(obj.Name);
 
                 ReloadProperties();
-                propertyPicker.SetOptions(properties);
+                propertyPicker.SetOptions(properties.Select(p => flowsheet.GetTranslatedString(p)));
                 propertyPicker.SelectedIndex = Math.Max(0, properties.IndexOf(target.GetProperty() ?? ""));
 
                 ShowValue();

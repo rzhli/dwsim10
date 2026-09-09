@@ -131,7 +131,7 @@ namespace DWSIM.UI.Desktop.Editors
                 if (stop != null) stop.IsEnabled = true;
                 status.Text = "Adjusting";
 
-                Run(adjust, su, nf, manipulatedUnit, controlledUnit,
+                Run(adjust, nf,
                     () => cancel, rows, status, iteration, error,
                     () =>
                     {
@@ -169,126 +169,37 @@ namespace DWSIM.UI.Desktop.Editors
             }
         }
 
-        private static void Run(Adjust adjust, IUnitsOfMeasure su, string nf,
-                                string manipulatedUnit, string controlledUnit,
+        private static void Run(Adjust adjust, string nf,
                                 Func<bool> cancelled,
                                 ObservableCollection<IterationRow> rows,
                                 TextBlock status, TextBlock iterationLabel, TextBlock errorLabel,
                                 Action finished)
         {
             var flowsheet = adjust.GetFlowsheet();
-
-            var maxIterations = adjust.MaximumIterations;
-            var tolerance = cv.ConvertToSI(controlledUnit, adjust.Tolerance);
-
-            var minimum = cv.ConvertToSI(manipulatedUnit, adjust.MinVal.GetValueOrDefault());
-            var maximum = cv.ConvertToSI(manipulatedUnit, adjust.MaxVal.GetValueOrDefault());
-
             var start = Convert.ToDouble(adjust.ManipulatedObject.GetPropertyValue(
                 adjust.ManipulatedObjectData.PropertyName));
 
-            var count = 0;
-
-            double SetPoint()
+            Task.Factory.StartNew(() => Solve(adjust, cancelled, (index, manipulated, controlled, setPoint) =>
             {
-                if (!adjust.Referenced) return cv.ConvertFromSI(controlledUnit, adjust.AdjustValue);
-
-                var reference = Convert.ToDouble(flowsheet.SimulationObjects[adjust.ReferencedObjectData.ID]
-                    .GetPropertyValue(adjust.ReferencedObjectData.PropertyName, su));
-
-                var unit = flowsheet.SimulationObjects[adjust.ReferencedObjectData.ID]
-                    .GetPropertyUnit(adjust.ReferencedObjectData.PropertyName, su);
-
-                var offset = su.GetUnitType(unit) == UnitOfMeasure.temperature
-                    ? cv.ConvertFromSI(unit + ".", adjust.AdjustValue)
-                    : cv.ConvertFromSI(unit, adjust.AdjustValue);
-
-                return reference + offset;
-            }
-
-            Func<double, double> residual = x =>
-            {
-                if (cancelled()) throw new TaskCanceledException("Adjust cancelled by the user.");
-
-                adjust.ManipulatedObject.SetPropertyValue(adjust.ManipulatedObjectData.PropertyName, x);
-
-                DWSIM.FlowsheetSolver.FlowsheetSolver.SolveFlowsheet(flowsheet,
-                    GlobalSettings.Settings.SolverMode);
-
-                var controlled = Convert.ToDouble(adjust.ControlledObject.GetPropertyValue(
-                    adjust.ControlledObjectData.PropertyName, su));
-
-                var setPoint = SetPoint();
-
-                var f = cv.ConvertToSI(controlledUnit, controlled) - cv.ConvertToSI(controlledUnit, setPoint);
-
-                var index = count;
-                count += 1;
-
                 Dispatcher.UIThread.Post(() =>
                 {
-                    iterationLabel.Text = (index + 1) + " of " + maxIterations;
-                    errorLabel.Text = f.ToString("G6", CultureInfo.CurrentCulture);
-
+                    iterationLabel.Text = (index + 1) + " of " + adjust.MaximumIterations;
+                    errorLabel.Text = (controlled - setPoint).ToString("G6", CultureInfo.CurrentCulture);
                     rows.Add(new IterationRow
                     {
                         Iteration = index.ToString(),
-                        Manipulated = cv.ConvertFromSI(manipulatedUnit, x).ToString(nf, CultureInfo.CurrentCulture),
+                        Manipulated = manipulated.ToString(nf, CultureInfo.CurrentCulture),
                         Controlled = controlled.ToString(nf, CultureInfo.CurrentCulture),
                         SetPoint = setPoint.ToString(nf, CultureInfo.CurrentCulture),
                         Error = (controlled - setPoint).ToString(nf, CultureInfo.CurrentCulture)
                     });
                 });
-
-                return f;
-            };
-
-            Task.Factory.StartNew(() =>
-            {
-                switch (adjust.SolvingMethodSelf)
-                {
-                    case 1:
-                        MathNet.Numerics.RootFinding.Brent.FindRoot(x => residual(x),
-                            minimum, maximum, tolerance, maxIterations);
-                        break;
-
-                    case 2:
-                    {
-                        var solver = new DWSIM.MathOps.MathEx.Optimization.NewtonSolver
-                        {
-                            EnableDamping = false,
-                            MaxIterations = maxIterations,
-                            Tolerance = tolerance * tolerance
-                        };
-                        solver.Solve(x => new double[] { residual(x[0]) }, new double[] { start });
-                        break;
-                    }
-
-                    case 3:
-                    {
-                        var solver = new DWSIM.MathOps.MathEx.Optimization.IPOPTSolver
-                        {
-                            MaxIterations = maxIterations,
-                            Tolerance = tolerance
-                        };
-                        solver.Solve(x => Math.Pow(residual(x[0]), 2.0), null,
-                            new double[] { start }, new double[] { minimum }, new double[] { maximum });
-                        break;
-                    }
-
-                    default:
-                        MathNet.Numerics.RootFinding.Secant.FindRoot(
-                            x => double.IsNaN(x) || double.IsInfinity(x) ? 1.0e20 : residual(x),
-                            start, start * 1.01, minimum, maximum, tolerance, maxIterations);
-                        break;
-                }
-            })
+            }))
             .ContinueWith(task =>
             {
                 var failed = task.Exception != null;
 
-                // the flowsheet is left where the last successful step put it, so a failed run
-                // is rewound to the value the manipulated variable started from
+                // A failed run is rewound to the value the manipulated variable started from.
                 if (failed)
                 {
                     try
@@ -306,17 +217,138 @@ namespace DWSIM.UI.Desktop.Editors
                 Dispatcher.UIThread.Post(() =>
                 {
                     adjust.GraphicObject.Calculated = !failed;
-
                     status.Text = failed
                         ? "Failed: " + task.Exception.InnerException.Message
                         : "Value adjusted successfully.";
-
                     flowsheet.UpdateInterface();
                     flowsheet.UpdateOpenEditForms();
-
                     finished();
                 });
             });
+        }
+
+        /// <summary>
+        /// Solves and verifies an adjustment. Residuals and tolerance use the controlled property's
+        /// display unit: a 0.1 C error must not be converted as an absolute temperature of 273.25 K.
+        /// The returned solution is applied and recalculated before the control panel reports success.
+        /// </summary>
+        internal static double Solve(Adjust adjust, Func<bool> cancelled = null,
+                                     Action<int, double, double, double> reportIteration = null)
+        {
+            var flowsheet = adjust.GetFlowsheet();
+            var su = flowsheet.FlowsheetOptions.SelectedUnitSystem;
+            var manipulatedUnit = adjust.ManipulatedObject.GetPropertyUnit(
+                adjust.ManipulatedObjectData.PropertyName, su);
+            var controlledUnit = adjust.ControlledObject.GetPropertyUnit(
+                adjust.ControlledObjectData.PropertyName, su);
+            var tolerance = adjust.Tolerance;
+            var minimum = cv.ConvertToSI(manipulatedUnit, adjust.MinVal.GetValueOrDefault());
+            var maximum = cv.ConvertToSI(manipulatedUnit, adjust.MaxVal.GetValueOrDefault());
+            var start = Convert.ToDouble(adjust.ManipulatedObject.GetPropertyValue(
+                adjust.ManipulatedObjectData.PropertyName));
+            var maxIterations = adjust.MaximumIterations;
+            if (!double.IsFinite(tolerance) || tolerance <= 0.0 || maxIterations <= 0)
+                throw new ArgumentException("Tolerance and maximum iterations must be positive.");
+            if (!double.IsFinite(minimum) || !double.IsFinite(maximum) || minimum >= maximum)
+                throw new ArgumentException("The minimum limit must be smaller than the maximum limit.");
+            if (!double.IsFinite(start))
+                throw new ArgumentException("The manipulated variable must have a finite initial value.");
+            start = Math.Clamp(start, minimum, maximum);
+            var count = 0;
+
+            double SetPoint()
+            {
+                if (!adjust.Referenced) return cv.ConvertFromSI(controlledUnit, adjust.AdjustValue);
+
+                var reference = Convert.ToDouble(flowsheet.SimulationObjects[adjust.ReferencedObjectData.ID]
+                    .GetPropertyValue(adjust.ReferencedObjectData.PropertyName, su));
+                var unit = flowsheet.SimulationObjects[adjust.ReferencedObjectData.ID]
+                    .GetPropertyUnit(adjust.ReferencedObjectData.PropertyName, su);
+                var offset = su.GetUnitType(unit) == UnitOfMeasure.temperature
+                    ? cv.ConvertFromSI(unit + ".", adjust.AdjustValue)
+                    : cv.ConvertFromSI(unit, adjust.AdjustValue);
+                return reference + offset;
+            }
+
+            double Residual(double x)
+            {
+                if (cancelled?.Invoke() == true)
+                    throw new TaskCanceledException("Adjust cancelled by the user.");
+                if (!double.IsFinite(x))
+                    throw new ArithmeticException("The adjusted value is not finite.");
+                adjust.ManipulatedObject.SetPropertyValue(adjust.ManipulatedObjectData.PropertyName, x);
+
+                var errors = DWSIM.FlowsheetSolver.FlowsheetSolver.SolveFlowsheet(flowsheet,
+                    GlobalSettings.Settings.SolverMode);
+                if (errors != null && errors.Count > 0)
+                    throw new AggregateException("Flowsheet calculation failed during adjustment.", errors);
+
+                var controlled = Convert.ToDouble(adjust.ControlledObject.GetPropertyValue(
+                    adjust.ControlledObjectData.PropertyName, su));
+                var setPoint = SetPoint();
+                var error = controlled - setPoint;
+                if (!double.IsFinite(error))
+                    throw new ArithmeticException("The controlled value or set-point is not finite.");
+                reportIteration?.Invoke(count++, cv.ConvertFromSI(manipulatedUnit, x), controlled, setPoint);
+                return error;
+            }
+
+            if (Math.Abs(Residual(start)) <= tolerance) return start;
+
+            // Root finders stop on the manipulated variable's interval, which is unrelated to
+            // the allowed error of the controlled variable (e.g. kg/s versus degrees Celsius).
+            var rootAccuracy = Math.Max(1.0, Math.Abs(start)) * 1.0e-10;
+            double RootResidual(double x)
+            {
+                var error = Residual(x);
+                return Math.Abs(error) <= tolerance ? 0.0 : error;
+            }
+            double solution;
+            switch (adjust.SolvingMethodSelf)
+            {
+                case 1:
+                    solution = MathNet.Numerics.RootFinding.Brent.FindRoot(RootResidual,
+                        minimum, maximum, rootAccuracy, maxIterations);
+                    break;
+                case 2:
+                    var newton = new DWSIM.MathOps.MathEx.Optimization.NewtonSolver
+                    {
+                        EnableDamping = false,
+                        MaxIterations = maxIterations,
+                        Tolerance = tolerance * tolerance
+                    };
+                    solution = newton.Solve(x => new[] { Residual(x[0]) }, new[] { start })[0];
+                    break;
+                case 3:
+                    var ipopt = new DWSIM.MathOps.MathEx.Optimization.IPOPTSolver
+                    {
+                        MaxIterations = maxIterations,
+                        Tolerance = tolerance * tolerance
+                    };
+                    solution = ipopt.Solve(x => Math.Pow(Residual(x[0]), 2.0), null,
+                        new[] { start }, new[] { minimum }, new[] { maximum })[0];
+                    break;
+                default:
+                    var step = (maximum - minimum) * 0.01;
+                    // MathNet's secant method requires both guesses strictly inside the bounds.
+                    var guess = Math.Clamp(start, minimum + step, maximum - step);
+                    var second = guess + step < maximum ? guess + step : guess - step;
+                    solution = MathNet.Numerics.RootFinding.Secant.FindRoot(RootResidual,
+                        guess, second, minimum, maximum, rootAccuracy, maxIterations);
+                    break;
+            }
+
+            if (!double.IsFinite(solution) || solution < minimum || solution > maximum)
+                throw new ArithmeticException("The adjusted value is outside the specified limits.");
+
+            // IPOPT can stop at a flat minimum with a nonzero error. Also, the final function
+            // evaluation can be a derivative probe rather than the solution returned by a solver.
+            var finalError = Residual(solution);
+            if (Math.Abs(finalError) > tolerance)
+                throw new InvalidOperationException(
+                    $"Target not reached: error {finalError:G6} {controlledUnit} exceeds tolerance {tolerance:G6} {controlledUnit}. " +
+                    "Check the manipulated variable, limits and iteration count.");
+            return solution;
         }
 
         private static DataGridTextColumn Column(string header, string path, double width)

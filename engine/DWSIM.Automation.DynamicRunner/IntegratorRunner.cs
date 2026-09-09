@@ -605,7 +605,7 @@ namespace DWSIM.Automation.DynamicRunner
         {
             foreach (var controller in controllers)
             {
-                if (!controller.Active) continue;
+                if (!controller.Active || controller.GraphicObject?.Active == false) continue;
                 flowsheet.ProcessScripts(Scripts.EventType.ObjectCalculationStarted, Scripts.ObjectType.FlowsheetObject, controller.Name);
                 try
                 {
@@ -620,7 +620,7 @@ namespace DWSIM.Automation.DynamicRunner
             }
             foreach (var controller in pyControllers)
             {
-                if (!controller.Active) continue;
+                if (!controller.Active || controller.GraphicObject?.Active == false) continue;
                 flowsheet.ProcessScripts(Scripts.EventType.ObjectCalculationStarted, Scripts.ObjectType.FlowsheetObject, controller.Name);
                 try
                 {
@@ -635,7 +635,7 @@ namespace DWSIM.Automation.DynamicRunner
             }
             foreach (var mpc in mpcControllers)
             {
-                if (mpc.Active) mpc.Solve();
+                if (mpc.Active && mpc.GraphicObject?.Active != false) mpc.Solve();
             }
         }
 

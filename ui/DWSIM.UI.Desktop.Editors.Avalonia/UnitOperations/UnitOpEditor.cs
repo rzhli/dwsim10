@@ -22,6 +22,7 @@ namespace DWSIM.UI.Desktop.Editors
     ///   Connections             one row per connector
     ///   Calculation Parameters  the property package and whatever the object takes as input
     ///   Results                 what the calculation produced
+    ///   Dynamics                the dynamic-mode parameters, for the objects that have them
     ///   Notes                   the annotation
     ///
     /// An editor that needs more than that (curves, matrices, a notebook of its own) adds its
@@ -37,12 +38,17 @@ namespace DWSIM.UI.Desktop.Editors
         /// <param name="extras">Groups appended after the results, for the editors that need them.</param>
         /// <param name="connections">Shows the connections group; off for the objects that
         /// connect their streams from a page of their own, as the column does.</param>
+        /// <param name="dynamics">Shows the dynamic-mode parameters. On by default: an editor built
+        /// on this frame replaces the host's tab strip wholesale, so leaving them out hides them
+        /// altogether - which is how a heat exchanger came to have no reachable Number of Cells or
+        /// Wall Thermal Mass. Pass false only for an object that lays them out itself.</param>
         public static Control Build(ISimulationObject simobj,
                                     Action<AvaloniaEditorPanel> input,
                                     Action<AvaloniaEditorPanel> results = null,
                                     bool propertyPackage = true,
                                     IEnumerable<(string Header, Control Content)> extras = null,
-                                    bool connections = true)
+                                    bool connections = true,
+                                    bool dynamics = true)
         {
             var stack = new StackPanel { Margin = new Thickness(6) };
 
@@ -70,6 +76,14 @@ namespace DWSIM.UI.Desktop.Editors
                     if (extra.Content == null) continue;
                     stack.Children.Add(Group(extra.Header, extra.Content));
                 }
+            }
+
+            if (dynamics && simobj.SupportsDynamicMode)
+            {
+                var panel = new AvaloniaEditorPanel();
+                AvaloniaTabBuilders.PopulateDynamics(simobj, panel);
+                if (panel.Children.Count > 0)
+                    stack.Children.Add(Group("Dynamics", panel));
             }
 
             stack.Children.Add(Group("Notes", BuildAnnotation(simobj)));

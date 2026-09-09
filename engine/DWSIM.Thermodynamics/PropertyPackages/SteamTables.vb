@@ -1130,6 +1130,19 @@ FINAL:
             End Get
         End Property
 
+        Protected Overrides Function IsothermalCompressibilityPressureStep(pressure As Double) As Double
+
+            ' The implemented IF97 regions stop at 1000 bar. Differentiate inward at that
+            ' boundary; the actual stream pressure is still validated by the steam tables.
+            Const maximumPressure As Double = 1.0E8
+            Dim stepSize = MyBase.IsothermalCompressibilityPressureStep(pressure)
+            If pressure <= maximumPressure AndAlso pressure + stepSize > maximumPressure Then
+                Return -stepSize
+            End If
+            Return stepSize
+
+        End Function
+
         Public Overrides Function AUX_Z(Vx() As Double, T As Double, P As Double, state As PhaseName) As Double
 
             Return 1 / (Me.m_iapws97.densW(T, P / 100000) * 1000 / Me.AUX_MMM(PropertyPackages.Phase.Mixture)) / 8.314 / T * P
@@ -1139,4 +1152,3 @@ FINAL:
     End Class
 
 End Namespace
-

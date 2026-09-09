@@ -195,9 +195,9 @@
         <Border Classes="vdivider" />
 
         <WrapPanel Name="SubToolbarGroup" Orientation="Horizontal" VerticalAlignment="Center">
-          <CheckBox Name="ChkDrawGrid" Content="Grid" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
-          <CheckBox Name="ChkSnapToGrid" Content="Snap" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
-          <CheckBox Name="ChkMultiSelect" Content="Multi-Select" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
+          <CheckBox Name="ChkDrawGrid" Content="Grid" ToolTip.Tip="Show the alignment grid" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
+          <CheckBox Name="ChkSnapToGrid" Content="Snap" ToolTip.Tip="Snap object centers to the grid when you finish dragging" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
+          <CheckBox Name="ChkMultiSelect" Content="Multi-Select" ToolTip.Tip="Drag a box to select objects; Ctrl+click to add or remove an object. Right-click to set the selection Active or Inactive." VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" />
           <Border Classes="vdivider" />
           <TextBlock Text="Align:" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" Margin="4,0,2,0" />
           <Button Name="BtnAlignLeft"   Classes="subtoolbar" ToolTip.Tip="Align Lefts"   Content="⇤" />

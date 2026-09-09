@@ -102,6 +102,22 @@ namespace DWSIM.Automation.FluentAPI.Builders
             return this;
         }
 
+        /// <summary>
+        /// Sets the range of the manipulated variable, so the output is <c>Offset +/- PIDoutput x span</c>.
+        /// </summary>
+        /// <remarks>
+        /// Left at zero the controller falls back to multiplying the set-point instead:
+        /// <c>(1 +/- PIDoutput) x |SP|</c>. That is only meaningful when the manipulated variable
+        /// shares units with the controlled one; a valve opening driven off a temperature set-point
+        /// ends up scaled by that temperature. Pass the span of the manipulated variable - 100 for a
+        /// valve opening in percent - together with an offset at its design value.
+        /// </remarks>
+        public PIDControllerBuilder WithManipulatedVariableSpan(double span)
+        {
+            Object.ManipulatedVariableSpan = span;
+            return this;
+        }
+
         /// <summary>Sets the order in which this controller runs relative to the others, low first.</summary>
         public PIDControllerBuilder WithExecutionOrder(int order)
         {

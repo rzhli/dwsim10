@@ -1068,6 +1068,8 @@ Namespace UnitOperations
                 AccumulationStreamsHot.Clear()
                 AccumulationStreamsCold.Clear()
                 WallTemperatures.Clear()
+                prevMHot = Nothing : currentMHot = Nothing
+                prevMCold = Nothing : currentMCold = Nothing
                 SetDynamicProperty("Reset Contents", 0)
             End If
 
@@ -1088,6 +1090,14 @@ Namespace UnitOperations
                 StInCold = StIn0 : StInHot = StIn1 : StOutCold = StOut0 : StOutHot = StOut1
             Else
                 StInCold = StIn1 : StInHot = StIn0 : StOutCold = StOut1 : StOutHot = StOut0
+            End If
+
+            'A terminal pressure-spec stream has no downstream device setting its discharge rate.
+            'Carry the inlet throughput through that open end; otherwise its last saved flow keeps
+            'draining the holdup after an upstream control valve closes.
+            If integrator.ShouldCalculatePressureFlow Then
+                UpdateFreeOutletFlow(StInHot, StOutHot)
+                UpdateFreeOutletFlow(StInCold, StOutCold)
             End If
 
             'Reject calculation modes that have no transient meaning.
@@ -1229,19 +1239,20 @@ Namespace UnitOperations
                         WallTemperatures(i) = Twall
                         Qhot = QhotToWall * dt
                         Qcold = QwallToCold * dt
+                        'Limit the explicit wall step using the fluid sensible heat capacities.
+                        Dim Qmax = 0.5 * Math.Min(mh * CpH, mc * CpC) * (Th - Tc)
+                        If Th > Tc Then
+                            If Qhot > Qmax Then Qhot = Qmax
+                            If Qcold > Qmax Then Qcold = Qmax
+                        Else
+                            If Qhot < Qmax Then Qhot = Qmax
+                            If Qcold < Qmax Then Qcold = Qmax
+                        End If
                     Else
-                        Dim Ql = Ueff / 1000.0 * Acell * (Th - Tc) * dt 'kJ, local driving force (no LMTD)
-                        Qhot = Ql : Qcold = Ql
-                    End If
-
-                    'Anti temperature-cross clamp (kJ vs kJ): limit a single explicit step.
-                    Dim Qmax = 0.5 * Math.Min(mh * CpH, mc * CpC) * (Th - Tc)
-                    If Th > Tc Then
-                        If Qhot > Qmax Then Qhot = Qmax
-                        If Qcold > Qmax Then Qcold = Qmax
-                    Else
-                        If Qhot < Qmax Then Qhot = Qmax
-                        If Qcold < Qmax Then Qcold = Qmax
+                        'Use the final temperature difference in the heat balance. PH flashes include
+                        'latent heat, which a Cp-based temperature-cross clamp incorrectly discards.
+                        Qhot = ImplicitCellHeatTransfer(hcell, ccell, Ueff / 1000.0 * Acell * dt)
+                        Qcold = Qhot
                     End If
 
                     hcell.SetMassEnthalpy(Hh - Qhot / mh)
@@ -1253,13 +1264,7 @@ Namespace UnitOperations
 
                 Next
 
-                '--- E. per-cell pressure via compressibility flash ---
-                For i As Integer = 0 To N - 1
-                    UpdateCellPressure(AccumulationStreamsHot(i), VolCellHot, prevMHot, currentMHot, i, Pmin, integrator.ShouldCalculateEquilibrium, ppHot)
-                    UpdateCellPressure(AccumulationStreamsCold(i), VolCellCold, prevMCold, currentMCold, i, Pmin, integrator.ShouldCalculateEquilibrium, ppCold)
-                Next
-
-                '--- F. side pressure drop superimposed as a linear gradient ---
+                '--- E. side pressure drop, applied to the outlet state when reporting ---
                 If CalcMode = HeatExchangerCalcMode.ShellandTube_Rating Then
                     If STProperties.Shell_Fluid = 0 Then
                         dpColdSide = dpsST : dpHotSide = dptST
@@ -1270,18 +1275,21 @@ Namespace UnitOperations
                     dpHotSide = (StInHot.GetMassFlow() / KrHot) ^ 2
                     dpColdSide = (StInCold.GetMassFlow() / KrCold) ^ 2
                 End If
-                ApplyPressureGradient(AccumulationStreamsHot, dpHotSide, True, N, Pmin)
-                ApplyPressureGradient(AccumulationStreamsCold, dpColdSide, FlowDir <> FlowDirection.CounterCurrent, N, Pmin)
-
-                '--- G. drain outlets ---
+                '--- F. drain outlets ---
                 If Not Double.IsNaN(StOutHot.GetMassFlow()) AndAlso StOutHot.GetMassFlow() > 0 Then
-                    AccumulationStreamsHot(N - 1) = AccumulationStreamsHot(N - 1).Subtract(StOutHot, dt)
+                    DrainCell(AccumulationStreamsHot(N - 1), StOutHot.GetMassFlow() * dt)
                 End If
                 If AccumulationStreamsHot(N - 1).GetMassFlow() <= 0.0 Then AccumulationStreamsHot(N - 1).SetMassFlow(0.0000000001)
                 If Not Double.IsNaN(StOutCold.GetMassFlow()) AndAlso StOutCold.GetMassFlow() > 0 Then
-                    AccumulationStreamsCold(coldOutletIdx) = AccumulationStreamsCold(coldOutletIdx).Subtract(StOutCold, dt)
+                    DrainCell(AccumulationStreamsCold(coldOutletIdx), StOutCold.GetMassFlow() * dt)
                 End If
                 If AccumulationStreamsCold(coldOutletIdx).GetMassFlow() <= 0.0 Then AccumulationStreamsCold(coldOutletIdx).SetMassFlow(0.0000000001)
+
+                '--- G. pressure from the final inventory, after both inflow and outflow ---
+                For i As Integer = 0 To N - 1
+                    UpdateCellPressure(AccumulationStreamsHot(i), VolCellHot, prevMHot, currentMHot, i, Pmin, integrator.ShouldCalculateEquilibrium, ppHot)
+                    UpdateCellPressure(AccumulationStreamsCold(i), VolCellCold, prevMCold, currentMCold, i, Pmin, integrator.ShouldCalculateEquilibrium, ppCold)
+                Next
 
             Next 'ti sub-step
 
@@ -1292,8 +1300,8 @@ Namespace UnitOperations
 
             Dim Th2 As Double = hotOutCell.GetTemperature()
             Dim Tc2 As Double = coldOutCell.GetTemperature()
-            Dim Ph2 As Double = hotOutCell.GetPressure()
-            Dim Pc2 As Double = coldOutCell.GetPressure()
+            Dim Ph2 As Double = Math.Max(Pmin, hotOutCell.GetPressure() - dpHotSide)
+            Dim Pc2 As Double = Math.Max(Pmin, coldOutCell.GetPressure() - dpColdSide)
 
             'Reported duty (kW) from the accumulated cell energy over the full integration step.
             Q = QtotalEnergy / timestep
@@ -1333,6 +1341,8 @@ Namespace UnitOperations
 
             StOutHot.AssignFromPhase(PhaseLabel.Mixture, hotOutCell, False)
             StOutCold.AssignFromPhase(PhaseLabel.Mixture, coldOutCell, False)
+            StOutHot.SetPressure(Ph2)
+            StOutCold.SetPressure(Pc2)
             StOutHot.DefinedFlow = FlowSpec.Mass
             StOutCold.DefinedFlow = FlowSpec.Mass
 
@@ -1344,6 +1354,92 @@ Namespace UnitOperations
             End If
 
         End Sub
+
+        ''' <summary>Removes well-mixed contents without importing the outlet's previous composition.</summary>
+        Private Sub DrainCell(cell As MaterialStream, mass As Double)
+            cell.SetMassFlow(Math.Max(1.0E-10, cell.GetMassFlow() - mass))
+        End Sub
+
+        Private Sub UpdateFreeOutletFlow(inlet As MaterialStream, outlet As MaterialStream)
+            If outlet.DynamicsSpec = Dynamics.DynamicsSpecType.Pressure AndAlso
+                Not outlet.GraphicObject.OutputConnectors.Any(Function(c) c.IsAttached) Then
+                outlet.SetMassFlow(inlet.GetMassFlow())
+            End If
+        End Sub
+
+        ''' <summary>
+        ''' Implicit, energy-conserving heat transfer between two holdups, including phase changes.
+        ''' Solves Q = UA dt (Th(Hh-Q/mh) - Tc(Hc+Q/mc)) using PH flashes.
+        ''' </summary>
+        Private Function ImplicitCellHeatTransfer(hot As MaterialStream, cold As MaterialStream, conductanceTime As Double) As Double
+            Dim deltaT = hot.GetTemperature() - cold.GetTemperature()
+            If conductanceTime <= 0.0 OrElse deltaT = 0.0 Then Return 0.0
+
+            Dim direction = Math.Sign(deltaT)
+            Dim upper = conductanceTime * Math.Abs(deltaT)
+            Dim lower = 0.0
+            Dim lowerResidual = -upper
+            Dim upperResidual = Double.PositiveInfinity
+            Dim trial = upper
+            Dim tolerance = Math.Max(1.0E-8, upper * 1.0E-8)
+            Dim hh = hot.GetMassEnthalpy(), hc = cold.GetMassEnthalpy()
+            Dim mh = hot.GetMassFlow(), mc = cold.GetMassFlow()
+            Dim evaluatedTrial = False
+            Dim lastError As Exception = Nothing
+
+            For iteration As Integer = 0 To 59
+                Dim residual As Double
+                Try
+                    Dim th = CellTemperatureAtEnthalpy(hot, hh - direction * trial / mh)
+                    Dim tc = CellTemperatureAtEnthalpy(cold, hc + direction * trial / mc)
+                    residual = trial - conductanceTime * direction * (th - tc)
+                    If Double.IsNaN(residual) OrElse Double.IsInfinity(residual) Then Throw New ArithmeticException()
+                    evaluatedTrial = True
+                Catch ex As Exception
+                    'An explicit trial can overshoot the property package's range. The implicit
+                    'solution lies between the starting temperatures; shorten the trial bracket.
+                    residual = Double.PositiveInfinity
+                    lastError = ex
+                End Try
+
+                If Math.Abs(residual) <= tolerance Then Return direction * trial
+                If residual > 0.0 Then
+                    upper = trial : upperResidual = residual
+                Else
+                    lower = trial : lowerResidual = residual
+                End If
+
+                If upper - lower <= tolerance Then
+                    If Not evaluatedTrial Then Throw New Exception("Could not evaluate the heat exchanger's heat transfer step.", lastError)
+                    Return direction * lower
+                End If
+                If Double.IsInfinity(upperResidual) Then
+                    trial = (lower + upper) / 2.0
+                Else
+                    trial = lower - lowerResidual * (upper - lower) / (upperResidual - lowerResidual)
+                    'Keep the bracket shrinking even near a phase boundary.
+                    trial = Math.Max(lower + 0.05 * (upper - lower), Math.Min(upper - 0.05 * (upper - lower), trial))
+                End If
+            Next
+
+            Throw New Exception("The heat exchanger's implicit heat transfer calculation did not converge.")
+        End Function
+
+        Private Function CellTemperatureAtEnthalpy(cell As MaterialStream, enthalpy As Double) As Double
+            'Use the same flash path as the final holdup update. Packages can override the
+            'stream equilibrium calculation independently of their generic flash algorithm.
+            cell.SetMassEnthalpy(enthalpy)
+            cell.SpecType = StreamSpec.Pressure_and_Enthalpy
+            cell.Calculate()
+            'Some flash implementations return a bracket endpoint for an unreachable enthalpy.
+            'Reject that trial instead of using a temperature that violates the energy balance.
+            Dim calculatedEnthalpy = cell.GetMassEnthalpy()
+            If Double.IsNaN(calculatedEnthalpy) OrElse Double.IsInfinity(calculatedEnthalpy) OrElse
+                Math.Abs(calculatedEnthalpy - enthalpy) > Math.Max(0.001, Math.Abs(enthalpy) * 1.0E-6) Then
+                Throw New Exception("The PH flash did not recover the trial enthalpy.")
+            End If
+            Return cell.GetTemperature()
+        End Function
 
         ''' <summary>
         ''' Initializes or reconciles the per-cell holdup streams for one side of the exchanger.
@@ -1438,24 +1534,10 @@ Namespace UnitOperations
             Else
                 P = Pmin
             End If
-            ' Floor at Pmin: for a settled incompressible-liquid cell the pressure is carried from the
-            ' previous step, and the superimposed flow-drop gradient would otherwise compound without
-            ' bound and drive downstream cells to zero or negative pressure.
+            'Enforce the minimum inventory pressure. Friction is applied to the outlet streams,
+            'so it does not feed back into the next sub-step's thermodynamic pressure.
             If Double.IsNaN(P) OrElse P < Pmin Then P = Pmin
             cell.SetPressure(P)
-        End Sub
-
-        ''' <summary>Superimposes a linear pressure drop along a side so the reported drop matches the lumped value.</summary>
-        Private Sub ApplyPressureGradient(streams As List(Of MaterialStream), dP As Double, inletAtZero As Boolean, N As Integer, Pmin As Double)
-            If dP = 0.0 Then Return
-            If N <= 1 Then
-                streams(0).SetPressure(Math.Max(Pmin, streams(0).GetPressure() - dP))
-                Return
-            End If
-            For i As Integer = 0 To N - 1
-                Dim frac = If(inletAtZero, CDbl(i), CDbl(N - 1 - i)) / CDbl(N - 1)
-                streams(i).SetPressure(Math.Max(Pmin, streams(i).GetPressure() - dP * frac))
-            Next
         End Sub
 
         ''' <summary>Maximum theoretical heat exchange (kW) used only for the reported thermal efficiency.</summary>
@@ -4619,4 +4701,3 @@ Namespace UnitOperations.Auxiliary.HeatExchanger
     End Class
 
 End Namespace
-

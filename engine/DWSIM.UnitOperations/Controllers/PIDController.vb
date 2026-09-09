@@ -524,6 +524,10 @@ Namespace SpecialOps
                         Return Ki
                     Case "Kd"
                         Return Kd
+                    Case "Offset"
+                        Return Offset
+                    Case "ManipulatedVariableSpan"
+                        Return ManipulatedVariableSpan
                     Case "Output"
                         Return Output
                     Case "OutputMin"
@@ -583,6 +587,10 @@ Namespace SpecialOps
                     Ki = propval
                 Case "Kd"
                     Kd = propval
+                Case "Offset"
+                    Offset = propval
+                Case "ManipulatedVariableSpan"
+                    ManipulatedVariableSpan = propval
                 Case Else
                     Return False
             End Select
@@ -822,6 +830,7 @@ Namespace SpecialOps
                 DTerm = rawDerivative
             End If
 
+            Dim integralBeforeStep = ITerm
             ITerm += CurrentError * timestep
 
             If ITerm < -WindupGuard Then
@@ -840,6 +849,7 @@ Namespace SpecialOps
                     ITerm = (manualOutput - handoverBias - pContrib - dContrib) / Math.Max(Ki, 1.0E-20)
                     If ITerm < -WindupGuard Then ITerm = -WindupGuard
                     If ITerm > WindupGuard Then ITerm = WindupGuard
+                    integralBeforeStep = ITerm
                     WasManualOverride = False
                 End If
 
@@ -891,6 +901,20 @@ Namespace SpecialOps
                     OutputAbs = (1.0 - Output) * BaseSP + ffOutput
                 Else
                     OutputAbs = (1.0 + Output) * BaseSP + ffOutput
+                End If
+
+                'Do not accumulate an integral change that pushes an already saturated actuator
+                'further into its limit. Integration in the recovery direction remains enabled.
+                Dim integralGain = Ki
+                If PIDForm <> 0 Then integralGain = Kp / If(Ki > 0, Kp / Ki, 1.0E+20)
+                Dim integralChange = integralGain * (ITerm - integralBeforeStep)
+                Dim outputScale = If(ManipulatedVariableSpan > 0.0, ManipulatedVariableSpan, BaseSP.Value) * If(ReverseActing, 1.0, -1.0)
+                Dim absoluteChange = integralChange * outputScale
+                If (OutputAbs > OutputMax AndAlso absoluteChange > 0.0) OrElse
+                   (OutputAbs < OutputMin AndAlso absoluteChange < 0.0) Then
+                    ITerm = integralBeforeStep
+                    Output -= integralChange
+                    OutputAbs -= absoluteChange
                 End If
 
                 If OutputAbs > OutputMax Then OutputAbs = OutputMax
@@ -986,7 +1010,6 @@ Namespace SpecialOps
     End Class
 
 End Namespace
-
 
 
 

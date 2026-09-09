@@ -730,6 +730,27 @@ Public Class GraphicsSurface
 
     End Sub
 
+    Public Function SetSelectedObjectsActive(active As Boolean) As Integer
+
+        If Flowsheet Is Nothing Then Return 0
+
+        Dim selection = SelectedObjects.Values.ToList()
+        If selection.Count = 0 AndAlso SelectedObject IsNot Nothing Then selection.Add(SelectedObject)
+        Dim targets = selection.Where(Function(go) Flowsheet.SimulationObjects.ContainsKey(go.Name)).
+            Select(Function(go) Flowsheet.SimulationObjects(go.Name).GraphicObject).
+            Where(Function(go) go.Active <> active).ToList()
+        If targets.Count = 0 Then Return 0
+
+        Flowsheet.RegisterSnapshot(SnapshotType.ObjectLayout)
+        For Each go In targets
+            go.Active = active
+            go.Status = If(active, Status.Idle, Status.Inactive)
+        Next
+
+        Return targets.Count
+
+    End Function
+
     Public Sub AlignSelectedObjects(direction As AlignDirection)
 
         If Me.SelectedObjects.Count > 1 Then
@@ -1202,6 +1223,24 @@ Public Class GraphicsSurface
         End If
 
         RaiseEvent InputReleased(Me, New SelectionChangedEventArgs(SelectedObject))
+
+    End Sub
+
+    ''' <summary>Selects a context-menu target without starting a drag or changing an existing group.</summary>
+    Public Sub InputContextMenu(x As Integer, y As Integer)
+
+        Dim target = FindObjectAtPoint(New SKPoint(x, y))
+        If target IsNot Nothing Then
+            If Not SelectedObjects.ContainsKey(target.Name) Then SelectedObjects.Clear()
+            SelectedObjects(target.Name) = target
+            SelectedObject = target
+        ElseIf SelectedObjects.Count > 0 Then
+            If SelectedObject Is Nothing OrElse Not SelectedObjects.ContainsKey(SelectedObject.Name) Then
+                SelectedObject = SelectedObjects.Values.First()
+            End If
+        Else
+            SelectedObject = Nothing
+        End If
 
     End Sub
 

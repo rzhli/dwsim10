@@ -106,6 +106,20 @@ namespace DWSIM.UI.Desktop.Editors
             panel.CreateAndAddTextBoxRow(nf, "Offset (Bias)", pid.Offset,
                 (tb, e) => { if (UnitOpEditorRows.TryParse(tb.Text, out var v)) pid.Offset = v; });
 
+            // Without a span the controller multiplies the set-point instead of biasing the
+            // manipulated variable: OutputAbs = (1 +/- Output) x |SP|. That only makes sense when the
+            // manipulated variable happens to share units with the controlled one - a valve opening
+            // driven off a temperature set-point comes out scaled by 60. Set the span to the range of
+            // the manipulated variable (100 for a valve opening) and it becomes Offset +/- Output x Span.
+            panel.CreateAndAddTextBoxRow(nf, "Manipulated Variable Span", pid.ManipulatedVariableSpan,
+                (tb, e) => { if (UnitOpEditorRows.TryParse(tb.Text, out var v)) pid.ManipulatedVariableSpan = v; });
+
+            panel.CreateAndAddDescriptionRow(pid.ManipulatedVariableSpan > 0.0
+                ? "Output = Offset " + (pid.ReverseActing ? "+" : "-") + " PID output x span, in the units of the manipulated variable."
+                : "Span 0: output = (1 " + (pid.ReverseActing ? "+" : "-") +
+                  " PID output) x |set-point|, so the manipulated variable is scaled by the set-point. " +
+                  "Set the span to the range of the manipulated variable (100 for a valve opening) to bias it from the offset instead.");
+
             panel.CreateAndAddTextBoxRow(nf, "Wind-Up Guard", pid.WindupGuard,
                 (tb, e) => { if (UnitOpEditorRows.TryParse(tb.Text, out var v)) pid.WindupGuard = v; });
 
@@ -125,8 +139,14 @@ namespace DWSIM.UI.Desktop.Editors
                 panel.CreateAndAddTwoLabelsRow("D", (pid.Kd * pid.DTerm).ToString(nf, CultureInfo.CurrentCulture));
 
                 var factor = pid.ReverseActing ? 1.0 + pid.Output : 1.0 - pid.Output;
+                var abs = pid.ManipulatedVariableSpan > 0.0
+                    ? (pid.ReverseActing
+                        ? pid.Offset + pid.Output * pid.ManipulatedVariableSpan
+                        : pid.Offset - pid.Output * pid.ManipulatedVariableSpan)
+                    : factor * pid.BaseSP.GetValueOrDefault();
+
                 panel.CreateAndAddTwoLabelsRow("Abs. Output",
-                    (factor * pid.BaseSP.GetValueOrDefault()).ToString(nf, CultureInfo.CurrentCulture));
+                    abs.ToString(nf, CultureInfo.CurrentCulture));
             }
             else
             {

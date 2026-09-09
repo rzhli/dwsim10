@@ -405,6 +405,7 @@ public partial class FlowsheetView : UserControl
                     foreach (var obj in _flowsheet.SimulationObjects.Values)
                         if (obj.GraphicObject != null)
                             _surface.SelectedObjects[obj.Name] = obj.GraphicObject;
+                    _surface.SelectedObject = _surface.SelectedObjects.Values.FirstOrDefault();
                     Canvas.Refresh();
                 }
                 e.Handled = true;
@@ -1160,6 +1161,12 @@ public partial class FlowsheetView : UserControl
 
         InputPressCallback = (x, y) => surface.InputPress(x, y);
 
+        Canvas.InputContextMenuCallback = (x, y) =>
+        {
+            surface.InputContextMenu(x, y);
+            LastClickedObjectName = surface.SelectedObject?.Name;
+        };
+
         InputReleaseCallback = () =>
         {
             surface.InputRelease();
@@ -1418,6 +1425,10 @@ public partial class FlowsheetView : UserControl
         };
 
         var contextMenu = new ContextMenu();
+        // ReoGrid's theme defines unscaled font resources that shadow the application's.
+        // Supply the application sizes at the popup so its items follow the UI scale.
+        contextMenu.Resources["FontSizeNormal"] = DWSIM.UI.Shared.Avalonia.UiScale.Font(12);
+        contextMenu.Resources["FontSizeSmall"] = DWSIM.UI.Shared.Avalonia.UiScale.Font(11);
         contextMenu.Items.Add(menuCut);
         contextMenu.Items.Add(menuCopy);
         contextMenu.Items.Add(menuPaste);
@@ -1804,6 +1815,7 @@ public partial class FlowsheetView : UserControl
             foreach (var obj in _flowsheet.SimulationObjects.Values)
                 if (obj.GraphicObject != null)
                     _surface.SelectedObjects[obj.Name] = obj.GraphicObject;
+            _surface.SelectedObject = _surface.SelectedObjects.Values.FirstOrDefault();
             Canvas.Refresh();
             AppendLog($"Selected {_surface.SelectedObjects.Count} objects.");
         };
@@ -1821,6 +1833,7 @@ public partial class FlowsheetView : UserControl
                 if (!currentlySelected.Contains(name))
                     _surface.SelectedObjects[name] = _flowsheet.SimulationObjects[name].GraphicObject;
             }
+            _surface.SelectedObject = _surface.SelectedObjects.Values.FirstOrDefault();
             Canvas.Refresh();
         };
 
@@ -2448,6 +2461,15 @@ public partial class FlowsheetView : UserControl
     // Context menu
     // -------------------------------------------------------------------------
 
+    private void SetSelectedObjectsActive(bool active)
+    {
+        var changed = _surface?.SetSelectedObjectsActive(active) ?? 0;
+        Canvas.Refresh();
+        RefreshSelectedObjectEditor();
+        UpdateResultsPanel();
+        AppendLog($"{changed} object(s) {(active ? "activated" : "deactivated")}.");
+    }
+
     private void ShowCanvasContextMenu()
     {
         var obj = _surface?.SelectedObject;
@@ -2456,24 +2478,35 @@ public partial class FlowsheetView : UserControl
         if (obj != null)
         {
             // ---- Object is selected: show object-specific menu ----
-            var header = new MenuItem { Header = obj.Tag ?? obj.Name, IsEnabled = false, FontWeight = FontWeight.SemiBold };
+            var selectionCount = _surface?.SelectedObjects.Values.Count(
+                go => _flowsheet?.SimulationObjects.ContainsKey(go.Name) == true) ?? 0;
+            var header = new MenuItem
+            {
+                Header = selectionCount > 1 ? $"{selectionCount} objects selected" : obj.Tag ?? obj.Name,
+                IsEnabled = false,
+                FontWeight = FontWeight.SemiBold
+            };
             ctx.Items.Add(header);
 
             var simObj = _flowsheet?.SimulationObjects.ContainsKey(obj.Name) == true
                 ? _flowsheet.SimulationObjects[obj.Name] : null;
 
-            // Toggle Active/Inactive (CheckMenuItem like Eto)
-            var toggleActive = new MenuItem { Header = "Toggle Active/Inactive", Icon = IconHelper.MIcon("⏻") };
-            toggleActive.Click += (_, _) =>
+            if (selectionCount > 1)
             {
-                obj.Active = !obj.Active;
-                if (simObj != null) simObj.GraphicObject.Status = obj.Active
-                    ? Interfaces.Enums.GraphicObjects.Status.Idle
-                    : Interfaces.Enums.GraphicObjects.Status.Inactive;
-                Canvas.Refresh();
-                AppendLog($"{obj.Tag}: {(obj.Active ? "activated" : "deactivated")}.");
-            };
-            ctx.Items.Add(toggleActive);
+                var deactivate = new MenuItem { Header = "Set Selected Inactive", Icon = IconHelper.MIcon("⏻") };
+                deactivate.Click += (_, _) => SetSelectedObjectsActive(false);
+                ctx.Items.Add(deactivate);
+
+                var activate = new MenuItem { Header = "Set Selected Active", Icon = IconHelper.MIcon("⏻") };
+                activate.Click += (_, _) => SetSelectedObjectsActive(true);
+                ctx.Items.Add(activate);
+            }
+            else if (simObj != null)
+            {
+                var toggleActive = new MenuItem { Header = "Toggle Active/Inactive", Icon = IconHelper.MIcon("⏻") };
+                toggleActive.Click += (_, _) => SetSelectedObjectsActive(!obj.Active);
+                ctx.Items.Add(toggleActive);
+            }
 
             // Toggle Show/Hide Label
             var toggleLabel = new MenuItem { Header = "Toggle Show/Hide Label", Icon = IconHelper.MIcon("\U0001F3F7") }; // label

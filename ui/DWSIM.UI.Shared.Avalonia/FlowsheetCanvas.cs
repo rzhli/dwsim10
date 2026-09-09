@@ -39,6 +39,7 @@ public class FlowsheetCanvas : Control
 
     public Action<SKSurface, SKImageInfo>? PaintCallback { get; set; }
     public Action<int, int>? InputPressCallback { get; set; }
+    public Action<int, int>? InputContextMenuCallback { get; set; }
     public Action? InputReleaseCallback { get; set; }
     public Action<int, int>? InputMoveCallback { get; set; }
     public Action<double, int, int, int, int>? WheelCallback { get; set; }
@@ -176,22 +177,25 @@ public class FlowsheetCanvas : Control
         UpdateKeyboardState(e.KeyModifiers);
         var (px, py) = DevicePt(e.GetPosition(this));
 
-        // Always perform hit-testing (selects the object under cursor)
-        InputPressCallback?.Invoke(px, py);
-        InvalidateVisual();
-
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
             _lastPressButton = MouseButton.Right;
-            // Finalize selection so SelectedObject is set for context menu
-            InputReleaseCallback?.Invoke();
+            if (InputContextMenuCallback != null)
+                InputContextMenuCallback(px, py);
+            else
+            {
+                InputPressCallback?.Invoke(px, py);
+                InputReleaseCallback?.Invoke();
+            }
             // Don't mark handled - PointerReleased needs to bubble for context menu
         }
         else
         {
             _lastPressButton = MouseButton.Left;
+            InputPressCallback?.Invoke(px, py);
             e.Handled = true; // Capture pointer so we get PointerReleased
         }
+        InvalidateVisual();
     }
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -204,7 +208,7 @@ public class FlowsheetCanvas : Control
             InputReleaseCallback?.Invoke();
             InputReleased?.Invoke(this, EventArgs.Empty);
         }
-        // Right-click: InputRelease already called in OnPointerPressed.
+        // Right-click: the context-menu target was selected in OnPointerPressed.
         // Context menu handled by FlowsheetWindow via AddHandler(..., handledEventsToo: true).
 
         e.Handled = true;

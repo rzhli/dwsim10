@@ -111,6 +111,11 @@ public class App : Application
         Resources["ControlPadding"] = new Thickness(12.0 * scale, 5.0 * scale);
         Resources["TabHeaderMinHeight"] = 34.0 * scale;
         Resources["TabStripHeight"] = 28.0 * scale;
+        Resources["DockHeaderHeight"] = 22.0 * scale;
+        Resources["DockChromeButtonWidth"] = 20.0 * scale;
+        Resources["DockChromeButtonHeight"] = 20.0 * scale;
+        Resources["DockChromeButtonPadding"] = new Thickness(4.0 * scale);
+        Resources["DockToolChromeTitleMargin"] = new Thickness(4.0 * scale, 0);
         Resources["DataGridRowHeight"] = 28.0 * scale;
         Resources["DataGridHeaderHeight"] = 24.0 * scale;
         Resources["ToolbarIconSize"] = 16.0 * scale;

@@ -1692,9 +1692,9 @@ Namespace SystemsOfUnits
                 Case "kmol/m3"
                     Return value * 1000.0
                 Case "mol/cm3"
-                    Return value * 1000000.0 / 1000
+                    Return value * 1000000.0
                 Case "mol/ml"
-                    Return value * 1000000.0 / 1000
+                    Return value * 1000000.0
                 Case "lbmol/ft3"
                     Return value * 35.3147 * 1000 / 2.20462
 
@@ -2285,9 +2285,9 @@ Namespace SystemsOfUnits
                 Case "kmol/m3"
                     Return value / 1000.0
                 Case "mol/cm3"
-                    Return value / 1000000.0 * 1000
+                    Return value / 1000000.0
                 Case "mol/ml"
-                    Return value / 1000000.0 * 1000
+                    Return value / 1000000.0
                 Case "lbmol/ft3"
                     Return value / 35.3147 / 1000 * 2.20462
 

@@ -32,6 +32,8 @@ public sealed class SpreadsheetToolbar : DockPanel
     private readonly TextBox _address;
     private readonly TextBox _formula;
     private readonly ComboBox _sheets;
+    private readonly ComboBox _decimals;
+    private static readonly short[] DecimalPlaces = { 0, 1, 2, 3, 4, 6, 8 };
 
     /// <summary>Keeps writing the cell back while the bar is being filled from it.</summary>
     private bool _reading;
@@ -87,16 +89,18 @@ public sealed class SpreadsheetToolbar : DockPanel
 
         format.Children.Add(Label("Decimals"));
 
-        var decimals = new ComboBox
+        _decimals = new ComboBox
         {
+            Name = "DecimalPlaces",
             ItemsSource = new[] { "General", "0", "1", "2", "3", "4", "6", "8" },
             SelectedIndex = 0,
+            PlaceholderText = "Mixed / other",
             FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11),
             MinWidth = 90,
             VerticalAlignment = VerticalAlignment.Center
         };
-        decimals.SelectionChanged += (_, _) => SetNumberFormat(decimals.SelectedIndex);
-        format.Children.Add(decimals);
+        _decimals.SelectionChanged += (_, _) => SetNumberFormat(_decimals.SelectedIndex);
+        format.Children.Add(_decimals);
 
         format.Children.Add(Button("Percent", (_, _) => SetFormat(CellDataFormatFlag.Percent)));
         format.Children.Add(Button("Text", (_, _) => SetFormat(CellDataFormatFlag.Text)));
@@ -124,6 +128,7 @@ public sealed class SpreadsheetToolbar : DockPanel
             VerticalAlignment = VerticalAlignment.Center,
             Watermark = "Value or formula of the selected cell"
         };
+        _panel.Grid.AttachFormulaBar(_formula, WriteCell);
 
         _formula.TextChanged += (_, _) =>
         {
@@ -138,8 +143,6 @@ public sealed class SpreadsheetToolbar : DockPanel
             if (e.Key == Key.Enter) WriteCell();
             if (e.Key == Key.Escape) { _editing = null; ReadCell(); }
         };
-
-        _formula.LostFocus += (_, _) => WriteCell();
 
         bar.Children.Add(_address);
         bar.Children.Add(_formula);
@@ -250,12 +253,13 @@ public sealed class SpreadsheetToolbar : DockPanel
             _reading = true;
 
             var sheet = Sheet;
-            if (sheet == null) { _formula.Text = ""; _address.Text = ""; return; }
+            if (sheet == null) { _formula.Text = ""; _address.Text = ""; _decimals.SelectedIndex = -1; return; }
 
             var pos = sheet.SelectionRange.StartPos;
 
             _address.Text = pos.ToAddress();
             _editing = null;
+            _decimals.SelectedIndex = ReadNumberFormat(sheet);
 
             var cell = sheet.GetCell(pos);
             if (cell == null) { _formula.Text = ""; return; }
@@ -420,28 +424,56 @@ public sealed class SpreadsheetToolbar : DockPanel
         });
     }
 
+    private static int ReadNumberFormat(Worksheet sheet)
+    {
+        int? selected = null;
+        sheet.IterateCells(sheet.SelectionRange, false, (_, _, cell) =>
+        {
+            int index;
+            if (cell == null || cell.DataFormat == CellDataFormatFlag.General)
+                index = 0;
+            else if (cell.DataFormat == CellDataFormatFlag.Number)
+            {
+                var places = (cell.DataFormatArgs as NumberDataFormatter.INumberFormatArgs)?.DecimalPlaces ?? 2;
+                var option = Array.IndexOf(DecimalPlaces, places);
+                index = option < 0 ? -1 : option + 1;
+            }
+            else
+                index = -1;
+
+            if (selected.HasValue && selected.Value != index)
+            {
+                selected = -1;
+                return false;
+            }
+            selected = index;
+            return true;
+        });
+        return selected ?? 0;
+    }
+
     private void SetNumberFormat(int index)
     {
-        if (_reading) return;
+        if (_reading || index < 0) return;
 
         var sheet = Sheet;
         if (sheet == null) return;
 
-        if (index <= 0)
+        if (index == 0)
         {
             sheet.SetRangeDataFormat(sheet.SelectionRange, CellDataFormatFlag.General, null);
+            ReadCell();
             return;
         }
-
-        int[] places = { 0, 0, 1, 2, 3, 4, 6, 8 };
 
         sheet.SetRangeDataFormat(sheet.SelectionRange, CellDataFormatFlag.Number,
             new NumberDataFormatter.NumberFormatArgs
             {
-                DecimalPlaces = (short)places[index],
+                DecimalPlaces = DecimalPlaces[index - 1],
                 UseSeparator = false,
                 NegativeStyle = NumberDataFormatter.NumberNegativeStyle.Minus
             });
+        ReadCell();
     }
 
     private void SetFormat(CellDataFormatFlag format)
@@ -450,6 +482,7 @@ public sealed class SpreadsheetToolbar : DockPanel
         if (sheet == null) return;
 
         sheet.SetRangeDataFormat(sheet.SelectionRange, format, null);
+        ReadCell();
     }
 
     private void Merge(bool merge)

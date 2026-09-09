@@ -67,6 +67,10 @@ public sealed class PropertySelectorDialog : Window
 
         _objectList.SelectionChanged += OnObjectSelected;
         _propertyList.SelectionChanged += OnPropertySelected;
+        _unitList.SelectionChanged += (_, _) =>
+        {
+            SelectedUnit = (_unitList.SelectedItem as ListBoxItem)?.Tag as string ?? "";
+        };
 
         // Layout: three columns with labels
         var col1 = new DockPanel { Margin = new Thickness(4) };
@@ -136,6 +140,9 @@ public sealed class PropertySelectorDialog : Window
 
     private void OnObjectSelected(object? sender, SelectionChangedEventArgs e)
     {
+        SelectedObjectId = null;
+        SelectedPropertyKey = null;
+        SelectedUnit = "";
         _propertyList.Items.Clear();
         _unitList.Items.Clear();
 
@@ -158,6 +165,7 @@ public sealed class PropertySelectorDialog : Window
 
     private void OnPropertySelected(object? sender, SelectionChangedEventArgs e)
     {
+        SelectedPropertyKey = null;
         _unitList.Items.Clear();
         SelectedUnit = "";
 
@@ -174,20 +182,19 @@ public sealed class PropertySelectorDialog : Window
 
         try
         {
-            var unit = obj.GetPropertyUnit(propKey);
+            var su = _flowsheet.FlowsheetOptions.SelectedUnitSystem;
+            var unit = obj.GetPropertyUnit(propKey, su);
             if (!string.IsNullOrEmpty(unit))
             {
-                _unitList.Items.Add(new ListBoxItem { Content = unit, Tag = unit });
-                _unitList.SelectedIndex = 0;
-                SelectedUnit = unit;
+                // Offer all compatible units, keeping the flowsheet's unit selected.
+                var units = su.GetUnitSet(su.GetUnitType(unit));
+                // Custom properties can use units that are not in the shared catalogue.
+                if (!units.Contains(unit)) units.Insert(0, unit);
+                foreach (var option in units)
+                    _unitList.Items.Add(new ListBoxItem { Content = option, Tag = option });
+                _unitList.SelectedIndex = units.IndexOf(unit);
             }
         }
         catch { }
-
-        _unitList.SelectionChanged += (_, _) =>
-        {
-            if (_unitList.SelectedItem is ListBoxItem ui)
-                SelectedUnit = ui.Tag as string ?? "";
-        };
     }
 }
