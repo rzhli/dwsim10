@@ -25,6 +25,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using DWSIM.Interfaces;
 using NUnit.Framework;
 using ObjectType = DWSIM.Interfaces.Enums.GraphicObjects.ObjectType;
@@ -89,8 +91,8 @@ namespace DWSIM.UI.Desktop.Editors.Tests
         /// <summary>
         /// Types a value into a row, the way a user does. Avalonia raises TextChanged from the
         /// control's own input handling, not from the property setter, so a TextBox that was never
-        /// attached to a visual tree stays silent when Text is assigned; the editors commit on that
-        /// event, so the test has to raise it.
+        /// attached to a visual tree stays silent when Text is assigned. This leaves the edit pending;
+        /// Enter or loss of focus commits it.
         /// </summary>
         private static void Type(TextBox box, string text)
         {
@@ -175,11 +177,13 @@ namespace DWSIM.UI.Desktop.Editors.Tests
         }
 
         /// <summary>
-        /// The values shown are the object's own, and editing a row writes back to it. Number of
-        /// Cells is the one that matters here: the dynamic model rebuilds its cell list from it.
+        /// The values shown are the object's own. Typing leaves the edit pending until Enter or
+        /// focus loss writes it back. Number of Cells matters because the dynamic model rebuilds
+        /// its cell list from it.
         /// </summary>
-        [Test]
-        public void EditingADynamicParameterWritesItBackToTheObject()
+        [TestCase(true)]
+        [TestCase(false)]
+        public void EditingADynamicParameterWritesItBackToTheObject(bool commitWithEnter)
         {
             var hx = (DWSIM.UnitOperations.UnitOperations.HeatExchanger)Add(ObjectType.HeatExchanger, "HX-1");
 
@@ -195,8 +199,16 @@ namespace DWSIM.UI.Desktop.Editors.Tests
 
             Type(cellBox, "6");
 
+            Assert.That(Convert.ToDouble(hx.GetDynamicProperty("Number of Cells")), Is.EqualTo(4.0),
+                        "typing into the row committed the value before Enter or focus loss");
+
+            if (commitWithEnter)
+                cellBox.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
+            else
+                cellBox.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+
             Assert.That(Convert.ToDouble(hx.GetDynamicProperty("Number of Cells")), Is.EqualTo(6.0),
-                        "editing the row did not write the value back to the exchanger");
+                        "committing the row did not write the value back to the exchanger");
         }
 
         /// <summary>
