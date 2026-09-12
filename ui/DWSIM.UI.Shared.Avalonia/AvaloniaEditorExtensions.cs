@@ -94,21 +94,64 @@ public static class AvaloniaEditorExtensions
     // TextBox rows
     // -------------------------------------------------------------------------
 
+    private static readonly IBrush EditingBrush = new SolidColorBrush(Color.FromRgb(0x15, 0x65, 0xC0));
+
+    /// <summary>
+    /// Wires a single-line textbox to commit its value on Enter, not on every keystroke.
+    /// A per-keystroke commit re-solves the flowsheet on each character and, during the
+    /// programmatic population of an editor, can mutate the object (for example the material
+    /// stream flow spec flips its basis as its three boxes are filled). While the text differs
+    /// from the committed value the box turns blue and shows an "Enter to apply" tooltip.
+    /// Enter or moving focus away applies the value; Escape reverts it to the committed value.
+    /// </summary>
+    private static void WireEnterCommit(TextBox tb, AvaloniaEditorPanel panel,
+        Action<TextBox, EventArgs> command, Action? keypress = null)
+    {
+        string committed = tb.Text ?? "";
+
+        void SetPending(bool pending)
+        {
+            ToolTip.SetTip(tb, pending ? "Press Enter to apply this value." : null);
+            if (pending) tb.Foreground = EditingBrush; else tb.ClearValue(TemplatedControl.ForegroundProperty);
+        }
+
+        void Commit()
+        {
+            if ((tb.Text ?? "") != committed)
+            {
+                committed = tb.Text ?? "";
+                command(tb, EventArgs.Empty);
+                panel.OnAfterEdit?.Invoke();
+            }
+            SetPending(false);
+        }
+
+        tb.TextChanged += (s, e) => SetPending((tb.Text ?? "") != committed);
+        tb.KeyDown += (s, e) =>
+        {
+            if (e.Key == global::Avalonia.Input.Key.Enter) { Commit(); keypress?.Invoke(); e.Handled = true; }
+            else if (e.Key == global::Avalonia.Input.Key.Escape) { tb.Text = committed; SetPending(false); e.Handled = true; }
+        };
+        tb.LostFocus += (s, e) => Commit();
+    }
+
     public static TextBox CreateAndAddTextBoxRow(this AvaloniaEditorPanel panel,
         string numberformat, string label, double currval,
         Action<TextBox, EventArgs>? command, Action? keypress = null)
     {
         var tb = new TextBox
         {
-            Text = currval.ToString(numberformat, CultureInfo.InvariantCulture),
+            // Show the value in the OS locale (comma decimal on a comma-locale machine), matching how
+            // the fields parse it back and how the value+unit rows and the composition grid display.
+            Text = currval.ToString(numberformat, CultureInfo.CurrentCulture),
             Width = ControlWidth,
             TextAlignment = TextAlignment.Right
         };
 
         WireUnitContextMenu(tb, label);
 
-        if (command != null) tb.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
-        if (keypress != null) tb.KeyDown += (s, e) =>
+        if (command != null) WireEnterCommit(tb, panel, command, keypress);
+        else if (keypress != null) tb.KeyDown += (s, e) =>
         {
             if (e.Key == global::Avalonia.Input.Key.Enter) keypress();
         };
@@ -130,8 +173,8 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Text = currval, Width = ControlWidth };
 
-        if (command != null) tb.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
-        if (keypress != null) tb.KeyDown += (s, e) =>
+        if (command != null) WireEnterCommit(tb, panel, command, keypress);
+        else if (keypress != null) tb.KeyDown += (s, e) =>
         {
             if (e.Key == global::Avalonia.Input.Key.Enter) keypress();
         };
@@ -146,8 +189,8 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Text = currval, Width = tbwidth };
 
-        if (command != null) tb.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
-        if (keypress != null) tb.KeyDown += (s, e) =>
+        if (command != null) WireEnterCommit(tb, panel, command, keypress);
+        else if (keypress != null) tb.KeyDown += (s, e) =>
         {
             if (e.Key == global::Avalonia.Input.Key.Enter) keypress();
         };
@@ -162,7 +205,7 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Text = currval, Watermark = placeholder, Width = ControlWidth };
 
-        if (command != null) tb.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
+        if (command != null) WireEnterCommit(tb, panel, command);
 
         panel.Children.Add(AvaloniaEditorPanel.MakeLabelControlRow(label, tb));
         return tb;
@@ -173,7 +216,7 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Text = text, HorizontalAlignment = HorizontalAlignment.Stretch };
 
-        if (command != null) tb.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
+        if (command != null) WireEnterCommit(tb, panel, command);
 
         panel.Children.Add(AvaloniaEditorPanel.MakeLabelControlRow(string.Empty, tb));
         return tb;
@@ -194,8 +237,8 @@ public static class AvaloniaEditorExtensions
             Width = 100
         };
 
-        if (command != null) tb1.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
-        if (command2 != null) tb2.TextChanged += (s, e) => { command2((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
+        if (command != null) WireEnterCommit(tb1, panel, command);
+        if (command2 != null) WireEnterCommit(tb2, panel, command2);
 
         var row = new Grid
         {
@@ -221,8 +264,8 @@ public static class AvaloniaEditorExtensions
         var tb1 = new TextBox { Text = currval1.ToString(numberformat, CultureInfo.InvariantCulture), Width = 100 };
         var tb2 = new TextBox { Text = currval2.ToString(numberformat, CultureInfo.InvariantCulture), Width = 100 };
 
-        if (command != null) tb1.TextChanged += (s, e) => { command((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
-        if (command2 != null) tb2.TextChanged += (s, e) => { command2((TextBox)s!, e); panel.OnAfterEdit?.Invoke(); };
+        if (command != null) WireEnterCommit(tb1, panel, command);
+        if (command2 != null) WireEnterCommit(tb2, panel, command2);
 
         var row = new Grid
         {

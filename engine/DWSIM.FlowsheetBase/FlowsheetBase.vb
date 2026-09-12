@@ -5032,6 +5032,7 @@ Label_00CC:
         'build reaction equation
         'scan for reactants
         For Each c In rc.Components
+            If Not Options.SelectedComponents.ContainsKey(c.Key) Then Continue For
             Dim comp = Options.SelectedComponents(c.Key)
             If c.Value.StoichCoeff < 0 Then
                 If c.Value.StoichCoeff = -1 Then
@@ -5048,6 +5049,7 @@ Label_00CC:
         eq += "<--> "
         'scan for products
         For Each c In rc.Components
+            If Not Options.SelectedComponents.ContainsKey(c.Key) Then Continue For
             Dim comp = Options.SelectedComponents(c.Key)
             If c.Value.StoichCoeff > 0 Then
                 If c.Value.StoichCoeff = 1 Then

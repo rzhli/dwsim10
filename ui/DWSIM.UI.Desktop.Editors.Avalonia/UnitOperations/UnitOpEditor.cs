@@ -56,7 +56,10 @@ namespace DWSIM.UI.Desktop.Editors
             if (connections)
                 stack.Children.Add(Group("Connections", AvaloniaTabBuilders.BuildConnections(simobj)));
 
-            var parameters = new AvaloniaEditorPanel();
+            // editing any input row solves the object and refreshes the open editors, as the
+            // Windows editors do. The panel arms itself once it is in the tree, so the events
+            // raised while it is populated do not solve the flowsheet.
+            var parameters = new AvaloniaEditorPanel().AutoSolveOnEdit(simobj);
             if (propertyPackage) AddPropertyPackageRow(simobj, parameters);
             input?.Invoke(parameters);
             if (parameters.Children.Count > 0)
@@ -91,6 +94,23 @@ namespace DWSIM.UI.Desktop.Editors
             // the panels commit as they are edited; the host arms this after the editor is in
             // the tree so the events Avalonia raises while building do not solve the flowsheet
             return new ScrollViewer { Content = stack };
+        }
+
+        /// <summary>
+        /// Wires a panel an editor builds on its own (a spec page or a sub-tab, not the parameters
+        /// panel <see cref="Build"/> makes) to solve the object and refresh the open editors when a
+        /// row is edited. The panel arms itself once in the tree, so populating it does not solve.
+        /// </summary>
+        public static AvaloniaEditorPanel AutoSolveOnEdit(this AvaloniaEditorPanel panel, ISimulationObject simobj)
+        {
+            panel.OnAfterEdit = () =>
+            {
+                var fs = simobj.GetFlowsheet();
+                if (fs == null) return;
+                fs.RequestCalculation(simobj);
+                fs.UpdateInterface();
+            };
+            return panel;
         }
 
         /// <summary>A group box, as the Windows editors frame each section.</summary>
@@ -353,10 +373,19 @@ namespace DWSIM.UI.Desktop.Editors
 
         public static bool TryParse(string text, out double value)
         {
+            // Culture-tolerant: the app never pins the number-formatting culture, so the decimal
+            // separator is whatever the OS regional format uses and differs across platforms. Float
+            // admits no thousands separator, so a mark that is not the culture's decimal point fails
+            // cleanly and falls through rather than being swallowed as a grouping mark.
             value = 0.0;
             if (string.IsNullOrWhiteSpace(text)) return false;
-            return double.TryParse(text, NumberStyles.Any, CultureInfo.CurrentCulture, out value)
-                || double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+            var t = text.Trim();
+            const NumberStyles ns = NumberStyles.Float;
+            if (double.TryParse(t, ns, CultureInfo.CurrentCulture, out value)) return true;
+            if (double.TryParse(t, ns, CultureInfo.InvariantCulture, out value)) return true;
+            var swapped = t.Replace(",", ".");
+            if (swapped.IndexOf('.') == swapped.LastIndexOf('.') && double.TryParse(swapped, ns, CultureInfo.InvariantCulture, out value)) return true;
+            return false;
         }
 
     }

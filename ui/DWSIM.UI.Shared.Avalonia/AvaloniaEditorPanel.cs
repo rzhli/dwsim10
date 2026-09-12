@@ -47,6 +47,15 @@ public class AvaloniaEditorPanel : StackPanel
     /// </summary>
     public void ArmAfterEdit() => _armed = true;
 
+    /// <summary>
+    /// True once <see cref="ArmAfterEdit"/> has run, i.e. after the deferred
+    /// TextChanged/SelectionChanged burst that Avalonia fires on visual-tree attachment.
+    /// Guard destructive per-control callbacks (those that clear sibling values, like the
+    /// material-stream flow spec, which nulls the other two flows) on this so programmatic
+    /// population does not mutate the object.
+    /// </summary>
+    public bool IsArmed => _armed;
+
     public AvaloniaEditorPanel()
     {
         Orientation = Orientation.Vertical;
@@ -58,6 +67,21 @@ public class AvaloniaEditorPanel : StackPanel
         // Style class used by App.axaml selectors (StackPanel.editorPanel TextBox, etc.)
         // to enforce compact control sizing inside editor panels.
         Classes.Add("editorPanel");
+
+        // Arm on attach. Editors hosted through ObjectEditorDescriptor.FullContent (the material
+        // stream and every Windows-style unit-op editor) are never armed by the host, which only
+        // arms the PropertiesContent panel; without this their OnAfterEdit stays disabled and a
+        // real edit never solves the object. The two-level Background post runs after the deferred
+        // TextChanged/SelectionChanged burst Avalonia raises while the controls enter the tree, so
+        // populating the editor still does not fire OnAfterEdit.
+        AttachedToVisualTree += (_, _) =>
+        {
+            if (_armed) return;
+            global::Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                global::Avalonia.Threading.Dispatcher.UIThread.Post(ArmAfterEdit,
+                    global::Avalonia.Threading.DispatcherPriority.Background),
+                global::Avalonia.Threading.DispatcherPriority.Background);
+        };
     }
 
     /// <summary>Creates a two-column row: label on the left, control fixed-width on the right.</summary>

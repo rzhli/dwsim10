@@ -1162,9 +1162,12 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     End If
                 End If
 
-                ' Convergence check: absolute + relative
+                ' Convergence check (absolute enthalpy error, in kJ/kg). A relative check of
+                ' Abs(fx / H) < 0.0001 used to sit here as well, but with H on the order of 1000 kJ/kg
+                ' it accepts an error near 0.1 kJ/kg, which is far coarser than tolEXT. Downstream that
+                ' quantizes an applied duty: a reactor feeding the flash small per-step enthalpy
+                ' changes sees a whole range of duties collapse onto the same outlet temperature.
                 If Abs(fx) <= tolEXT Then Exit Do
-                If H <> 0.0 AndAlso Abs(fx / H) < 0.0001 Then Exit Do
 
                 ' Track sign changes for oscillation detection
                 If cnt > 0 AndAlso Math.Sign(fx) <> Math.Sign(fx_ant) Then
@@ -1193,34 +1196,36 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
                 End If
 
-                ' Compute derivative: secant method (reuse previous point) or forward difference
-                Dim useSecant As Boolean = False
-                If cnt > 0 AndAlso Not Double.IsNaN(fx_secant) AndAlso Math.Abs(x1 - x_prev) > 1.0E-15 Then
-                    Dim secant_dfdx = (fx - fx_secant) / (x1 - x_prev)
-                    ' Safeguard: secant derivative must have the correct sign (dH/dT should be negative
-                    ' for the error function Hspec - Hcalc, so dfdx < 0 typically)
-                    ' and must not produce a step larger than 2x maxDT
-                    If Math.Abs(secant_dfdx) > 1.0E-20 AndAlso Math.Abs(fx / secant_dfdx) < 2.0 * maxDT Then
-                        dfdx = secant_dfdx
-                        useSecant = True
-                    End If
-                End If
-
-                If Not useSecant Then
-                    ' Forward difference with adaptive epsilon (0.1% of current T, clamped to [0.01, 1.0])
-                    Dim eps_fd As Double = Math.Max(0.01, Math.Min(1.0, x1 * 0.001))
-                    IObj2?.SetCurrent()
-                    fx2 = Herror("PT", x1 + eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
-                    dfdx = (fx2 - fx) / eps_fd
-                End If
+                ' Central-difference derivative over a coarse step. A one-sided or secant estimate is
+                ' unreliable in the two-phase region at these conditions: the mixture enthalpy rises
+                ' almost vertically across the vaporization front, so a step landing on the far side
+                ' returns a slope that is either enormous (the Newton step stalls and the flash runs
+                ' out of iterations) or the wrong sign (the step diverges upward to a spurious
+                ' all-vapour root). Averaging a step on each side, over a coarse interval, tracks the
+                ' real local slope, which is how the pre-net10 algorithm stayed stable here.
+                Dim eps_fd As Double = Math.Max(0.1, Math.Min(1.0, x1 * 0.002))
+                IObj2?.SetCurrent()
+                Dim fxp As Double = Herror("PT", x1 + eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                Dim fxm As Double = Herror("PT", x1 - eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                dfdx = (fxp - fxm) / (2.0 * eps_fd)
 
                 ' Guard against near-zero derivative
                 If Math.Abs(dfdx) < 1.0E-20 Then
                     dfdx = -Math.Sign(fx) * 1.0E-20
                 End If
 
-                dx = fx / dfdx
-                If Abs(dx) > maxDT Then dx = maxDT * Sign(dx)
+                ' dH/dT is physically positive (Cp > 0), so d(Hspec - Hcalc)/dT is negative. A
+                ' non-negative estimate here comes from two-phase flash noise near a vaporization
+                ' front and would drive the step the wrong way (up into the riser and on to a
+                ' spurious all-vapour root). Reject it and step a bounded amount in the correct
+                ' direction (fx > 0 means T too low), which builds a bracket for the bisection
+                ' safeguard below to finish on.
+                If dfdx >= 0.0 Then
+                    dx = -Math.Sign(fx) * maxDT
+                Else
+                    dx = fx / dfdx
+                    If Abs(dx) > maxDT Then dx = maxDT * Sign(dx)
+                End If
 
                 x_prev = x1
                 fx_secant = fx
@@ -1254,8 +1259,38 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
             IObj?.Close()
 
-            If Double.IsNaN(T) Or T <= Tmin Or T >= Tmax Or cnt > maxitEXT Then
-                'switch to mode 2 if it doesn't converge using fast mode.
+            Dim notConverged As Boolean = Double.IsNaN(T) OrElse T <= Tmin OrElse T >= Tmax OrElse cnt > maxitEXT
+            Dim haveBracket As Boolean = Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg)
+
+            ' Fast mode ran out of iterations but the root is bracketed (Herror changed sign between
+            ' two tracked temperatures). H(T) is monotonic, so bisect the bracket to finish rather
+            ' than hand off to the rigorous mode, whose bubble/dew phase test is itself unreliable at
+            ' high pressure here and can return a spurious all-vapour temperature far from the spec.
+            If notConverged AndAlso haveBracket Then
+                Dim lo As Double = Math.Min(T_bracket_pos, T_bracket_neg)
+                Dim hi As Double = Math.Max(T_bracket_pos, T_bracket_neg)
+                Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                Dim bcnt As Integer = 0
+                Do
+                    Dim mid As Double = (lo + hi) / 2.0
+                    Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                    If Double.IsNaN(fmid) Then Exit Do
+                    If Math.Abs(fmid) <= tolEXT OrElse (hi - lo) < 0.0005 Then
+                        lo = mid : hi = mid : Exit Do
+                    End If
+                    If Math.Sign(fmid) = Math.Sign(flo) Then
+                        lo = mid : flo = fmid
+                    Else
+                        hi = mid
+                    End If
+                    bcnt += 1
+                Loop Until bcnt > 200
+                T = (lo + hi) / 2.0
+                notConverged = Double.IsNaN(T) OrElse T <= Tmin OrElse T >= Tmax
+            End If
+
+            If notConverged Then
+                'switch to mode 2 if it doesn't converge using fast mode and no bracket was found.
                 WriteDebugInfo("PH Flash [NL]: Didn't converge in fast mode. Switching to rigorous...")
                 Return Flash_PH_2(Vz, P, H, Tref, PP, ReuseKI, PrevKi)
             Else
@@ -1694,128 +1729,187 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             IObj?.Paragraphs.Add(String.Format("Mole Fractions: {0}", Vz.ToMathArrayString))
             IObj?.Paragraphs.Add(String.Format("Initial estimate for T: {0} K", Tref))
 
-            For j = 0 To 2
+            ' Single robust temperature loop (mirrors the fixed Flash_PH_1). Near a phase boundary the
+            ' entropy-vs-T curve has a kink, and a plain Newton step over the fast central difference
+            ' can jump to a spurious branch. For a compressor the isentropic outlet enthalpy - and so
+            ' the shaft power - is read off this flash, so that branch jump makes the power lurch
+            ' across tiny feed changes. Track a sign bracket, reject a non-physical derivative, and
+            ' finish on a bisection so the flash stays on the physical branch.
+            cnt = 0
+            x1 = Tref
 
-                cnt = 0
-                x1 = Tref
+            Dim Ki_est As Double() = Nothing
+            Dim signChanges As Integer = 0
 
-                Dim fxvals, xvals As New List(Of Double)
+            Dim T_bracket_pos As Double = Double.NaN  ' T where fx > 0 (T too low)
+            Dim T_bracket_neg As Double = Double.NaN  ' T where fx < 0 (T too high)
+            Dim fx_bracket_pos As Double = Double.NaN
+            Dim fx_bracket_neg As Double = Double.NaN
 
-                Dim serrobj As Object
+            Dim serrobj As Object
 
-                Do
+            Do
 
-                    IObj?.SetCurrent()
+                IObj?.SetCurrent()
 
-                    Dim IObj2 As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
+                Dim IObj2 As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
 
-                    Inspector.Host.CheckAndAdd(IObj2, "", "Flash_PS", "PS Flash Newton Iteration", "Pressure-Entropy Flash Algorithm (Fast Mode) Convergence Iteration Step")
+                Inspector.Host.CheckAndAdd(IObj2, "", "Flash_PS", "PS Flash Newton Iteration", "Pressure-Entropy Flash Algorithm (Fast Mode) Convergence Iteration Step")
 
-                    IObj2?.Paragraphs.Add(String.Format("This is the Newton convergence loop iteration #{0}. DWSIM will use the current value of T to calculate the phase distribution by calling the Flash_PT routine.", cnt))
+                IObj2?.Paragraphs.Add(String.Format("This is the Newton convergence loop iteration #{0}. DWSIM will use the current value of T to calculate the phase distribution by calling the Flash_PT routine.", cnt))
 
-                    If cnt > 20 Then xvals.Add(x1)
-                    fx_ant = fx
+                fx_ant = fx
 
-                    If Settings.EnableParallelProcessing And Not DisableParallelCalcs Then
+                IObj2?.SetCurrent()
+                serrobj = Serror("PT", x1, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)
+                fx = serrobj(0)
 
-                        Dim task0 = TaskHelper.Run(Sub()
-                                                       serrobj = Serror("PT", x1, P, Vz, PP, False, Nothing)
-                                                       fx = serrobj(0)
-                                                   End Sub, Settings.TaskCancellationTokenSource.Token)
-                        Dim task1 = TaskHelper.Run(Sub()
-                                                       fx1 = Serror("PT", x1 - epsilon(j), P, Vz, PP, False, Nothing)(0)
-                                                   End Sub, Settings.TaskCancellationTokenSource.Token)
-                        Dim task2 = TaskHelper.Run(Sub()
-                                                       fx2 = Serror("PT", x1 + epsilon(j), P, Vz, PP, False, Nothing)(0)
-                                                   End Sub, Settings.TaskCancellationTokenSource.Token)
-                        Task.WaitAll(task0, task1, task2)
-
+                ' Extract Ki from the result for reuse in the next iteration
+                Dim Vy_tmp = DirectCast(serrobj(4), Double())
+                Dim Vx1_tmp = DirectCast(serrobj(5), Double())
+                Ki_est = New Double(n) {}
+                For i = 0 To n
+                    If Vx1_tmp(i) > 1.0E-20 Then
+                        Ki_est(i) = Vy_tmp(i) / Vx1_tmp(i)
                     Else
-
-                        IObj2?.SetCurrent()
-                        serrobj = Serror("PT", x1, P, Vz, PP, False, Nothing)
-                        fx = serrobj(0)
-                        IObj2?.SetCurrent()
-                        serrobj = Serror("PT", x1 - epsilon(j), P, Vz, PP, False, Nothing)
-                        fx1 = serrobj(0)
-                        IObj2?.SetCurrent()
-                        serrobj = Serror("PT", x1 + epsilon(j), P, Vz, PP, False, Nothing)
-                        fx2 = serrobj(0)
-
+                        Ki_est(i) = 1.0
                     End If
+                Next
 
-                    IObj2?.Paragraphs.Add(String.Format("Current Entropy error: {0}", fx2))
+                IObj2?.Paragraphs.Add(String.Format("Current Entropy error: {0}", fx))
 
-                    dfdx = (fx2 - fx1) / (2 * epsilon(j))
-
-
-                    If Double.IsNaN(fx) Then
-                        Dim ex As New Exception("PS Flash [NL]: Invalid result: Temperature did not converge." & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
-                        ex.Data.Add("DetailedDescription", "The Flash Algorithm was unable to converge to a solution.")
-                        ex.Data.Add("UserAction", "Try another Property Package and/or Flash Algorithm.")
-                        Throw ex
-                    End If
-
-                    If Abs(fx) < tolEXT Then Exit Do
-
-                    If cnt > 20 Then fxvals.Add(fx)
-
-                    dx = fx / dfdx
-
-                    If Abs(dx) > maxDT Then dx = maxDT * Sign(dx)
-
-                    x0 = x1
-
-                    If cnt > 30 And Math.Sign(fx) <> Math.Sign(fx_ant) Then
-
-                        'oscillating around the solution.
-
-                        Dim bmin As New Brent
-
-                        Dim interp As New MathNet.Numerics.Interpolation.BulirschStoerRationalInterpolation(xvals.ToArray(), fxvals.ToArray())
-
-                        x1 = bmin.BrentOpt2(xvals.Min, xvals.Max, 5, 0.01, 100,
-                                            Function(tval)
-                                                Return interp.Interpolate(tval)
-                                            End Function)
-
-                        Exit Do
-
-                    Else
-
-                        x1 = x1 - dx
-
-                    End If
-
-                    If x1 < 0 Then
-                        Throw New Exception("PS Flash [NL]: Invalid result: Temperature did not converge." & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
-                    End If
-
-                    IObj2?.Paragraphs.Add(String.Format("Updated Temperature estimate: {0} K", x1))
-
-                    cnt += 1
-
+                If Double.IsNaN(fx) Then
                     IObj2?.Close()
-
-                Loop Until cnt > maxitEXT Or Double.IsNaN(x1)
-
-                IObj?.Paragraphs.Add(String.Format("The PS Flash algorithm converged in {0} iterations. Final Temperature value: {1} K", cnt, x1))
-
-                T = x1
-
-                If Not Double.IsNaN(T) And Not Double.IsInfinity(T) And Not cnt > maxitEXT Then
-                    If T > Tmin And T < Tmax Then Exit For
+                    Dim ex As New Exception("PS Flash [NL]: Invalid result: Temperature did not converge." & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", x1.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
+                    ex.Data.Add("DetailedDescription", "The Flash Algorithm was unable to converge to a solution.")
+                    ex.Data.Add("UserAction", "Try another Property Package and/or Flash Algorithm.")
+                    Throw ex
                 End If
 
-            Next
+                ' Keep the tightest sign bracket seen
+                If fx > 0 Then
+                    If Double.IsNaN(T_bracket_pos) OrElse Math.Abs(fx) < Math.Abs(fx_bracket_pos) Then
+                        T_bracket_pos = x1
+                        fx_bracket_pos = fx
+                    End If
+                ElseIf fx < 0 Then
+                    If Double.IsNaN(T_bracket_neg) OrElse Math.Abs(fx) < Math.Abs(fx_bracket_neg) Then
+                        T_bracket_neg = x1
+                        fx_bracket_neg = fx
+                    End If
+                End If
+
+                If Abs(fx) <= tolEXT Then Exit Do
+
+                If cnt > 0 AndAlso Math.Sign(fx) <> Math.Sign(fx_ant) Then
+                    signChanges += 1
+                End If
+
+                ' Oscillation fallback: Brent on the bracket, or hand off to the rigorous mode
+                If signChanges >= 3 Then
+                    If Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg) Then
+                        Dim bmin As New Brent
+                        Dim Kbrent = Ki_est
+                        Dim Ta = Math.Min(T_bracket_pos, T_bracket_neg)
+                        Dim Tb = Math.Max(T_bracket_pos, T_bracket_neg)
+                        x1 = bmin.BrentOpt2(Ta, Tb, 100, tolEXT, maxitEXT,
+                            Function(tval)
+                                Return Serror("PT", tval, P, Vz, PP, Kbrent IsNot Nothing, Kbrent)(0)
+                            End Function)
+                        Exit Do
+                    Else
+                        IObj2?.Close()
+                        IObj?.Close()
+                        Return Flash_PS_2(Vz, P, S, x1, PP, ReuseKI, PrevKi)
+                    End If
+                End If
+
+                ' Central-difference derivative over a coarse step, as in Flash_PH_1. A one-sided or
+                ' secant slope is unreliable across the vaporization front and points the step at a
+                ' spurious branch; averaging a step on each side over a coarse interval tracks the
+                ' real local slope.
+                Dim eps_fd As Double = Math.Max(0.1, Math.Min(1.0, x1 * 0.002))
+                IObj2?.SetCurrent()
+                Dim fxp As Double = Serror("PT", x1 + eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                Dim fxm As Double = Serror("PT", x1 - eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                dfdx = (fxp - fxm) / (2.0 * eps_fd)
+
+                If Math.Abs(dfdx) < 1.0E-20 Then
+                    dfdx = -Math.Sign(fx) * 1.0E-20
+                End If
+
+                ' dS/dT is physically positive (Cp > 0), so d(Sspec - Scalc)/dT is negative. A
+                ' non-negative estimate is two-phase flash noise near the vaporization front and would
+                ' drive the step the wrong way (up into a spurious branch). Reject it and step a
+                ' bounded amount in the correct direction (fx > 0 means T too low), which builds a
+                ' bracket for the bisection safeguard to finish on.
+                If dfdx >= 0.0 Then
+                    dx = -Math.Sign(fx) * maxDT
+                Else
+                    dx = fx / dfdx
+                    If Abs(dx) > maxDT Then dx = maxDT * Sign(dx)
+                End If
+
+                x1 = x1 - dx
+
+                If x1 < Tmin Then x1 = Tmin + (Tref - Tmin) * 0.1
+                If x1 > Tmax Then x1 = Tmax - (Tmax - Tref) * 0.1
+
+                ' If a bracket exists and the step went outside it, bisect instead (safer)
+                If Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg) Then
+                    Dim bracketLo = Math.Min(T_bracket_pos, T_bracket_neg)
+                    Dim bracketHi = Math.Max(T_bracket_pos, T_bracket_neg)
+                    If x1 < bracketLo OrElse x1 > bracketHi Then
+                        x1 = (bracketLo + bracketHi) / 2.0
+                    End If
+                End If
+
+                IObj2?.Paragraphs.Add(String.Format("Updated Temperature estimate: {0} K", x1))
+
+                cnt += 1
+
+                IObj2?.Close()
+
+            Loop Until cnt > maxitEXT Or Double.IsNaN(x1)
+
+            IObj?.Paragraphs.Add(String.Format("The PS Flash algorithm converged in {0} iterations. Final Temperature value: {1} K", cnt, x1))
+
+            T = x1
 
             IObj?.Close()
 
-            If Double.IsNaN(T) Or T <= Tmin Or T >= Tmax Then
-                Dim ex As New Exception("PS Flash [NL]: Invalid result: Temperature did not converge." & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
-                ex.Data.Add("DetailedDescription", "The Flash Algorithm was unable to converge to a solution.")
-                ex.Data.Add("UserAction", "Try another Property Package and/or Flash Algorithm.")
-                Throw ex
+            Dim notConverged As Boolean = Double.IsNaN(T) OrElse T <= Tmin OrElse T >= Tmax OrElse cnt > maxitEXT
+            Dim haveBracket As Boolean = Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg)
+
+            ' Ran out of iterations but the root is bracketed: S(T) is monotonic, so bisect the bracket
+            ' to finish rather than hand off to the rigorous mode, whose bubble/dew phase test is
+            ' itself unreliable at these conditions and can return a spurious temperature far from spec.
+            If notConverged AndAlso haveBracket Then
+                Dim lo As Double = Math.Min(T_bracket_pos, T_bracket_neg)
+                Dim hi As Double = Math.Max(T_bracket_pos, T_bracket_neg)
+                Dim flo As Double = Serror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                Dim bcnt As Integer = 0
+                Do
+                    Dim mid As Double = (lo + hi) / 2.0
+                    Dim fmid As Double = Serror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                    If Double.IsNaN(fmid) Then Exit Do
+                    If Math.Abs(fmid) <= tolEXT OrElse (hi - lo) < 0.0005 Then
+                        lo = mid : hi = mid : Exit Do
+                    End If
+                    If Math.Sign(fmid) = Math.Sign(flo) Then
+                        lo = mid : flo = fmid
+                    Else
+                        hi = mid
+                    End If
+                    bcnt += 1
+                Loop Until bcnt > 200
+                T = (lo + hi) / 2.0
+                notConverged = Double.IsNaN(T) OrElse T <= Tmin OrElse T >= Tmax
+            End If
+
+            If notConverged Then
+                WriteDebugInfo("PS Flash [NL]: Didn't converge in fast mode. Switching to rigorous...")
+                Return Flash_PS_2(Vz, P, S, Tref, PP, ReuseKI, PrevKi)
             End If
 
             If PTFlashFunction IsNot Nothing Then

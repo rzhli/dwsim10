@@ -6,6 +6,10 @@ using System.Globalization;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Data;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Threading;
+using DWSIM.ExtensionMethods;
 using DWSIM.Interfaces;
 using CompoundAmounts = DWSIM.Thermodynamics.Streams.CompoundAmounts;
 using MaterialStream = DWSIM.Thermodynamics.Streams.MaterialStream;
@@ -46,17 +50,7 @@ namespace DWSIM.UI.Desktop.Editors
                 get { return _amount.ToString(Format, CultureInfo.CurrentCulture); }
                 set
                 {
-                    double parsed;
-                    // Float, not Any: Any allows a thousands separator, so in a locale whose group
-                    // separator is '.' (a comma-decimal locale) the current-culture parse reads a typed
-                    // "0.965" as 965 and succeeds, never reaching the invariant fallback - the value is
-                    // then renormalised into garbage. Without AllowThousands a '.' can only be a decimal
-                    // point, so a dot-typed number always falls through to the invariant parse.
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed) ||
-                        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed))
-                    {
-                        _amount = parsed;
-                    }
+                    if (value.IsValidDoubleFlexible()) _amount = value.ToDoubleFromCurrent();
                     // raised only at commit time: the binding uses UpdateSourceTrigger.LostFocus,
                     // so the source is written once when cell editing ends (and this then
                     // refreshes the displayed formatting), never on each keystroke while typing
@@ -128,6 +122,35 @@ namespace DWSIM.UI.Desktop.Editors
             });
 
             CellEditEnded += (s, e) => { if (Edited != null) Edited(); };
+
+            // Enter commits the cell and drops straight into editing the amount below, so a whole
+            // column of compositions can be typed quickly: type, Enter, type, Enter, as the
+            // WinForms grid allows. Handled in the tunnel phase so the grid's own Enter handling
+            // (which would only commit and move) does not also run and move the selection twice.
+            AddHandler(KeyDownEvent, OnEnterEditNext, RoutingStrategies.Tunnel, handledEventsToo: true);
+        }
+
+        /// <summary>Commits the current amount and opens the one below for editing, for fast entry.</summary>
+        private void OnEnterEditNext(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter || IsReadOnly) return;
+
+            CommitEdit(DataGridEditingUnit.Row, true);
+
+            var next = SelectedIndex + 1;
+            if (next >= 0 && next < _rows.Count)
+            {
+                SelectedIndex = next;
+                ScrollIntoView(_rows[next], Columns[1]);
+            }
+            e.Handled = true;
+
+            // the new row has to be realized before it can enter edit mode
+            Dispatcher.UIThread.Post(() =>
+            {
+                CurrentColumn = Columns[1];
+                BeginEdit();
+            }, DispatcherPriority.Background);
         }
 
         /// <summary>Raised after the user commits a cell, or one of the actions runs.</summary>
@@ -180,13 +203,19 @@ namespace DWSIM.UI.Desktop.Editors
             _phase = phase;
             _rows.Clear();
 
-            if (stream == null || phase == null || phase.Compounds == null) return;
+            if (stream != null && phase != null && phase.Compounds != null)
+            {
+                try
+                {
+                    var amounts = CompoundAmounts.Read(stream, phase, _basis, _su, _percentage);
+                    foreach (var item in amounts) _rows.Add(new Row(item.Key, item.Value, _nf));
+                }
+                catch (Exception) { }
+            }
 
-            Dictionary<string, double> amounts;
-            try { amounts = CompoundAmounts.Read(stream, phase, _basis, _su, _percentage); }
-            catch (Exception) { return; }
-
-            foreach (var item in amounts) _rows.Add(new Row(item.Key, item.Value, _nf));
+            // The Total label is this grid's only Edited subscriber; raise it here so the total
+            // reflects the loaded amounts immediately, not only after the first edit.
+            if (Edited != null) Edited();
         }
 
         // ---------------------------------------------------------------------
