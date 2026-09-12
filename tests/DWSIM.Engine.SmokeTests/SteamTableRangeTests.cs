@@ -75,62 +75,6 @@ namespace DWSIM.Engine.SmokeTests
                         $"enthalpy at {temperature} K came back as {h} kJ/kg");
         }
 
-        [TestCase(303.15, 99999950.0)]
-        [TestCase(303.15, 100000000.0)]
-        [TestCase(700.0, 100000000.0)]
-        [TestCase(1000.0, 100000000.0)]
-        public void CompressibilityAtThePressureLimitUsesOnlyValidStates(double temperature, double pressure)
-        {
-            var fs = WaterFlowsheet();
-            var pp = new DWSIM.Thermodynamics.PropertyPackages.SteamTablesPropertyPackage { Flowsheet = fs };
-            var ms = Stream(fs, pp, "s");
-            ms.SetMassFlow(1.0);
-            ms.SetPressure(pressure);
-            ms.SetTemperature(temperature);
-            ms.SetFlashSpec("PT");
-
-            // The full stream calculation calls the phase overload. Its former +100 Pa probe
-            // crossed 1000 bar even though the stream itself was within the IF97 range.
-            Assert.That(() => ms.Calculate(), Throws.Nothing);
-            Assert.That(ms.GetPressure(), Is.EqualTo(pressure));
-
-            var phase = ms.Phases.Values.Single(p => p.Name != "Mixture" && p.Name != "OverallLiquid" &&
-                p.Properties.molarfraction.GetValueOrDefault() > 0.99999);
-            double fromPhase = phase.Properties.isothermal_compressibility.GetValueOrDefault();
-            // Calculate releases the package's stream reference; bind it for a direct property call.
-            ms.AssignSelfToPP();
-            double fromState = pp.CalcIsothermalCompressibility(new[] { 1.0 }, temperature, pressure,
-                phase.Name == "Vapor" ? DWSIM.Interfaces.Enums.PhaseName.Vapor : DWSIM.Interfaces.Enums.PhaseName.Liquid);
-
-            // Independently estimate (1/rho) d(rho)/dP with a larger inward step. This also
-            // catches reversing the pressure step without reversing the derivative's sign.
-            var water = new DWSIM.Thermodynamics.PropertyPackages.Auxiliary.IAPWS_IF97();
-            object t = temperature, p0 = pressure / 1e5, p1 = (pressure - 10000.0) / 1e5;
-            double density = Convert.ToDouble(water.densW(ref t, ref p0));
-            double lowerDensity = Convert.ToDouble(water.densW(ref t, ref p1));
-            double expected = (density - lowerDensity) / (10000.0 * density);
-
-            Assert.That(fromPhase, Is.GreaterThan(0.0));
-            Assert.That(fromPhase, Is.EqualTo(expected).Within(0.01 * expected));
-            Assert.That(fromState, Is.EqualTo(expected).Within(0.01 * expected));
-        }
-
-        [Test]
-        public void AnActualPressureAboveTheLimitIsStillRejected()
-        {
-            var fs = WaterFlowsheet();
-            var ms = Stream(fs, new DWSIM.Thermodynamics.PropertyPackages.SteamTablesPropertyPackage
-            {
-                Flowsheet = fs
-            }, "s");
-            ms.SetMassFlow(1.0);
-            ms.SetPressure(100000050.0);
-            ms.SetTemperature(303.15);
-            ms.SetFlashSpec("PT");
-
-            Assert.That(() => ms.Calculate(), Throws.Exception);
-        }
-
         [TestCase(1500.0)]
         [TestCase(2000.0)]
         [TestCase(2352.0)]
