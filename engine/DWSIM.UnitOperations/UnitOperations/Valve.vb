@@ -167,6 +167,25 @@ Namespace UnitOperations
         Public Property FP As Double = 1.0
 
         ''' <summary>
+        ''' Dynamic mode only: compute the flow with the compressible orifice equations (isentropic nozzle
+        ''' with choking for gas, Cd A sqrt(2 rho dP) for liquid and homogeneous two-phase) instead of the
+        ''' ISA Kv forms. This is the model for a restriction orifice or a blowdown valve given by bore and
+        ''' discharge coefficient; the opening characteristic still scales the open area.
+        ''' </summary>
+        Public Property UseOrificeFlow As Boolean = False
+
+        ''' <summary>Orifice bore, m (dynamic orifice model).</summary>
+        Public Property OrificeDiameter As Double = 0.01
+
+        ''' <summary>Discharge coefficient of the orifice, 0.6 to 0.65 for a thin sharp-edged plate (dynamic orifice model).</summary>
+        Public Property OrificeDischargeCoefficient As Double = 0.62
+
+        ''' <summary>Pressure at the orifice throat from the last dynamic step, Pa (equal to the downstream pressure when the flow is not choked).</summary>
+        <Xml.Serialization.XmlIgnore> Public Property OrificeThroatPressure As Double = 0.0
+        Private _throatRatio As Double = 0.0
+
+
+        ''' <summary>
         ''' Gets or sets the valve style modifier (Fs). Default is 1.0.
         ''' </summary>
         Public Property Fs As Double = 1.0
@@ -628,7 +647,11 @@ Namespace UnitOperations
 
                         P2 = oms.GetPressure
 
-                        If CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid Then
+                        If UseOrificeFlow AndAlso (CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid) Then
+                            'restriction orifice / blowdown valve by bore and Cd: compressible orifice equations,
+                            'the opening characteristic scaling the open area
+                            Wi = OrificeMassFlow(ims, P1, P2, Ti, If(FC > 0.0, Kvc / FC, 1.0))
+                        ElseIf CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid Then
                             'the same ISA/IEC 60534 forms as the steady-state sizing, so a wide-open valve,
                             'a blowdown valve or a restriction orifice (Kv from KvFromOrifice) chokes where it
                             'should: gas at x = Fk.xT, liquid at dP = FL^2 (P1 - FF.Pv). All forms return kg/h.
@@ -967,6 +990,60 @@ Namespace UnitOperations
         ''' </summary>
         ''' <param name="diameter">Bore, m.</param>
         ''' <param name="dischargeCoefficient">Cd, typically 0.6 to 0.65 for a thin sharp-edged orifice, 0.8 to 0.9 for a nozzle.</param>
+        ''' <summary>
+        ''' Mass flow (kg/s) through the orifice between P1 and P2 (Pa) at the inlet conditions of the
+        ''' stream. Gas: the isentropic nozzle form, W = Cd A sqrt(2 rho1 P1 k/(k-1) (r^(2/k) - r^((k+1)/k)))
+        ''' with r = P2/P1 held at the critical ratio (2/(k+1))^(k/(k-1)) once the flow chokes. Liquid and
+        ''' two-phase: the incompressible form with the phase or mixture density. openFraction scales the
+        ''' area (0 to 1).
+        ''' </summary>
+        Public Function OrificeMassFlow(ims As MaterialStream, P1 As Double, P2 As Double, T1 As Double, openFraction As Double) As Double
+
+            If P2 >= P1 OrElse P1 <= 0.0 Then Return 0.0
+            Dim area = Math.PI * OrificeDiameter ^ 2 / 4.0 * Math.Max(0.0, Math.Min(1.0, openFraction))
+            Dim cd = OrificeDischargeCoefficient
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+            If rho <= 0.0 OrElse Double.IsNaN(rho) Then Return 0.0
+            Dim vapourFraction = ims.Phases(2).Properties.molarfraction.GetValueOrDefault
+
+            'Homogeneous-equilibrium nozzle on the package's own isentrope: exact for a real gas, and
+            'the only form that gets a dense supercritical fluid or a flashing liquid right, where the
+            'choke sits far above the ideal-gas critical ratio. The closed forms below stay as the
+            'fallback when the flash cannot follow the isentrope.
+            Try
+                Dim h0 = ims.Phases(0).Properties.enthalpy.GetValueOrDefault
+                Dim s0 = ims.Phases(0).Properties.entropy.GetValueOrDefault
+                If Not Double.IsNaN(h0 + s0) Then
+                    ims.PropertyPackage.CurrentMaterialStream = ims
+                    Dim throat As Double
+                    Dim guess = If(_throatRatio > 0.0, _throatRatio * P1, 0.0)
+                    Dim G = ims.PropertyPackage.FlashBase.HEMMassFlux(ims.PropertyPackage.RET_VMOL(PropertyPackages.Phase.Mixture), h0, s0, P1, P2, T1, ims.PropertyPackage, throat, guess)
+                    If G > 0.0 AndAlso Not Double.IsNaN(G) AndAlso Not Double.IsInfinity(G) Then
+                        OrificeThroatPressure = throat
+                        _throatRatio = throat / P1
+                        Return cd * area * G
+                    End If
+                End If
+            Catch ex As Exception
+            End Try
+
+            If vapourFraction > 0.99 Then
+                ims.PropertyPackage.CurrentMaterialStream = ims
+                Dim cpig = ims.PropertyPackage.AUX_CPm(PropertyPackages.Phase.Vapor, T1) * ims.Phases(0).Properties.molecularWeight.GetValueOrDefault
+                Dim k = cpig / (cpig - 8.314)
+                If Double.IsNaN(k) OrElse k <= 1.0 Then k = 1.3
+                Dim rc = (2.0 / (k + 1.0)) ^ (k / (k - 1.0))
+                Dim r = Math.Max(P2 / P1, rc)
+                Dim term = k / (k - 1.0) * (r ^ (2.0 / k) - r ^ ((k + 1.0) / k))
+                If term <= 0.0 Then Return 0.0
+                Return cd * area * Math.Sqrt(2.0 * rho * P1 * term)
+            Else
+                Return cd * area * Math.Sqrt(2.0 * rho * (P1 - P2))
+            End If
+
+        End Function
+
+
         Public Shared Function KvFromOrifice(diameter As Double, dischargeCoefficient As Double) As Double
             Dim area = Math.PI * diameter ^ 2 / 4.0
             Return 3600.0 * dischargeCoefficient * area * Math.Sqrt(2.0 * 100000.0 / 1000.0)
