@@ -41,7 +41,7 @@ The full changelog including souce code changes can be viewed at https://github.
 
 Version 10.2.8
 
-- [NEW] Vessel Depressurization (Blowdown) utility on both interfaces: orifice or valve blowdown, adiabatic, API 521 fire and isothermal cases, MDMT and hot-metal checks, plots and time series; validated against published blowdown data and documented in the user guide
+- [NEW] Vessel Depressurization (Blowdown) tool on the Dynamics menu of both interfaces: orifice or valve blowdown, adiabatic, API 521 fire and isothermal cases, MDMT and hot-metal checks, plots and time series; validated against published blowdown data and documented in the user guide
 - [NEW] Dynamic Separator/Tank: gas blow-by through the liquid outlet and liquid carry-over through the gas outlet from the nozzle heights, with a homogeneous outlet option for pipe blowdowns
 - [NEW] Compound property editor on both interfaces: grouped properties with explanations, equation explainer with units and a try-it box, in-place apply with undo, linked JSON file with reload, save and diff, and a data validator
 - [CHG] Dynamic Separator/Tank: internal energy balance (UV), wetted/dry wall split with conduction across the thickness, natural-convection film coefficients with a user factor, API 521 fire case, minimum fluid and wall temperature tracking; Minimum Pressure is a floor that keeps the level
@@ -50,6 +50,7 @@ Version 10.2.8
 - [CHG] Separator sizing window explains each parameter and which criterion set the diameter
 - [CHG] Tools and Utilities menus sorted alphabetically after the extensions load
 - [CHG] Cross-platform interface asks for confirmation before closing with simulations open
+- [CHG] Dynamics Wizard checks the holdup volumes of heaters, coolers, exchangers, machines, reactors and column drums against the flow they carry, with separate targets for liquid and gas, sizes the flow conductance of heaters and exchangers from the steady-state pressure drop and that of machines as a small internal loss, and points out walls with no thermal mass
 - [FIX] The Naphtali-Sandholm (simultaneous) method now solves a rigorous column with no condenser, such as a reboiled stripper or an absorber, instead of stopping at the first step (issue #74).
 - [FIX] The Naphtali-Sandholm method no longer stalls on larger columns where its per-variable step limit changed the search direction, and the sample absorber now converges (issue #75).
 - [FIX] A column converged by the Naphtali-Sandholm method is no longer rejected by the mass balance check over a trace compound that closed to the solver's own limit (issue #76).

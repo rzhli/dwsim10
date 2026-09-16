@@ -38,7 +38,9 @@ public sealed class DepressurizationWindow : Window
     private readonly List<(string Tag, string Name)> _streams;
     private ComboBox _streamBox = null!;
     private TextBox _pBox = null!, _tBox = null!;
-    private Button _run = null!, _cancel = null!, _export = null!;
+    private Button _run = null!, _cancel = null!, _export = null!, _load = null!, _save = null!;
+    private ScrollViewer _left = null!;
+    private bool _keepState;   // a loaded case keeps its own pressure and temperature when the stream is re-selected
     private readonly TextBlock _status = new() { FontSize = UiScale.Font(11), Opacity = 0.85, TextWrapping = TextWrapping.Wrap };
     private readonly ProgressBar _progress = new() { Minimum = 0, Maximum = 1, Height = 6, IsVisible = false };
     private readonly StackPanel _summary = new() { Spacing = 2 };
@@ -83,17 +85,83 @@ public sealed class DepressurizationWindow : Window
         IconHelper.ApplyWindowIcon(this);
         Content = BuildContent();
         if (_streams.Count > 0) _streamBox.SelectedIndex = 0;
+        AutoLoadCase();
+    }
+
+    /// <summary>A case file with the flowsheet's own name, next to it, is the study that belongs to it: load it on opening.</summary>
+    private void AutoLoadCase()
+    {
+        var path = CaseFilePathOfFlowsheet();
+        if (path == null) return;
+        try
+        {
+            ApplyLoadedCase(DepressurizationInput.LoadFromFile(path), System.IO.Path.GetFileName(path));
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "The case file next to the flowsheet could not be loaded: " + ex.Message;
+        }
+    }
+
+    private string? CaseFilePathOfFlowsheet()
+    {
+        var fp = _fs.FlowsheetOptions?.FilePath;
+        if (string.IsNullOrWhiteSpace(fp)) return null;
+        var path = System.IO.Path.ChangeExtension(fp, DepressurizationInput.FileExtension);
+        return System.IO.File.Exists(path) ? path : null;
+    }
+
+    private void ApplyLoadedCase(DepressurizationInput loaded, string fileName)
+    {
+        _in.CopyFrom(loaded);
+        if (_streams.All(x => x.Name != _in.SourceStreamName)) _in.SourceStreamName = _streams.Count > 0 ? _streams[0].Name : "";
+        _keepState = true;
+        try { _left.Content = BuildInputPanel(); }
+        finally { _keepState = false; }
+        _status.Text = "Loaded " + fileName + (loaded.SourceStreamName != _in.SourceStreamName && loaded.SourceStreamName != "" ? " (the stream '" + loaded.SourceStreamName + "' is not in this flowsheet; pick one)." : ".");
     }
 
     // ---------------------------------------------------------------- layout
 
     private Control BuildContent()
     {
+        _left = new ScrollViewer { Content = BuildInputPanel(), Padding = new Thickness(10, 8, 10, 8), AllowAutoHide = false };
+
+        _run = new Button { Content = "Run", Width = 110, IsDefault = true };
+        _run.Classes.Add("dialog");
+        _run.Click += async (_, _) => await RunAsync();
+        _cancel = new Button { Content = "Stop", Width = 90, IsEnabled = false };
+        _cancel.Classes.Add("dialog");
+        _cancel.Click += (_, _) => _cts?.Cancel();
+        _export = new Button { Content = "Export CSV...", Width = 130, IsEnabled = false };
+        _export.Classes.Add("dialog");
+        _export.Click += async (_, _) => await ExportAsync();
+        _load = new Button { Content = "Load case...", Width = 120 };
+        _load.Classes.Add("dialog");
+        _load.Click += async (_, _) => await LoadCaseAsync();
+        _save = new Button { Content = "Save case...", Width = 120 };
+        _save.Classes.Add("dialog");
+        _save.Click += async (_, _) => await SaveCaseAsync();
+        var topButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 8, 12, 4), Children = { _load, _save } };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 6, 12, 8), Children = { _run, _cancel, _export } };
+
+        var leftDock = new DockPanel();
+        DockPanel.SetDock(topButtons, global::Avalonia.Controls.Dock.Top);
+        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
+        leftDock.Children.Add(topButtons);
+        leftDock.Children.Add(buttons);
+        leftDock.Children.Add(_left);
+        return BuildResultsSide(leftDock);
+    }
+
+    /// <summary>The input rows, bound to the current case; rebuilt when a case is loaded.</summary>
+    private AvaloniaEditorPanel BuildInputPanel()
+    {
         var p = new AvaloniaEditorPanel();
 
         p.CreateAndAddLabelRow("Fluid");
         p.CreateAndAddDescriptionRow("The vessel is filled with the composition of the stream you pick, flashed at the initial pressure and temperature below. The stream's own flow does not matter.");
-        _streamBox = p.CreateAndAddDropDownRow("Source stream", _streams.Select(s => s.Tag).ToList(), -1, (dd, _) => OnStreamChanged());
+        _streamBox = p.CreateAndAddDropDownRow("Source stream", _streams.Select(s => s.Tag).ToList(), Math.Max(-1, _streams.FindIndex(x => x.Name == _in.SourceStreamName)), (dd, _) => OnStreamChanged());
         _pBox = p.CreateAndAddTextBoxRow(_nf, "Initial pressure (" + _su.pressure + ")", Show(_su.pressure, _in.InitialPressure),
             (tb, _) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _in.InitialPressure = cv.ConvertToSI(_su.pressure, v); });
         _tBox = p.CreateAndAddTextBoxRow(_nf, "Initial temperature (" + _su.temperature + ")", Show(_su.temperature, _in.InitialTemperature),
@@ -155,28 +223,14 @@ public sealed class DepressurizationWindow : Window
         p.CreateAndAddLabelRow("Integration");
         p.CreateAndAddTextBoxRow(_nf, "Time step (s)", _in.TimeStep, (tb, _) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _in.TimeStep = v; });
         p.CreateAndAddTextBoxRow(_nf, "Duration (s)", _in.Duration, (tb, _) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _in.Duration = v; });
-        p.CreateAndAddTextBoxRow(_nf, "Stop at pressure (" + _su.pressure + ", 0 = run to the end)", 0.0,
+        p.CreateAndAddTextBoxRow(_nf, "Stop at pressure (" + _su.pressure + ", 0 = run to the end)", _in.StopAtPressure > 0 ? Show(_su.pressure, _in.StopAtPressure) : 0.0,
             (tb, _) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _in.StopAtPressure = v > 0 ? cv.ConvertToSI(_su.pressure, v) : 0.0; });
         p.CreateAndAddDescriptionRow("API 521 asks for the pressure to fall to the lower of 50 % of the design pressure or 6.9 barg within 15 minutes; enter that pressure to read the time straight off the results.");
+        return p;
+    }
 
-        var left = new ScrollViewer { Content = p, Padding = new Thickness(10, 8, 10, 8), AllowAutoHide = false };
-
-        _run = new Button { Content = "Run", Width = 110, IsDefault = true };
-        _run.Classes.Add("dialog");
-        _run.Click += async (_, _) => await RunAsync();
-        _cancel = new Button { Content = "Stop", Width = 90, IsEnabled = false };
-        _cancel.Classes.Add("dialog");
-        _cancel.Click += (_, _) => _cts?.Cancel();
-        _export = new Button { Content = "Export CSV...", Width = 130, IsEnabled = false };
-        _export.Classes.Add("dialog");
-        _export.Click += async (_, _) => await ExportAsync();
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 6, 12, 8), Children = { _run, _cancel, _export } };
-
-        var leftDock = new DockPanel();
-        DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
-        leftDock.Children.Add(buttons);
-        leftDock.Children.Add(left);
-
+    private Control BuildResultsSide(Control leftDock)
+    {
         _plotP.PlotTitle = "Vessel pressure";
         _plotP.XAxisTitle = "time (s)";
         _plotP.YAxisTitle = _su.pressure;
@@ -208,13 +262,16 @@ public sealed class DepressurizationWindow : Window
         right.Children.Add(_table);
         var rightScroll = new ScrollViewer { Content = right, AllowAutoHide = false };
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("470,Auto,*") };
+        // inputs and results side by side, the split draggable
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("470,6,*") };
+        grid.ColumnDefinitions[0].MinWidth = 320;
+        grid.ColumnDefinitions[2].MinWidth = 320;
         Grid.SetColumn(leftDock, 0);
-        var rule = new Border { Width = 1, Background = new SolidColorBrush(Color.FromArgb(70, 128, 128, 128)), Margin = new Thickness(2, 8, 2, 8) };
-        Grid.SetColumn(rule, 1);
+        var splitter = new GridSplitter { ResizeDirection = GridResizeDirection.Columns, Background = new SolidColorBrush(Color.FromArgb(70, 128, 128, 128)), Margin = new Thickness(0, 8, 0, 8) };
+        Grid.SetColumn(splitter, 1);
         Grid.SetColumn(rightScroll, 2);
         grid.Children.Add(leftDock);
-        grid.Children.Add(rule);
+        grid.Children.Add(splitter);
         grid.Children.Add(rightScroll);
 
         var bottom = new StackPanel { Margin = new Thickness(12, 0, 12, 8), Spacing = 4 };
@@ -235,6 +292,7 @@ public sealed class DepressurizationWindow : Window
     {
         if (_streamBox.SelectedIndex < 0) return;
         _in.SourceStreamName = _streams[_streamBox.SelectedIndex].Name;
+        if (_keepState) return;
         if (_fs.SimulationObjects.TryGetValue(_in.SourceStreamName, out var o) && o is IMaterialStream ms)
         {
             var p = ms.GetPressure();
@@ -355,6 +413,55 @@ public sealed class DepressurizationWindow : Window
     }
 
     // ---------------------------------------------------------------- export
+
+    // ---------------------------------------------------------------- case files
+
+    private static readonly FilePickerFileType CaseType = new("Depressurization case") { Patterns = new[] { "*" + DepressurizationInput.FileExtension } };
+
+    private async Task LoadCaseAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Load a depressurization case",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { CaseType }
+        });
+        if (files.Count == 0) return;
+        var path = files[0].TryGetLocalPath();
+        if (path == null) { _status.Text = "The file could not be read from that location."; return; }
+        try
+        {
+            ApplyLoadedCase(DepressurizationInput.LoadFromFile(path), files[0].Name);
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "The case could not be loaded: " + ex.Message;
+        }
+    }
+
+    private async Task SaveCaseAsync()
+    {
+        if (_streamBox.SelectedIndex >= 0) _in.SourceStreamName = _streams[_streamBox.SelectedIndex].Name;
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save the depressurization case",
+            SuggestedFileName = (string.IsNullOrWhiteSpace(_fs.FlowsheetOptions?.FilePath) ? "depressurization" : System.IO.Path.GetFileNameWithoutExtension(_fs.FlowsheetOptions.FilePath)) + DepressurizationInput.FileExtension,
+            DefaultExtension = DepressurizationInput.FileExtension.TrimStart('.'),
+            FileTypeChoices = new[] { CaseType }
+        });
+        if (file == null) return;
+        var path = file.TryGetLocalPath();
+        if (path == null) { _status.Text = "The file could not be written to that location."; return; }
+        try
+        {
+            _in.SaveToFile(path);
+            _status.Text = "Saved " + file.Name + ".";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "The case could not be saved: " + ex.Message;
+        }
+    }
 
     private async Task ExportAsync()
     {
