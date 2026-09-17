@@ -103,12 +103,18 @@
         <MenuItem Header="_True Critical Point..."    Name="MenuUtilTCP" />
         <MenuItem Header="Petroleum Cold _Flow Properties..." Name="MenuColdFlow" />
         <MenuItem Header="Natural Gas H_ydrates..."   Name="MenuHydrates" />
+        <Separator />
+        <MenuItem Header="_McCabe-Thiele Diagram..."  Name="MenuMcCabeThiele" />
+        <MenuItem Header="_Equation of State Explorer..." Name="MenuEosExplorer" />
+        <MenuItem Header="Property Package _Comparison..." Name="MenuPackageComparison" />
       </MenuItem>
       <MenuItem Header="Flowsheet _Analysis">
         <MenuItem Header="_Sensitivity Analysis..."  Name="MenuSensitivity" />
         <MenuItem Header="_Multivariate Optimizer..." Name="MenuOptimizer" />
         <MenuItem Header="Mass and Energy _Balance Summary..." Name="MenuBalance" />
         <MenuItem Header="Flowsheet Chec_k..."   Name="MenuFlowsheetCheck" InputGesture="F8" />
+        <MenuItem Header="E_xplain Result..."   Name="MenuExplainResult" />
+        <MenuItem Header="Scenario Compa_rison..."   Name="MenuScenarioComparison" />
         <MenuItem Header="Property _Chart..."        Name="MenuPropertyChart" />
       </MenuItem>
       <MenuItem Header="_Results">

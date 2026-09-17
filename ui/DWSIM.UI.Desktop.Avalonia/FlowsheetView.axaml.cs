@@ -1996,6 +1996,24 @@ public partial class FlowsheetView : UserControl
             if (_flowsheet == null) return;
             if (utility is DWSIM.Automation.DynamicRunner.ColumnInternals.ColumnInternalsUtility ci) new ColumnInternalsWindow(_flowsheet, ci).Show(HostWindow);
         };
+        MenuMcCabeThiele.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The McCabe-Thiele diagram needs two compounds in the simulation."); return; }
+            new McCabeThieleWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuPackageComparison.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The property package comparison needs two compounds in the simulation."); return; }
+            new PackageComparisonWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuEosExplorer.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 1) { AppendLog("The equation of state explorer needs a compound in the simulation."); return; }
+            new EosExplorerWindow(_flowsheet).Show(HostWindow);
+        };
         MenuPsvSizing.Click += (_, _) =>
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
@@ -2027,6 +2045,16 @@ public partial class FlowsheetView : UserControl
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
             new BalanceSummaryWindow(_flowsheet).Show();
+        };
+        MenuScenarioComparison.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new ScenarioComparisonWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuExplainResult.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new ExplainResultWindow(_flowsheet, _surface?.SelectedObject?.Name).Show(HostWindow);
         };
         MenuFlowsheetCheck.Click += (_, _) =>
         {
@@ -2656,6 +2684,14 @@ public partial class FlowsheetView : UserControl
                 catch (Exception ex) { AppendLog($"Debug error: {ex.Message}"); }
             };
             ctx.Items.Add(debug);
+
+            // Why this result: the balances and the diagram of the solved object
+            if (simObj != null && DWSIM.Automation.DynamicRunner.Insight.UnitInsightStudy.Supports(simObj))
+            {
+                var explain = new MenuItem { Header = "Explain Result...", Icon = IconHelper.MIcon("💡") }; // light bulb
+                explain.Click += (_, _) => { if (_flowsheet != null) new ExplainResultWindow(_flowsheet, simObj.Name).Show(HostWindow); };
+                ctx.Items.Add(explain);
+            }
 
             ctx.Items.Add(new Separator());
 
