@@ -698,6 +698,210 @@ namespace DWSIM.Engine.SmokeTests
             Assert.That(double.IsNaN((double)c.ColumnPressureDrop), "the column carries the rated stage pressures");
         }
 
+        /// <summary>A packed section with a bed height sets the number of stages of the column from the HETP: stages are added
+        /// evenly or removed where nothing is connected, the feeds keep their stages, the case is kept in the column and the
+        /// column solves again with the new count.</summary>
+        [Test]
+        public void PackedBedsRestageTheColumnFromTheBedHeight()
+        {
+            var flowsheet = Load("ExtractiveDistillation.dwxmz");
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty);
+            var name = ColumnInternalsStudy.ColumnNames(flowsheet)[0];
+            var column = (DWSIM.UnitOperations.UnitOperations.Column)ColumnInternalsStudy.FindColumn(flowsheet, name);
+            int n = column.Stages.Count;
+            var feedIds = column.MaterialStreams.Values.Where(si => si.StreamBehavior == DWSIM.UnitOperations.UnitOperations.Auxiliary.SepOps.StreamInformation.Behavior.Feed).Select(si => si.AssociatedStage).ToList();
+            Assert.That(feedIds, Is.Not.Empty);
+            var feedStagesBefore = feedIds.Select(id => column.StageIndex(id)).ToList();
+
+            var inp = new ColumnInternalsInput { ColumnName = name, MaxIterations = 3, IterationTolerance = 0.05 };
+            var bed = new InternalsSection { Name = "Bed", FromStage = 2, ToStage = n - 1, Type = InternalType.RandomPacking, PackingName = "Pall rings Metal 50 mm", Diameter = 0 };
+            inp.Sections.Add(bed);
+            var first = ColumnInternalsStudy.Run(flowsheet, inp);
+            var hetp = first.Sections[0].AverageHETP;
+            Assert.That(hetp, Is.InRange(0.1, 3.0));
+
+            // a bed 1.5 times taller than the stages the column has: stages are inserted
+            bed.BedHeight = 1.5 * (n - 2) * hetp;
+            var msg = ColumnInternalsStudy.ApplyStagesToColumn(column, first, inp);
+            TestContext.Out.WriteLine(msg);
+            int expected = (int)Math.Round(bed.BedHeight / hetp);
+            Assert.That(column.Stages.Count, Is.EqualTo(expected + 2), "stages after growing the bed");
+            Assert.That(column.NumberOfStages, Is.EqualTo(column.Stages.Count));
+            Assert.That(bed.ToStage, Is.EqualTo(column.Stages.Count - 1), "the section range follows");
+            foreach (var id in feedIds) Assert.That(column.StageIndex(id), Is.InRange(1, column.Stages.Count - 2), "the feed keeps a stage inside the column");
+            Assert.That(column.Stages[3].StageHeight, Is.EqualTo(hetp).Within(0.5 * hetp).Or.EqualTo(0.0), "stage heights carry the HETP where rated");
+            Assert.That(column.EstimatedDiameter, Is.InRange(0.2, 10));
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty, "the column solves with the new stages");
+            Assert.That(column.Calculated);
+
+            // the case lives in the column
+            ColumnInternalsStudy.StoreCaseInColumn(column, inp);
+            var kept = ColumnInternalsStudy.LoadCaseFromColumn(column);
+            Assert.That(kept, Is.Not.Null);
+            Assert.That(kept.Sections[0].ToStage, Is.EqualTo(bed.ToStage));
+            Assert.That(column.SaveData().Any(x => x.Name == "InternalsCase"), "saved with the column");
+
+            // a shorter bed: stages without connections are removed and the feeds stay
+            var second = ColumnInternalsStudy.Run(flowsheet, inp);
+            bed.BedHeight = 0.5 * (bed.ToStage - bed.FromStage + 1) * second.Sections[0].AverageHETP;
+            int before = column.Stages.Count;
+            msg = ColumnInternalsStudy.ApplyStagesToColumn(column, second, inp);
+            TestContext.Out.WriteLine(msg);
+            Assert.That(column.Stages.Count, Is.LessThan(before));
+            foreach (var id in feedIds) Assert.That(column.StageIndex(id), Is.InRange(1, column.Stages.Count - 2), "the feed stage was not removed");
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty, "the column solves after the shrink");
+
+            // the iteration re-stages on its own and settles
+            bed.BedHeight = (bed.ToStage - bed.FromStage + 1) * second.Sections[0].AverageHETP * 1.2;
+            var it = ColumnInternalsStudy.RunIterating(flowsheet, inp, line => TestContext.Out.WriteLine(line));
+            Assert.That(it.Input, Is.Not.Null);
+            Assert.That(column.Calculated);
+            Assert.That(it.Input.Sections[0].ToStage - it.Input.Sections[0].FromStage + 1, Is.EqualTo(column.Stages.Count - 2), "the case follows the column");
+        }
+
+        /// <summary>The dynamic column reads a packed stage through its bed correlations: the pressure drop and holdup inversions recover
+        /// the velocities they were built from, the rating marks the stages of a packed section, and the dynamic model runs on them.</summary>
+        [Test]
+        public void PackedStagesDriveTheDynamicColumnThroughTheBedCorrelations()
+        {
+            var pall = PackingCatalogue.Find("Pall rings Metal 50 mm");
+            var mella = PackingCatalogue.Find("Mellapak Sheet metal 250Y");
+            double rhoV = 3.0, rhoL = 650, muV = 8e-6, muL = 3e-4, sigma = 0.018;
+            foreach (var pk in new[] { pall, mella })
+            {
+                var st = new DWSIM.UnitOperations.UnitOperations.Auxiliary.SepOps.Stage(Guid.NewGuid().ToString()) { PackingModel = pk.Structured ? 2 : 0 };
+                double uV = 1.0, uL = 0.005;
+                var dp = DWSIM.UnitOperations.UnitOperations.Column.PackedBedPressureDrop(st, pk, uV, uL, rhoV, rhoL, muV, muL, sigma, 1.0);
+                Assert.That(dp, Is.InRange(20, 2000), pk.DisplayName + " dP/m");
+                var back = DWSIM.UnitOperations.UnitOperations.Column.PackedBedVaporVelocity(st, pk, dp, uL, rhoV, rhoL, muV, muL, sigma, 1.0);
+                Assert.That(back, Is.EqualTo(uV).Within(1e-3), pk.DisplayName + " vapour velocity recovered from its pressure drop");
+                var hold = DWSIM.UnitOperations.UnitOperations.Column.PackedBedHoldup(st, pk, uL, rhoV, rhoL, muL, sigma);
+                Assert.That(hold, Is.InRange(0.005, 0.2), pk.DisplayName + " holdup");
+                var uLback = DWSIM.UnitOperations.UnitOperations.Column.PackedBedLiquidVelocity(st, pk, hold, rhoV, rhoL, muL, sigma);
+                Assert.That(uLback, Is.EqualTo(uL).Within(1e-5), pk.DisplayName + " liquid velocity recovered from its holdup");
+                TestContext.Out.WriteLine("{0}: dP {1:F0} Pa/m at u_V {2}, holdup {3:F4} at u_L {4}", pk.DisplayName, dp, uV, hold, uL);
+            }
+
+            var flowsheet = Load("ExtractiveDistillation.dwxmz");
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty);
+            var name = ColumnInternalsStudy.ColumnNames(flowsheet)[0];
+            var column = (DWSIM.UnitOperations.UnitOperations.Column)ColumnInternalsStudy.FindColumn(flowsheet, name);
+            int n = column.Stages.Count;
+            var inp = new ColumnInternalsInput { ColumnName = name };
+            inp.Sections.Add(new InternalsSection { Name = "Bed", FromStage = 2, ToStage = n - 1, Type = InternalType.RandomPacking, PackingName = pall.DisplayName });
+            var res = ColumnInternalsStudy.Run(flowsheet, inp);
+            ColumnInternalsStudy.ApplyToColumn(column, res, true, true);
+            Assert.That(column.Stages.Skip(1).Take(n - 2).All(x => x.IsPacked), "the bed stages are marked packed");
+            Assert.That(column.Stages[0].IsPacked, Is.False);
+            Assert.That(column.Stages[2].PackingName, Is.EqualTo(pall.DisplayName));
+            Assert.That(column.Stages[2].StageHeight, Is.InRange(0.05, 3.0));
+            Assert.That(string.Concat(column.SaveData().Select(x => x.ToString())), Does.Contain("IsPacked"), "the packing travels with the stage");
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty);
+
+            // a few seconds of dynamics on the packed column
+            column.CreateDynamicProperties();
+            var integrator = new DWSIM.DynamicsManager.Integrator { ID = "packed", Description = "packed", IntegrationStep = TimeSpan.FromSeconds(1), Duration = TimeSpan.FromSeconds(5), RealTime = false };
+            var schedule = new DWSIM.DynamicsManager.Schedule { ID = "packed", Description = "packed", CurrentIntegrator = "packed", UseCurrentStateAsInitial = true };
+            flowsheet.DynamicsManager.IntegratorList["packed"] = integrator;
+            flowsheet.DynamicsManager.ScheduleList["packed"] = schedule;
+            flowsheet.DynamicsManager.CurrentSchedule = "packed";
+            var result = new DWSIM.Automation.DynamicRunner.IntegratorRunner(flowsheet).Run(new DWSIM.Automation.DynamicRunner.IntegratorRunOptions { Schedule = "packed", RestoreInitialState = false });
+            TestContext.Out.WriteLine("dynamics: {0}", result);
+            for (int i = 1; i < n - 1; i++)
+            {
+                Assert.That(column.Stages[i].Vout.Value, Is.GreaterThan(0).And.LessThan(1e6), "vapour leaving packed stage " + (i + 1));
+                Assert.That(column.Stages[i].Lout.Value, Is.GreaterThan(0).And.LessThan(1e6), "liquid leaving packed stage " + (i + 1));
+            }
+        }
+
+        // ------------------------------------------------------------------ rate-based column
+
+        /// <summary>Perry 7th ed. Example 12 (ethylbenzene-styrene sieve tray): with h_L 23.23 mm, froth density 0.284, 74 % of flood,
+        /// D_G 2.09e-5 and D_L 3.74e-9 m2/s, lambda 1.17 the Chan-Fair route gives N_G 1.51, N_L 18.6 and E_OG 0.75.</summary>
+        [Test]
+        public void ChanFairPointEfficiencyReproducesPerryExample12()
+        {
+            double phi = 0.284, hL = 0.02323, Aa = 4.41, QG = 14.73, QL = 0.00727;
+            var tG = (1 - phi) * hL * Aa / (phi * QG);
+            Assert.That(tG, Is.EqualTo(0.0175).Within(0.0005));
+            var ng = TrayMassTransfer.GasTransferUnits(TrayMassTransferMethod.ChanFair, 0.05, 0, 0, 1, 2.09e-5, hL, phi, tG, 0.74);
+            Assert.That(ng, Is.EqualTo(1.51).Within(0.03), "N_G");
+            var tL = hL * Aa / QL;
+            Assert.That(tL, Is.EqualTo(14.1).Within(0.2));
+            var nl = TrayMassTransfer.LiquidTransferUnits(3.74e-9, 3.34 * Math.Sqrt(0.481), tL);
+            Assert.That(nl, Is.EqualTo(18.6).Within(0.6), "N_L");
+            var nog = 1 / (1 / ng + 1.17 / nl);
+            Assert.That(1 - Math.Exp(-nog), Is.EqualTo(0.75).Within(0.01), "E_OG");
+            Assert.That(TrayMassTransfer.FrothDensity(3.34, 0.481, 841), Is.EqualTo(0.284).Within(0.01), "froth density");
+            Assert.That(TrayMassTransfer.MurphreeFromPoint(0.75, 1.17, 0), Is.EqualTo(0.75).Within(1e-9), "fully mixed liquid");
+            Assert.That(TrayMassTransfer.MurphreeFromPoint(0.75, 1.17, 1e5), Is.EqualTo((Math.Exp(1.17 * 0.75) - 1) / 1.17).Within(1e-6), "plug flow");
+            var partial = TrayMassTransfer.MurphreeFromPoint(0.75, 1.17, 10);
+            Assert.That(partial, Is.InRange(0.75, (Math.Exp(1.17 * 0.75) - 1) / 1.17), "partial mixing between the limits");
+            Assert.That(TrayMassTransfer.PackedStageEfficiency(1.0, 1.5), Is.EqualTo(1.0).Within(1e-9));
+            Assert.That(TrayMassTransfer.PackedStageEfficiency(0.5, 1.0), Is.EqualTo(0.5).Within(1e-9));
+            var dg = Diffusivities.Fuller(298.15, 101325, 78.1, 28.0, 90.7, 17.9);
+            Assert.That(dg, Is.EqualTo(0.96e-5).Within(0.15e-5), "benzene in nitrogen, Fuller");
+            var dl = Diffusivities.WilkeChang(298.15, 0.89e-3, 18.0, 2.6, 96.5);
+            Assert.That(dl, Is.EqualTo(1.0e-9).Within(0.3e-9), "benzene in water, Wilke-Chang");
+        }
+
+        /// <summary>The rate-based column: efficiencies from the mass transfer on the sieve trays of the extractive distillation
+        /// sample, settled by the solve-rate-solve passes, on the Wang-Henke and on the Naphtali-Sandholm solvers, and on a packed bed.</summary>
+        [Test]
+        public void TheRateBasedColumnSettlesItsEfficienciesFromMassTransfer()
+        {
+            var flowsheet = Load("ExtractiveDistillation.dwxmz");
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty);
+            var name = ColumnInternalsStudy.ColumnNames(flowsheet)[0];
+            var column = (DWSIM.UnitOperations.UnitOperations.Column)ColumnInternalsStudy.FindColumn(flowsheet, name);
+            int n = column.Stages.Count;
+            var inp = new ColumnInternalsInput { ColumnName = name };
+            inp.Sections.Add(new InternalsSection { Name = "Trays", FromStage = 2, ToStage = n - 1, Type = InternalType.SieveTray });
+            var rated = ColumnInternalsStudy.Run(flowsheet, inp);
+            ColumnInternalsStudy.ApplyToColumn(column, rated, false, false);   // diameter and heights
+            ColumnInternalsStudy.StoreCaseInColumn(column, inp);
+            var oconnell = rated.Sections[0].Stages.Where(r => !double.IsNaN(r.OConnellEfficiency)).Select(r => r.OConnellEfficiency).Average();
+
+            column.RateBased = true;
+            column.RateBasedTrayMethod = 1;
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty, "rate-based Wang-Henke");
+            Assert.That(column.RateBasedEfficiencies, Is.Not.Null);
+            foreach (var l in column.RateBasedLog) TestContext.Out.WriteLine(l);
+            foreach (var l in column.RateBasedStageNotes.Take(4)) TestContext.Out.WriteLine(l);
+            var means = Enumerable.Range(1, n - 2).Select(i => column.RateBasedStageEfficiency(i)).ToList();
+            TestContext.Out.WriteLine("stage efficiencies: " + string.Join(" ", means.Select(m => m.ToString("0.00"))) + "; O'Connell " + oconnell.ToString("0.00"));
+            foreach (var m in means) Assert.That(m, Is.InRange(0.15, 3.0), "a tray efficiency from mass transfer");
+            Assert.That(means.Average(), Is.InRange(0.4 * oconnell, 2.5 * oconnell), "the same order as O'Connell");
+            Assert.That(column.RateBasedLog.Last(), Does.Not.Contain("ran out"), "the passes settled");
+            Assert.That(column.ColumnPropertiesProfile, Does.Contain("Rate-Based Stage Efficiencies"));
+            Assert.That(string.Concat(column.SaveData().Select(x => x.ToString())), Does.Contain("RateBased"), "the mode is saved");
+
+            column.SolvingMethodName = "Napthali-Sandholm (Simultaneous Correction)";
+            var errors = flowsheet.SolveFlowsheet2();
+            TestContext.Out.WriteLine("Naphtali-Sandholm: " + string.Join("; ", errors.Select(e => e.Message)) + " | " + string.Join(" | ", column.RateBasedLog));
+            if (errors.Count == 0)
+            {
+                var meansNR = Enumerable.Range(1, n - 2).Select(i => column.RateBasedStageEfficiency(i)).ToList();
+                Assert.That(meansNR.Average(), Is.EqualTo(means.Average()).Within(0.15), "both solvers land on the same efficiencies");
+            }
+            column.SolvingMethodName = "Wang-Henke (Bubble Point)";
+
+            // a packed bed: efficiencies from the HETP of each component against the height of the stage
+            inp.Sections.Clear();
+            inp.Sections.Add(new InternalsSection { Name = "Bed", FromStage = 2, ToStage = n - 1, Type = InternalType.RandomPacking, PackingName = "Pall rings Metal 50 mm" });
+            column.RateBased = false;
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty);
+            var packed = ColumnInternalsStudy.Run(flowsheet, inp);
+            ColumnInternalsStudy.ApplyToColumn(column, packed, false, false);
+            ColumnInternalsStudy.StoreCaseInColumn(column, inp);
+            column.RateBased = true;
+            Assert.That(flowsheet.SolveFlowsheet2(), Is.Empty, "rate-based on a packed bed");
+            var meansPacked = Enumerable.Range(1, n - 2).Select(i => column.RateBasedStageEfficiency(i)).ToList();
+            TestContext.Out.WriteLine("packed stage efficiencies: " + string.Join(" ", meansPacked.Select(m => m.ToString("0.00"))) + " | " + string.Join(" | ", column.RateBasedLog));
+            foreach (var m in meansPacked) Assert.That(m, Is.InRange(0.02, 1.0));
+            Assert.That(meansPacked.Average(), Is.InRange(0.3, 1.0), "a slice of bed one HETP tall is close to a theoretical stage");
+        }
+
         /// <summary>The utility attached to the column keeps the case in the simulation and rates on Update.</summary>
         [Test]
         public void TheAttachedUtilityKeepsTheCaseAndRatesTheColumn()
