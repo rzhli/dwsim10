@@ -439,6 +439,16 @@ public partial class FlowsheetView : UserControl
                 BtnSimultAdjust.IsChecked = !BtnSimultAdjust.IsChecked.GetValueOrDefault();
                 e.Handled = true;
             }
+            else if (e.Key == Key.F8)
+            {
+                MenuFlowsheetCheck.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                e.Handled = true;
+            }
+            else if (e.Key == Key.F1)
+            {
+                OpenContextualHelp();
+                e.Handled = true;
+            }
             else if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
                      e.KeyModifiers.HasFlag(KeyModifiers.Shift))
             {
@@ -1532,6 +1542,8 @@ public partial class FlowsheetView : UserControl
         IconHelper.Set(MenuDynManager,     "\U0001F4CA"); // chart
         IconHelper.Set(MenuDynIntegrator,  "⏱");     // stopwatch
         IconHelper.Set(MenuDynPIDTuning,   "\U0001F39B"); // control knobs
+        IconHelper.Set(MenuDepressurization, "📉"); // chart decreasing
+        IconHelper.Set(MenuColumnInternals, "🗼"); // tower
 
         // View
         IconHelper.Set(MenuShowEditor,     "\U0001F4DD"); // memo
@@ -1550,6 +1562,7 @@ public partial class FlowsheetView : UserControl
         IconHelper.Set(MenuOptimizer,      "\U0001F3AF"); // target
         IconHelper.Set(MenuPropertyChart,  "\U0001F4CA"); // bar chart
         IconHelper.Set(MenuBalance,        "⚖");     // scales
+        IconHelper.Set(MenuFlowsheetCheck, "✅");  // check mark button
         IconHelper.Set(MenuInspector,      "\U0001F50E"); // magnifying glass right
         IconHelper.Set(MenuCreateCompound, "\U0001F9EA"); // test tube
         IconHelper.Set(MenuPolymerChar,    "\U0001F9EC"); // dna (polymer chains)
@@ -1598,14 +1611,34 @@ public partial class FlowsheetView : UserControl
                 ExitConnectMode();
         };
 
+        // the toggle shows the saved setting; the solver itself runs sequentially while the inspector is on
+        BtnInspector.IsChecked = DWSIM.GlobalSettings.Settings.InspectorEnabled;
         BtnInspector.IsCheckedChanged += (_, _) =>
         {
+            if (_syncingInspectorToggle) return;
             var enabled = BtnInspector.IsChecked.GetValueOrDefault();
             DWSIM.GlobalSettings.Settings.InspectorEnabled = enabled;
-            if (enabled)
-                DWSIM.GlobalSettings.Settings.EnableParallelProcessing = false;
             AppendLog($"Inspector {(enabled ? "enabled" : "disabled")}.");
+            GlobalSettingsChanged?.Invoke();
         };
+        GlobalSettingsChanged += SyncInspectorToggle;
+    }
+
+    private bool _syncingInspectorToggle;
+
+    /// <summary>Raised by whoever changes a global setting from a window (preferences, inspector), so every
+    /// open flowsheet view can refresh the toolbar state it mirrors.</summary>
+    public static event Action? GlobalSettingsChanged;
+
+    public static void NotifyGlobalSettingsChanged() => GlobalSettingsChanged?.Invoke();
+
+    private void SyncInspectorToggle()
+    {
+        var enabled = DWSIM.GlobalSettings.Settings.InspectorEnabled;
+        if (BtnInspector.IsChecked == enabled) return;
+        _syncingInspectorToggle = true;
+        try { BtnInspector.IsChecked = enabled; }
+        finally { _syncingInspectorToggle = false; }
     }
 
     // -------------------------------------------------------------------------
@@ -1919,7 +1952,7 @@ public partial class FlowsheetView : UserControl
         MenuAddChart.Click             += (_, _) => AddAnnotationAtCenter(ObjectType.GO_Chart);
 
         // Global Settings
-        MenuGlobalSettings.Click += async (_, _) => await new PreferencesWindow().ShowDialog(HostWindow);
+        MenuGlobalSettings.Click += async (_, _) => { await new PreferencesWindow().ShowDialog(HostWindow); GlobalSettingsChanged?.Invoke(); };
 
         // Simultaneous Adjust, on the toolbar as in the WinForms UI
         BtnSimultAdjust.IsCheckedChanged += (_, _) =>
@@ -1981,7 +2014,7 @@ public partial class FlowsheetView : UserControl
         MenuPureComp.Click += (_, _) =>
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
-            new PureCompoundPropertiesWindow(_flowsheet).Show(HostWindow);
+            new CompoundPropertyEditorWindow(_flowsheet).Show(HostWindow);
         };
         MenuHydrates.Click += (_, _) =>
         {
@@ -1997,6 +2030,39 @@ public partial class FlowsheetView : UserControl
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
             new SeparatorSizingWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuDepressurization.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new DepressurizationWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuColumnInternals.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new ColumnInternalsWindow(_flowsheet).Show(HostWindow);
+        };
+        DWSIM.UI.Desktop.Editors.AttachedUtilitiesEditor.OpenUtility = utility =>
+        {
+            if (_flowsheet == null) return;
+            if (utility is DWSIM.Automation.DynamicRunner.ColumnInternals.ColumnInternalsUtility ci) new ColumnInternalsWindow(_flowsheet, ci).Show(HostWindow);
+        };
+        MenuMcCabeThiele.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The McCabe-Thiele diagram needs two compounds in the simulation."); return; }
+            new McCabeThieleWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuPackageComparison.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The property package comparison needs two compounds in the simulation."); return; }
+            new PackageComparisonWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuEosExplorer.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet.SelectedCompounds.Count < 1) { AppendLog("The equation of state explorer needs a compound in the simulation."); return; }
+            new EosExplorerWindow(_flowsheet).Show(HostWindow);
         };
         MenuPsvSizing.Click += (_, _) =>
         {
@@ -2030,9 +2096,36 @@ public partial class FlowsheetView : UserControl
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
             new BalanceSummaryWindow(_flowsheet).Show();
         };
+        MenuLiveSliders.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new LiveSlidersWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuScenarioComparison.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new ScenarioComparisonWindow(_flowsheet).Show(HostWindow);
+        };
+        MenuExplainResult.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new ExplainResultWindow(_flowsheet, _surface?.SelectedObject?.Name).Show(HostWindow);
+        };
+        MenuFlowsheetCheck.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            new FlowsheetCheckWindow(_flowsheet, name =>
+            {
+                if (_flowsheet.SimulationObjects.TryGetValue(name, out var obj) && obj.GraphicObject != null)
+                    SearchObject(obj.GraphicObject.Tag);
+                OpenEditorFor(name);
+            }).Show();
+        };
         MenuInspector.Click += (_, _) =>
         {
-            new InspectorReportsWindow().Show();
+            var w = new InspectorReportsWindow();
+            w.Closed += (_, _) => GlobalSettingsChanged?.Invoke();
+            w.Show();
         };
         MenuCreateCompound.Click += (_, _) =>
         {
@@ -2067,6 +2160,25 @@ public partial class FlowsheetView : UserControl
         };
 
         // View > Show/Hide panels: toggle proportion to 0 or restore
+        // Stream colour mode: stored on the flowsheet, so it travels with the file.
+        var streamColorItems = new[] { MenuStreamColorStatus, MenuStreamColorT, MenuStreamColorP,
+                                       MenuStreamColorVF, MenuStreamColorPhase, MenuStreamColorFlow };
+        for (var i = 0; i < streamColorItems.Length; i++)
+        {
+            var mode = i;
+            streamColorItems[i].Click += (_, _) =>
+            {
+                if (_flowsheet == null) return;
+                _flowsheet.FlowsheetOptions.StreamColorMode = mode;
+                Canvas.Refresh();
+            };
+        }
+        MenuStreamColor.SubmenuOpened += (_, _) =>
+        {
+            var current = _flowsheet?.FlowsheetOptions.StreamColorMode ?? 0;
+            for (var i = 0; i < streamColorItems.Length; i++) streamColorItems[i].IsChecked = i == current;
+        };
+
         MenuShowEditor.Click += (_, _) => ToggleDockTool(_dockFactory?.EditorTool);
         MenuShowPalette.Click += (_, _) => ToggleDockTool(_dockFactory?.PaletteTool);
         MenuShowResults.Click += (_, _) => ToggleDockTool(_dockFactory?.LogTool);
@@ -2191,6 +2303,8 @@ public partial class FlowsheetView : UserControl
         };
 
         // --- Help menu ---
+        MenuHelpContext.Click += (_, _) => OpenContextualHelp();
+        MenuHelpTutorials.Click += (_, _) => OpenUrl(DWSIM.Automation.FluentAPI.Diagnostics.FindingExplanations.TutorialsRoot);
         MenuHelpHtml.Click += (_, _) => OpenUrl(Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "docs", "dwsim-help", "index.html"));
         MenuHelpSupport.Click += (_, _) => OpenUrl("https://dwsim.org/wiki/index.php?title=Support");
@@ -2663,6 +2777,14 @@ public partial class FlowsheetView : UserControl
                 catch (Exception ex) { AppendLog($"Debug error: {ex.Message}"); }
             };
             ctx.Items.Add(debug);
+
+            // Why this result: the balances and the diagram of the solved object
+            if (simObj != null && DWSIM.Automation.DynamicRunner.Insight.UnitInsightStudy.Supports(simObj))
+            {
+                var explain = new MenuItem { Header = "Explain Result...", Icon = IconHelper.MIcon("💡") }; // light bulb
+                explain.Click += (_, _) => { if (_flowsheet != null) new ExplainResultWindow(_flowsheet, simObj.Name).Show(HostWindow); };
+                ctx.Items.Add(explain);
+            }
 
             ctx.Items.Add(new Separator());
 
@@ -3273,6 +3395,15 @@ public partial class FlowsheetView : UserControl
     // URL / utility helpers
     // -------------------------------------------------------------------------
 
+    /// <summary>F1: the tutorials page that explains the selected object, or the Fundamentals track when nothing is selected.</summary>
+    private void OpenContextualHelp()
+    {
+        var obj = _surface?.SelectedObject;
+        OpenUrl(obj != null
+            ? DWSIM.Automation.FluentAPI.Diagnostics.ContextualHelp.UrlFor(obj.ObjectType, HelpLinks.Language())
+            : DWSIM.Automation.FluentAPI.Diagnostics.ContextualHelp.DefaultUrl(HelpLinks.Language()));
+    }
+
     private static void OpenUrl(string url)
     {
         // Use the per-OS opener first; ShellExecute can fail with "no application found" on a machine
@@ -3713,6 +3844,17 @@ public partial class FlowsheetView : UserControl
     /// Returns the top-level MenuItem matching the given header text
     /// (the "_" mnemonic prefix is stripped for comparison).
     /// </summary>
+    /// <summary>Reorders a menu's items by their text (access-key underscores and ellipses ignored). Separators are dropped.</summary>
+    private static void SortMenuAlphabetically(MenuItem? menu)
+    {
+        if (menu == null) return;
+        var items = menu.Items.OfType<MenuItem>().ToList();
+        static string Key(MenuItem m) => (m.Header?.ToString() ?? "").Replace("_", "").TrimEnd('.').Trim();
+        items.Sort((a, b) => string.Compare(Key(a), Key(b), StringComparison.CurrentCultureIgnoreCase));
+        menu.Items.Clear();
+        foreach (var m in items) menu.Items.Add(m);
+    }
+
     private MenuItem? FindTopLevelMenu(string header)
     {
         return MainMenuBar.Items
@@ -3835,6 +3977,11 @@ public partial class FlowsheetView : UserControl
         // added - before the flowsheet loaded and these buttons existed - so the strip came out
         // empty. Re-apply them now that ExtensionButtons is populated, or the assistant button (and
         // any other MainWindow/Tools extension) never shows.
+        // extensions land at the end of their menus in load order; Tools and Utilities are long
+        // enough that an alphabetical list is the only way to find anything in them
+        SortMenuAlphabetically(FindTopLevelMenu("Tools"));
+        SortMenuAlphabetically(FindTopLevelMenu("Utilities"));
+
         mform.RefreshExtensionButtons(this);
     }
 

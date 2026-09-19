@@ -125,6 +125,24 @@ Namespace UnitOperations
         Private _opening As Double = 50.0
 
         ''' <summary>
+        ''' Runtime-only. While True, writes to <see cref="OpeningPct"/> from controllers, events or
+        ''' the user are ignored and the stem stays where it is; <see cref="ForceOpening"/> still moves it.
+        ''' Operator-training malfunctions (stuck valve, valve driven to its fail position) set this.
+        ''' </summary>
+        <Xml.Serialization.XmlIgnore> Public Property StemLocked As Boolean = False
+
+        ''' <summary>
+        ''' Runtime-only. Lowest opening (%) the stem can reach: a passing valve that no longer shuts
+        ''' tight. Zero for a healthy valve.
+        ''' </summary>
+        <Xml.Serialization.XmlIgnore> Public Property MinimumOpening As Double = 0.0
+
+        ''' <summary>Moves the stem to <paramref name="value"/> (%) regardless of the lock or the actuator delay.</summary>
+        Public Sub ForceOpening(value As Double)
+            _opening = Math.Max(0.0, Math.Min(100.0, value))
+        End Sub
+
+        ''' <summary>
         ''' Gets or sets the valve stem opening as a percentage (0–100).
         ''' In dynamic mode with actuator delay configured, setting this value enqueues the new opening
         ''' for deferred application rather than applying it immediately.
@@ -134,6 +152,8 @@ Namespace UnitOperations
                 Return _opening
             End Get
             Set(value As Double)
+                If StemLocked Then Return
+                If value < MinimumOpening Then value = MinimumOpening
                 If FlowSheet IsNot Nothing Then
                     If FlowSheet.DynamicMode AndAlso DelayedOpenings IsNot Nothing Then
                         Dim AD As Double = GetDynamicProperty("Actuator Delay")
@@ -165,6 +185,25 @@ Namespace UnitOperations
         ''' Gets or sets the piping geometry factor (FP) accounting for inlet/outlet fittings. Default is 1.0.
         ''' </summary>
         Public Property FP As Double = 1.0
+
+        ''' <summary>
+        ''' Dynamic mode only: compute the flow with the compressible orifice equations (isentropic nozzle
+        ''' with choking for gas, Cd A sqrt(2 rho dP) for liquid and homogeneous two-phase) instead of the
+        ''' ISA Kv forms. This is the model for a restriction orifice or a blowdown valve given by bore and
+        ''' discharge coefficient; the opening characteristic still scales the open area.
+        ''' </summary>
+        Public Property UseOrificeFlow As Boolean = False
+
+        ''' <summary>Orifice bore, m (dynamic orifice model).</summary>
+        Public Property OrificeDiameter As Double = 0.01
+
+        ''' <summary>Discharge coefficient of the orifice, 0.6 to 0.65 for a thin sharp-edged plate (dynamic orifice model).</summary>
+        Public Property OrificeDischargeCoefficient As Double = 0.62
+
+        ''' <summary>Pressure at the orifice throat from the last dynamic step, Pa (equal to the downstream pressure when the flow is not choked).</summary>
+        <Xml.Serialization.XmlIgnore> Public Property OrificeThroatPressure As Double = 0.0
+        Private _throatRatio As Double = 0.0
+
 
         ''' <summary>
         ''' Gets or sets the valve style modifier (Fs). Default is 1.0.
@@ -628,17 +667,29 @@ Namespace UnitOperations
 
                         P2 = oms.GetPressure
 
-                        If CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid Then
+                        If UseOrificeFlow AndAlso (CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid) Then
+                            'restriction orifice / blowdown valve by bore and Cd: compressible orifice equations,
+                            'the opening characteristic scaling the open area
+                            Wi = OrificeMassFlow(ims, P1, P2, Ti, If(FC > 0.0, Kvc / FC, 1.0))
+                        ElseIf CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid Then
+                            'the same ISA/IEC 60534 forms as the steady-state sizing, so a wide-open valve,
+                            'a blowdown valve or a restriction orifice (Kv from KvFromOrifice) chokes where it
+                            'should: gas at x = Fk.xT, liquid at dP = FL^2 (P1 - FF.Pv). All forms return kg/h.
                             If ims.Phases(1).Properties.molarfraction > 0.99 Or CalcMode = CalculationMode.Kv_Liquid Then
-                                Wi = Kvc * (1000.0 * rho * (P1 - P2) / 100000.0) ^ 0.5 / 3600
+                                ims.PropertyPackage.CurrentMaterialStream = ims
+                                rhol = ims.Phases(0).Properties.density.GetValueOrDefault
+                                Pc = ims.PropertyPackage.AUX_PCM(PropertyPackages.Phase.Liquid)
+                                Pv = ims.PropertyPackage.AUX_PVAPM(PropertyPackages.Phase.Liquid, Ti)
+                                If Double.IsNaN(Pv) Or Pv <= 0.0 Then Pv = 0.0
+                                If Double.IsNaN(Pc) Or Pc <= 0.0 Then Pc = P1
+                                Wi = WLiquid(Kvc, P1 / 100000.0, P2 / 100000.0, rhol, Pv / 100000.0, Pc / 100000.0) / 3600
                             ElseIf ims.Phases(2).Properties.molarfraction > 0.99 Or CalcMode = CalculationMode.Kv_Gas Then
                                 ims.PropertyPackage.CurrentMaterialStream = ims
-                                rhog20 = NormalGasDensity(ims)
-                                If P2 > P1 / 2 Then
-                                    Wi = 519 * Kvc / (Ti / (rhog20 * (P1 - P2) / 100000.0 * P1 / 100000.0)) ^ 0.5 / 3600
-                                Else
-                                    Wi = 259.5 * Kvc * P1 / 100000.0 / (Ti / rhog20) ^ 0.5 / 3600
-                                End If
+                                rhog = ims.Phases(0).Properties.density.GetValueOrDefault
+                                Cp_ig = ims.PropertyPackage.AUX_CPm(PropertyPackages.Phase.Vapor, Ti) * ims.Phases(0).Properties.molecularWeight.GetValueOrDefault
+                                k = Cp_ig / (Cp_ig - 8.314)
+                                If Double.IsNaN(k) Or k <= 1.0 Then k = 1.3
+                                Wi = WGas(Kvc, P1 / 100000.0, P2 / 100000.0, k, rhog) / 3600
                             Else
                                 ims.PropertyPackage.CurrentMaterialStream = ims
                                 rhog = ims.Phases(2).Properties.density.GetValueOrDefault
@@ -654,7 +705,8 @@ Namespace UnitOperations
                                 If Double.IsNaN(massfrac_gas) Or Double.IsNaN(massfrac_liq) Then
                                     Wi = 0.0
                                 Else
-                                    Wi = WTwoPhase(Kvc, P1 / 100000.0, P2 / 100000.0, rhog, rhol, k, Pv / 100000.0, Pc / 100000.0, massfrac_gas, massfrac_liq)
+                                    'WTwoPhase returns kg/h, like the liquid and gas forms above
+                                    Wi = WTwoPhase(Kvc, P1 / 100000.0, P2 / 100000.0, rhog, rhol, k, Pv / 100000.0, Pc / 100000.0, massfrac_gas, massfrac_liq) / 3600
                                 End If
 
                             End If
@@ -700,11 +752,11 @@ Namespace UnitOperations
                                 P1 = P2 / 100000.0 + 1 / (1000.0 * rho) * (Wi * 3600 / Kvc) ^ 2
                             ElseIf ims.Phases(2).Properties.molarfraction = 1 Or CalcMode = CalculationMode.Kv_Gas Then
                                 ims.PropertyPackage.CurrentMaterialStream = ims
-                                rhog20 = NormalGasDensity(ims)
+                                rhog20 = ims.PropertyPackage.AUX_VAPDENS(273.15, 101325)
                                 P1 = P2 / 100000.0 + Ti / rhog20 / (P2 / 100000) * (519 * Kvc / (Wi * 3600)) ^ -2
                             Else
                                 ims.PropertyPackage.CurrentMaterialStream = ims
-                                rhog20 = NormalGasDensity(ims)
+                                rhog20 = ims.PropertyPackage.AUX_VAPDENS(273.15, 101325)
                                 rhol = ims.Phases(1).Properties.density.GetValueOrDefault
                                 massfrac_gas = ims.Phases(2).Properties.massflow.GetValueOrDefault / ims.Phases(0).Properties.massflow.GetValueOrDefault
                                 massfrac_liq = ims.Phases(1).Properties.massflow.GetValueOrDefault / ims.Phases(0).Properties.massflow.GetValueOrDefault
@@ -734,20 +786,14 @@ Namespace UnitOperations
                                 P2 = P2 * 100000.0
                             ElseIf ims.Phases(2).Properties.molarfraction = 1 Or CalcMode = CalculationMode.Kv_Gas Then
                                 ims.PropertyPackage.CurrentMaterialStream = ims
-                                rhog20 = NormalGasDensity(ims)
+                                rhog20 = ims.PropertyPackage.AUX_VAPDENS(273.15, 101325)
                                 Dim roots = MathOps.Quadratic.quadForm(-rhog20, rhog20 * P1 / 100000, -Ti * (519 * Kvc / (Wi * 3600)) ^ -2)
-                                If Not Double.IsNaN(roots.Item1) AndAlso roots.Item1 > 0 AndAlso roots.Item1 > P1 / 100000 / 2 Then
+                                If roots.Item1 > 0 And roots.Item1 > P1 / 100000 / 2 Then
                                     P2 = roots.Item1 * 100000.0
-                                ElseIf Not Double.IsNaN(roots.Item2) AndAlso roots.Item2 > 0 AndAlso roots.Item2 > P1 / 100000 / 2 Then
+                                ElseIf roots.Item2 > 0 And roots.Item2 > P1 / 100000 / 2 Then
                                     P2 = roots.Item2 * 100000.0
                                 Else
-                                    'No subsonic solution: the requested flow is at or beyond the choked
-                                    'limit for this Kv and inlet pressure. Report the limit, since a bare
-                                    '"unable to calculate" gives no clue about which input to change.
-                                    Dim Wchoked = 259.5 * Kvc * P1 / 100000.0 / (Ti / rhog20) ^ 0.5
-                                    Throw New Exception(String.Format(
-                                        "Unable to calculate the outlet pressure: the requested flow of {0:N1} kg/h is at or beyond the choked-flow limit of {1:N1} kg/h for Kv = {2:N2} at an inlet pressure of {3:N2} bar. Increase the valve opening or Kv, raise the inlet pressure, or lower the flow demand.",
-                                        Wi * 3600, Wchoked, Kvc, P1 / 100000.0))
+                                    Throw New Exception("Unable to calculate the outlet pressure.")
                                 End If
                             Else
                                 ims.PropertyPackage.CurrentMaterialStream = ims
@@ -763,18 +809,12 @@ Namespace UnitOperations
                                 P2 = 100000.0 * P2TwoPhase(Wi * 3600, Kvc, P1 / 100000.0, rhog, rhol, k, Pv / 100000.0, Pc / 100000.0, massfrac_gas, massfrac_liq)
                             End If
                         ElseIf CalcMode = CalculationMode.Kv_Steam Then
-                            'P2 iterates in bar here, but AUX_VAPDENS expects its pressure in Pa.
                             P2 = P1 * 0.7 / 100000.0
                             icount = 0
                             Do
-                                v2 = 1 / ims.PropertyPackage.AUX_VAPDENS(Ti, P2 * 100000.0)
+                                v2 = 1 / ims.PropertyPackage.AUX_VAPDENS(Ti, P2)
                                 P2ant = P2
                                 P2 = P1 / 100000.0 - v2 * (31.62 * Kvc / (Wi * 3600)) ^ -2
-                                'Below P1/2 the steam equation switches to its choked form, so the
-                                'subsonic fixed point is only meaningful down to that pressure. Clamping
-                                'also keeps the next iteration from asking the property package for the
-                                'density at a negative pressure.
-                                If P2 < P1 / 2 / 100000.0 Then P2 = P1 / 2 / 100000.0
                                 icount += 1
                                 If icount > 10000 Then Throw New Exception("P2 did not converge in 10000 iterations.")
                             Loop Until Math.Abs(P2 - P2ant) < 0.0001
@@ -850,35 +890,11 @@ Namespace UnitOperations
         End Function
 
         ''' <summary>
-        ''' Normal-condition density of the vapour phase (0 degC, 1.01325 bar) in kg/Nm³, as required by the
-        ''' 519/259.5-coefficient IEC 60534 gas sizing equations.
-        ''' </summary>
-        ''' <remarks>
-        ''' Deliberately computed from the molar mass rather than by asking the property package for the
-        ''' density at (273.15 K, 101325 Pa). That state point is not a vapour for many fluids, and property
-        ''' packages answer it inconsistently: the IAPWS-IF97 package returns the density of saturated steam
-        ''' at 0 degC (about 0.0049 kg/m³, i.e. the value at 611 Pa) instead of the normal density of
-        ''' 0.804 kg/Nm³ - a factor of 170, which shrinks the apparent choked-flow limit by a factor of 13.
-        ''' </remarks>
-        Private Function NormalGasDensity(ims As MaterialStream) As Double
-
-            ims.PropertyPackage.CurrentMaterialStream = ims
-
-            Dim mw As Double = ims.PropertyPackage.AUX_MMM(PropertyPackages.Phase.Vapor)
-
-            'Fall back to the overall mixture when the vapour phase carries no composition yet.
-            If mw <= 0.0 Or Double.IsNaN(mw) Then mw = ims.PropertyPackage.AUX_MMM(PropertyPackages.Phase.Mixture)
-
-            Return mw / 22.414
-
-        End Function
-
-        ''' <summary>
         ''' Calculates the valve flow coefficient (Kv) for single-phase gas service using the simplified ISA equation.
         ''' Applies the choked-flow correction when the downstream pressure falls below half the upstream pressure.
         ''' </summary>
         ''' <param name="Wi">Mass flow rate in kg/h.</param>
-        ''' <param name="rhog20">Gas density at normal conditions (0 degC, 1.01325 bar) in kg/Nm³, as returned by <see cref="NormalGasDensity"/>.</param>
+        ''' <param name="rhog20">Gas density at standard conditions (273.15 K, 101325 Pa) in kg/m³.</param>
         ''' <param name="P1">Inlet pressure in Pa.</param>
         ''' <param name="P2">Outlet pressure in Pa.</param>
         ''' <param name="Ti">Inlet temperature in K.</param>
@@ -986,6 +1002,73 @@ Namespace UnitOperations
         ''' <param name="massfrac_gas">Mass fraction of the vapour phase.</param>
         ''' <param name="massfrac_liq">Mass fraction of the liquid phase.</param>
         ''' <returns>The total mass flow rate in kg/h.</returns>
+        ''' <summary>
+        ''' Flow coefficient of a sharp-edged restriction orifice or a blowdown valve given by bore and
+        ''' discharge coefficient: Kv is the water flow in m3/h at 1 bar drop, so Kv = 3600 Cd A sqrt(2 dP / rho)
+        ''' with dP = 1e5 Pa and rho = 1000 kg/m3. Set FlowCoefficient to Kv and use it in a Kv mode; the
+        ''' ISA forms then give the choked gas or flashing liquid flow between two pressure-spec'd streams.
+        ''' </summary>
+        ''' <param name="diameter">Bore, m.</param>
+        ''' <param name="dischargeCoefficient">Cd, typically 0.6 to 0.65 for a thin sharp-edged orifice, 0.8 to 0.9 for a nozzle.</param>
+        ''' <summary>
+        ''' Mass flow (kg/s) through the orifice between P1 and P2 (Pa) at the inlet conditions of the
+        ''' stream. Gas: the isentropic nozzle form, W = Cd A sqrt(2 rho1 P1 k/(k-1) (r^(2/k) - r^((k+1)/k)))
+        ''' with r = P2/P1 held at the critical ratio (2/(k+1))^(k/(k-1)) once the flow chokes. Liquid and
+        ''' two-phase: the incompressible form with the phase or mixture density. openFraction scales the
+        ''' area (0 to 1).
+        ''' </summary>
+        Public Function OrificeMassFlow(ims As MaterialStream, P1 As Double, P2 As Double, T1 As Double, openFraction As Double) As Double
+
+            If P2 >= P1 OrElse P1 <= 0.0 Then Return 0.0
+            Dim area = Math.PI * OrificeDiameter ^ 2 / 4.0 * Math.Max(0.0, Math.Min(1.0, openFraction))
+            Dim cd = OrificeDischargeCoefficient
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+            If rho <= 0.0 OrElse Double.IsNaN(rho) Then Return 0.0
+            Dim vapourFraction = ims.Phases(2).Properties.molarfraction.GetValueOrDefault
+
+            'Homogeneous-equilibrium nozzle on the package's own isentrope: exact for a real gas, and
+            'the only form that gets a dense supercritical fluid or a flashing liquid right, where the
+            'choke sits far above the ideal-gas critical ratio. The closed forms below stay as the
+            'fallback when the flash cannot follow the isentrope.
+            Try
+                Dim h0 = ims.Phases(0).Properties.enthalpy.GetValueOrDefault
+                Dim s0 = ims.Phases(0).Properties.entropy.GetValueOrDefault
+                If Not Double.IsNaN(h0 + s0) Then
+                    ims.PropertyPackage.CurrentMaterialStream = ims
+                    Dim throat As Double
+                    Dim guess = If(_throatRatio > 0.0, _throatRatio * P1, 0.0)
+                    Dim G = ims.PropertyPackage.FlashBase.HEMMassFlux(ims.PropertyPackage.RET_VMOL(PropertyPackages.Phase.Mixture), h0, s0, P1, P2, T1, ims.PropertyPackage, throat, guess)
+                    If G > 0.0 AndAlso Not Double.IsNaN(G) AndAlso Not Double.IsInfinity(G) Then
+                        OrificeThroatPressure = throat
+                        _throatRatio = throat / P1
+                        Return cd * area * G
+                    End If
+                End If
+            Catch ex As Exception
+            End Try
+
+            If vapourFraction > 0.99 Then
+                ims.PropertyPackage.CurrentMaterialStream = ims
+                Dim cpig = ims.PropertyPackage.AUX_CPm(PropertyPackages.Phase.Vapor, T1) * ims.Phases(0).Properties.molecularWeight.GetValueOrDefault
+                Dim k = cpig / (cpig - 8.314)
+                If Double.IsNaN(k) OrElse k <= 1.0 Then k = 1.3
+                Dim rc = (2.0 / (k + 1.0)) ^ (k / (k - 1.0))
+                Dim r = Math.Max(P2 / P1, rc)
+                Dim term = k / (k - 1.0) * (r ^ (2.0 / k) - r ^ ((k + 1.0) / k))
+                If term <= 0.0 Then Return 0.0
+                Return cd * area * Math.Sqrt(2.0 * rho * P1 * term)
+            Else
+                Return cd * area * Math.Sqrt(2.0 * rho * (P1 - P2))
+            End If
+
+        End Function
+
+
+        Public Shared Function KvFromOrifice(diameter As Double, dischargeCoefficient As Double) As Double
+            Dim area = Math.PI * diameter ^ 2 / 4.0
+            Return 3600.0 * dischargeCoefficient * area * Math.Sqrt(2.0 * 100000.0 / 1000.0)
+        End Function
+
         Public Function WTwoPhase(Kv As Double, P1 As Double, P2 As Double, rhog As Double, rhol As Double, k As Double, Pv As Double, Pc As Double, massfrac_gas As Double, massfrac_liq As Double) As Double
             WTwoPhase = 1 / (massfrac_liq / WLiquid(Kv, P1, P2, rhol, Pv, Pc) ^ 2 + massfrac_gas / WGas(Kv, P1, P2, k, rhog) ^ 2) ^ 0.5
         End Function
@@ -998,7 +1081,7 @@ Namespace UnitOperations
         ''' <param name="P1">Inlet pressure in Pa.</param>
         ''' <param name="P2">Outlet pressure in Pa.</param>
         ''' <param name="Ti">Inlet temperature in K.</param>
-        ''' <param name="rhog20">Gas density at normal conditions (0 degC, 1.01325 bar) in kg/Nm³.</param>
+        ''' <param name="rhog20">Gas density at standard conditions (273.15 K, 101325 Pa) in kg/m³.</param>
         ''' <param name="rhol">Liquid phase density at inlet in kg/m³.</param>
         ''' <param name="massfrac_gas">Mass fraction of the vapour phase.</param>
         ''' <param name="massfrac_liq">Mass fraction of the liquid phase.</param>
@@ -1068,7 +1151,7 @@ Namespace UnitOperations
         ''' <param name="Kv">Effective flow coefficient (m³/h at 1 bar drop).</param>
         ''' <param name="P2">Outlet pressure in bar.</param>
         ''' <param name="Ti">Inlet temperature in K.</param>
-        ''' <param name="rhog20">Gas density at normal conditions (0 degC, 1.01325 bar) in kg/Nm³.</param>
+        ''' <param name="rhog20">Gas density at standard conditions (273.15 K, 101325 Pa) in kg/m³.</param>
         ''' <param name="rhol">Liquid phase density in kg/m³.</param>
         ''' <param name="massfrac_gas">Mass fraction of the vapour phase.</param>
         ''' <param name="massfrac_liq">Mass fraction of the liquid phase.</param>
@@ -1536,18 +1619,12 @@ Namespace UnitOperations
                 End If
                 IObj?.Paragraphs.Add(String.Format("Calculated Outlet Pressure P2 = {0} Pa", P2))
             ElseIf CalcMode = CalculationMode.Kv_Steam Then
-                'P2 iterates in bar here, but AUX_VAPDENS expects its pressure in Pa.
                 P2 = Pi * 0.7 / 100000.0
                 icount = 0
                 Do
-                    v2 = 1 / ims.PropertyPackage.AUX_VAPDENS(Ti, P2 * 100000.0)
+                    v2 = 1 / ims.PropertyPackage.AUX_VAPDENS(Ti, P2)
                     P2ant = P2
                     P2 = Pi / 100000.0 - v2 * (31.62 * Kvc / (Wi * 3600)) ^ -2
-                    'Below Pi/2 the steam equation switches to its choked form, so the
-                    'subsonic fixed point is only meaningful down to that pressure. Clamping
-                    'also keeps the next iteration from asking the property package for the
-                    'density at a negative pressure.
-                    If P2 < Pi / 2 / 100000.0 Then P2 = Pi / 2 / 100000.0
                     icount += 1
                     If icount > 10000 Then Throw New Exception("P2 did not converge in 10000 iterations.")
                 Loop Until Math.Abs(P2 - P2ant) < 0.0001

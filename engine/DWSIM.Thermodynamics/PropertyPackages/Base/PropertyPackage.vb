@@ -2771,7 +2771,7 @@ Namespace PropertyPackages
                     result = Me.FlashBase.CalculateEquilibrium(FlashSpec.V, FlashSpec.P, val1, val2, Me, mixmolefrac, initialKval, initialestimate)
                 Case Interfaces.Enums.FlashCalculationType.VolumeEnthalpy
                     result = Me.FlashBase.CalculateEquilibrium(FlashSpec.V, FlashSpec.H, val1, val2, Me, mixmolefrac, initialKval, initialestimate)
-                Case Interfaces.Enums.FlashCalculationType.PressureEntropy
+                Case Interfaces.Enums.FlashCalculationType.VolumeEntropy
                     result = Me.FlashBase.CalculateEquilibrium(FlashSpec.V, FlashSpec.S, val1, val2, Me, mixmolefrac, initialKval, initialestimate)
                 Case Else
                     Throw New NotImplementedException
@@ -8783,7 +8783,7 @@ Final3:
                 C = cprop.Solid_Density_Const_C
                 D = cprop.Solid_Density_Const_D
                 E = cprop.Solid_Density_Const_E
-                If eqno <> "" Then result = result = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) 'kg/m3
+                If eqno <> "" Then result = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) 'kg/m3
                 val = 1 / (result)
             Else
                 If cprop.SolidDensityAtTs <> 0.0# Then

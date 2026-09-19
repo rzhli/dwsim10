@@ -44,6 +44,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         Dim _spval1, _spval2 As Double
         Dim _spci1, _spci2 As Integer
         Dim _eff, _F, _Q, _P, _HF As Double()
+        Dim _effc()() As Double = Nothing
         Dim _fc()() As Double
         Public _pp As PropertyPackages.PropertyPackage
         Dim _coltype As Column.ColType
@@ -518,6 +519,22 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             'handle user specs
 
+            'At full reflux the stage-0 liquid is zero by the equilibrium rows below, and a
+            'reflux-ratio, product-rate or feed-recovery condenser specification has nothing
+            'left to fix (the vapour product follows from the reboiler specification, as in the
+            'bubble-point solver). The specification row then carries the one equation left
+            'for the stage temperature: with no feed on the stage the vapour passes through
+            'and leaves at the top tray's temperature, written as that difference so its
+            'sensitivity is where it belongs; with a feed, the energy balance with no duty.
+            Dim ebres0 As Double = 0.0
+            If _condtype = Column.condtype.Full_Reflux Then
+                If F(0) > 0.0 Then
+                    ebres0 = (-Hr(0) + (Hl(0) * (1 + Sl(0)) * sumlkj(0) + Hv(0) * (1 + Sv(0)) * sumvkj(0) - Hv(1) * sumvkj(1) - HF(0) * F(0))) / 1000.0
+                Else
+                    ebres0 = (Tj(0) - Tj(1)) / _maxT
+                End If
+            End If
+
             Select Case _specs("C").SType
                 Case ColumnSpec.SpecType.Component_Fraction
                     If _condtype <> Column.condtype.Full_Reflux Then
@@ -568,22 +585,43 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         _specs("C").CalculatedValue = Vj(0) * yc(0)(spci1) / sumc
                     End If
                 Case ColumnSpec.SpecType.Heat_Duty
-                    Q(0) = spval1
+                    ' the rows read (out - in) - Q: a condenser duty, given as heat removed, enters them negative
+                    Q(0) = -spval1
                 Case ColumnSpec.SpecType.Product_Mass_Flow_Rate
-                    spfval1 = Log(LSSj(0) / (spval1 / _pp.AUX_MMM(xc(0)) * 1000))
-                    _specs("C").CalculatedValue = LSSj(0) / _pp.AUX_MMM(xc(0)) / 1000
+                    If _condtype <> Column.condtype.Full_Reflux Then
+                        spfval1 = Log(LSSj(0) / (spval1 / _pp.AUX_MMM(xc(0)) * 1000))
+                        _specs("C").CalculatedValue = LSSj(0) / _pp.AUX_MMM(xc(0)) / 1000
+                    Else
+                        spfval1 = ebres0
+                        _specs("C").CalculatedValue = Vj(0) / _pp.AUX_MMM(yc(0)) / 1000
+                    End If
                 Case ColumnSpec.SpecType.Product_Molar_Flow_Rate
-                    spfval1 = Log(LSSj(0) / spval1)
-                    _specs("C").CalculatedValue = LSSj(0)
+                    If _condtype <> Column.condtype.Full_Reflux Then
+                        spfval1 = Log(LSSj(0) / spval1)
+                        _specs("C").CalculatedValue = LSSj(0)
+                    Else
+                        spfval1 = ebres0
+                        _specs("C").CalculatedValue = Vj(0)
+                    End If
                 Case ColumnSpec.SpecType.Stream_Ratio
-                    spfval1 = Log(Lj(0) / LSSj(0) / spval1)
-                    _specs("C").CalculatedValue = Lj(0) / LSSj(0)
+                    If _condtype <> Column.condtype.Full_Reflux Then
+                        spfval1 = Log(Lj(0) / LSSj(0) / spval1)
+                        _specs("C").CalculatedValue = Lj(0) / LSSj(0)
+                    Else
+                        spfval1 = ebres0
+                        _specs("C").CalculatedValue = 0.0
+                    End If
                 Case ColumnSpec.SpecType.Temperature
                     spfval1 = Log((Tj(0)) / spval1)
                     _specs("C").CalculatedValue = Tj(0)
                 Case ColumnSpec.SpecType.Feed_Recovery
-                    spfval1 = Log(LSSj(0) / (spval1 / 100 * F.SumY))
-                    _specs("C").CalculatedValue = LSSj(0) / F.SumY * 100.0
+                    If _condtype <> Column.condtype.Full_Reflux Then
+                        spfval1 = Log(LSSj(0) / (spval1 / 100 * F.SumY))
+                        _specs("C").CalculatedValue = LSSj(0) / F.SumY * 100.0
+                    Else
+                        spfval1 = ebres0
+                        _specs("C").CalculatedValue = Vj(0) / F.SumY * 100.0
+                    End If
             End Select
 
             Select Case _specs("R").SType
@@ -629,6 +667,21 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     _specs("R").CalculatedValue = Lj(ns) / F.SumY * 100.0
             End Select
 
+            'l * V / L in the equilibrium equations, finite on a stage that carries no liquid (the
+            'condenser stage of a column with no condenser): there the normalised liquid composition
+            'is the estimate made from the vapour above
+            Dim lvr(ns)() As Double
+            For i = 0 To ns
+                Array.Resize(lvr(i), nc)
+                For j = 0 To nc - 1
+                    If sumlkj(i) > 0.0 Then
+                        lvr(i)(j) = lc(i)(j) * sumvkj(i) / sumlkj(i)
+                    Else
+                        lvr(i)(j) = xc(i)(j) * sumvkj(i)
+                    End If
+                Next
+            Next
+
             For i = 0 To ns
                 For j = 0 To nc - 1
                     M_ant(i, j) = M(i, j)
@@ -638,10 +691,11 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         If _coltype <> ColType.AbsorptionColumn Then
                             If _condtype = Column.condtype.Full_Reflux Then
                                 M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - vc(i + 1)(j) - fc(i)(j)
-                                E(i, j) = eff(i) * Kval(i)(j) * lc(i)(j) * sumvkj(i) / sumlkj(i) - vc(i)(j) + (1 - eff(i)) * vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)
+                                'no liquid leaves the stage (the bubble-point solver's model of full reflux)
+                                E(i, j) = lc(i)(j) / _maxlc
                             ElseIf _condtype = condtype.Partial_Condenser Then
                                 M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - vc(i + 1)(j) - fc(i)(j)
-                                E(i, j) = eff(i) * Kval(i)(j) * lc(i)(j) * sumvkj(i) / sumlkj(i) - vc(i)(j) + (1 - eff(i)) * vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)
+                                E(i, j) = Ef(_effc, eff, i, j, Kval(i)(j) * lvr(i)(j), vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) * (Kval(i)(j) * lvr(i)(j) - vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) + vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1) - vc(i)(j)
                             Else
                                 'total condenser
                                 Dim sum1 As Double = 0
@@ -657,14 +711,14 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                             End If
                         Else
                             M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - vc(i + 1)(j) - fc(i)(j)
-                            E(i, j) = eff(i) * Kval(i)(j) * lc(i)(j) * sumvkj(i) / sumlkj(i) - vc(i)(j) + (1 - eff(i)) * vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)
+                            E(i, j) = Ef(_effc, eff, i, j, Kval(i)(j) * lvr(i)(j), vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) * (Kval(i)(j) * lvr(i)(j) - vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) + vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1) - vc(i)(j)
                         End If
                     ElseIf i = ns Then
                         M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - lc(i - 1)(j) - fc(i)(j)
-                        E(i, j) = eff(i) * Kval(i)(j) * lc(i)(j) * sumvkj(i) / sumlkj(i) - vc(i)(j)
+                        E(i, j) = Ef(_effc, eff, i, j) * Kval(i)(j) * lvr(i)(j) - vc(i)(j)
                     Else
                         M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - lc(i - 1)(j) - vc(i + 1)(j) - fc(i)(j)
-                        E(i, j) = eff(i) * Kval(i)(j) * lc(i)(j) * sumvkj(i) / sumlkj(i) - vc(i)(j) + (1 - eff(i)) * vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)
+                        E(i, j) = Ef(_effc, eff, i, j, Kval(i)(j) * lvr(i)(j), vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) * (Kval(i)(j) * lvr(i)(j) - vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1)) + vc(i + 1)(j) * sumvkj(i) / sumvkj(i + 1) - vc(i)(j)
                     End If
                 Next
                 If i = 0 Then
@@ -675,16 +729,21 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     H(i) = -Hr(i) + (Hl(i) * (1 + Sl(i)) * sumlkj(i) + Hv(i) * (1 + Sv(i)) * sumvkj(i) - Hl(i - 1) * sumlkj(i - 1) - Hv(i + 1) * sumvkj(i + 1) - HF(i) * F(i) - Q(i))
                 End If
                 H(i) /= 1000.0
+                ' the specification residuals replace the end stages' energy balances - except for a
+                ' Heat_Duty specification, whose duty is known and already in the balance just formed:
+                ' that balance IS the equation, and the specification residual would be a zero row
+                Dim cdutyspec As Boolean = _specs("C").SType = ColumnSpec.SpecType.Heat_Duty
+                Dim rdutyspec As Boolean = _specs("R").SType = ColumnSpec.SpecType.Heat_Duty
                 Select Case coltype
                     Case Column.ColType.DistillationColumn
-                        H(0) = spfval1 / spval1
-                        H(ns) = spfval2 / spval2
+                        If Not cdutyspec Then H(0) = If(spval1 <> 0.0 AndAlso _condtype <> Column.condtype.Full_Reflux, spfval1 / spval1, spfval1)
+                        If Not rdutyspec Then H(ns) = If(spval2 <> 0.0, spfval2 / spval2, spfval2)
                     Case Column.ColType.AbsorptionColumn
                         'do nothing
                     Case Column.ColType.ReboiledAbsorber
-                        H(ns) = spfval2 / spval2
+                        If Not rdutyspec Then H(ns) = If(spval2 <> 0.0, spfval2 / spval2, spfval2)
                     Case Column.ColType.RefluxedAbsorber
-                        H(0) = spfval1 / spval1
+                        If Not cdutyspec Then H(0) = If(spval1 <> 0.0, spfval1 / spval1, spfval1)
                 End Select
             Next
 
@@ -970,19 +1029,21 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     Dim lcj As Double = _stlc(i)(j), vcj As Double = _stvc(i)(j)
                     Dim rE As Integer = bc + 1 + nc + j
                     Dim rM As Integer = bc + 1 + j
+                    Dim ej As Double = Ef(_effc, _steff, i, j)
+                    If i < ns Then ej = Ef(_effc, _steff, i, j, K * lcj * svsum / slsum, _stvc(i + 1)(j) * svsum / _stsumv(i + 1))
 
                     ' E row: dE/dT(i)
-                    g(rE, bc) = e * dKdT(j) * lcj * svsum / slsum * sT
+                    g(rE, bc) = ej * dKdT(j) * lcj * svsum / slsum * sT
                     For m As Integer = 0 To nc - 1
                         Dim kr As Double = If(m = j, 1.0, 0.0)
                         Dim colV As Integer = bc + 1 + m
                         Dim colL As Integer = bc + 1 + nc + m
                         ' dE/dlc(i,m): K via xc chain (dKnL/slsum), explicit lcj and 1/slsum factors
-                        Dim dEdlc As Double = e * svsum * (dKnL(j, m) / slsum * lcj / slsum + K * kr / slsum - K * lcj / (slsum * slsum))
+                        Dim dEdlc As Double = ej * svsum * (dKnL(j, m) / slsum * lcj / slsum + K * kr / slsum - K * lcj / (slsum * slsum))
                         g(rE, colL) = dEdlc * sL
                         ' dE/dvc(i,m): K via yc chain (dKnV), svsum factor, and -vcj term
-                        Dim dEdvc As Double = e * lcj / slsum * (dKnV(j, m) + K) - kr
-                        If i < ns Then dEdvc += (1.0 - e) * _stvc(i + 1)(j) / _stsumv(i + 1)
+                        Dim dEdvc As Double = ej * lcj / slsum * (dKnV(j, m) + K) - kr
+                        If i < ns Then dEdvc += (1.0 - ej) * _stvc(i + 1)(j) / _stsumv(i + 1)
                         g(rE, colV) = dEdvc * sV
                         ' M row (with side-draw terms; reduces to +-1 coefficients when no draws)
                         g(rM, colL) = (kr * (1.0 + sldraw) - lcj * sldraw / slsum) * 1000000.0 * sL
@@ -993,7 +1054,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         Dim svnext As Double = _stsumv(i + 1)
                         For m As Integer = 0 To nc - 1
                             Dim kr As Double = If(m = j, 1.0, 0.0)
-                            g(rE, (i + 1) * block + 1 + m) = (1.0 - e) * svsum * (kr / svnext - _stvc(i + 1)(j) / (svnext * svnext)) * sV
+                            g(rE, (i + 1) * block + 1 + m) = (1.0 - ej) * svsum * (kr / svnext - _stvc(i + 1)(j) / (svnext * svnext)) * sV
                         Next
                     End If
                     ' M row inter-stage coupling
@@ -1267,7 +1328,8 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                 ByVal pp As PropertyPackages.PropertyPackage,
                                 ByVal specs As Dictionary(Of String, SepOps.ColumnSpec),
                               ByVal CalcMode As Integer,
-                              Optional ByVal LLEX As Boolean = False) As Object
+                              Optional ByVal LLEX As Boolean = False,
+                              Optional ByVal effc()() As Double = Nothing) As Object
 
             _names = pp.RET_VNAMES()
 
@@ -1532,6 +1594,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             _spci1 = spci1
             _spci2 = spci2
             _eff = eff.Clone
+            _effc = effc
             _F = F.Clone
             _Q = Q.Clone
             _P = P.Clone
@@ -1742,6 +1805,10 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         nsolv.EnableDamping = True
                         nsolv.ExpandFactor = 1.6
                         nsolv.MaximumDelta = 0.2
+                        ' scale the step as a whole rather than clip it variable by variable: a column carries
+                        ' trace components whose corrections are many times their size, and clipping those one
+                        ' by one leaves a direction along which nothing decreases
+                        nsolv.ScaleWholeStep = True
                         nsolv.MaxIterations = maxits
                         nsolv.Tolerance = tol.MinY_NonZero()
                         ' With an exact, cheap analytical Jacobian there is no reason to use the Broyden
@@ -1956,6 +2023,11 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             If dc.CreateSolverConvergengeReport Then dc.ColumnSolverConvergenceReport = reporter.ToString()
 
+            ' specified duties back in the column's convention (Q = in - out: condenser positive,
+            ' reboiler negative), which is what the bubble-point solver returns and the energy
+            ' streams are written from
+            If _specs("C").SType = ColumnSpec.SpecType.Heat_Duty Then Q(0) = spval1
+            If _specs("R").SType = ColumnSpec.SpecType.Heat_Duty Then Q(ns) = -spval2
             Return New Object() {Tj, Vj, Lj, VSSj, LSSj, yc, xc, K, Q, ec, il_err, ic, el_err}
 
         End Function
@@ -2002,7 +2074,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             result = Solve(col, nc, ns, maxits, tol, F, V, Q, L, VSS, LSS, Kval, x, y, z, fc, HF, T, P,
                                input.CondenserType, eff, input.ColumnType, col.PropertyPackage, col.Specs, input.CalculationMode,
-                               llextractor)
+                               llextractor, If(input.ComponentEfficiencies Is Nothing, Nothing, input.ComponentEfficiencies.ToArray()))
 
             Dim output As New ColumnSolverOutputData
 

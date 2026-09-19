@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using DWSIM.DynamicsManager;
 using DWSIM.Interfaces;
 using DWSIM.Interfaces.Enums;
+using DWSIM.Interfaces.Enums.GraphicObjects;
 using DWSIM.UnitOperations.SpecialOps;
 using DWSIM.UnitOperations.SpecialOps.Helpers;
 using DWSIM.UnitOperations.UnitOperations;
@@ -20,6 +21,18 @@ namespace DWSIM.Automation.DynamicRunner.Setup
 
         /// <summary>How long a holdup vessel should take to turn over, when its volume has to be invented. Seconds.</summary>
         public double TargetResidenceTimeSeconds { get; set; }
+
+        /// <summary>Residence time a heater, cooler, exchanger side or component separator carrying liquid is sized to when its holdup volume is checked.</summary>
+        public double EquipmentResidenceTimeSeconds { get; set; }
+
+        /// <summary>The same for a unit carrying gas, whose holdup is a few seconds at most.</summary>
+        public double GasEquipmentResidenceTimeSeconds { get; set; }
+
+        /// <summary>Internal loss of a pump, compressor or expander (suction, volute) as a fraction of its differential pressure; sizes the machine's flow conductance.</summary>
+        public double MachineInternalLossFraction { get; set; }
+
+        /// <summary>Residence time a pump, compressor or expander casing is sized to when its holdup volume is checked.</summary>
+        public double MachineResidenceTimeSeconds { get; set; }
 
         /// <summary>Where a sized valve should sit at the design point, in percent. Half open leaves authority both ways.</summary>
         public double DesignValveOpeningPct { get; set; }
@@ -43,6 +56,10 @@ namespace DWSIM.Automation.DynamicRunner.Setup
         public DynamicsSetupOptions()
         {
             TargetResidenceTimeSeconds = 300.0;
+            EquipmentResidenceTimeSeconds = 30.0;
+            GasEquipmentResidenceTimeSeconds = 3.0;
+            MachineInternalLossFraction = 0.03;
+            MachineResidenceTimeSeconds = 2.0;
             DesignValveOpeningPct = 50.0;
             InitialLevelFraction = 0.5;
             IntegrationStep = TimeSpan.FromSeconds(5);
@@ -88,6 +105,8 @@ namespace DWSIM.Automation.DynamicRunner.Setup
 
             EnrichValveSizing(flowsheet, issues, options);
             EnrichHoldup(flowsheet, issues, options);
+            AddEquipmentHoldup(flowsheet, issues, options);
+            AddFlowConductance(flowsheet, issues, options);
             AddStreamSpecs(flowsheet, issues);
             AddControlLoops(flowsheet, issues, options);
             AddIntegratorAndSchedule(flowsheet, issues, options);
@@ -263,6 +282,303 @@ namespace DWSIM.Automation.DynamicRunner.Setup
                     target.AddDynamicProperty("Height", h);
                     target.AddDynamicProperty("Liquid Level", h * options.InitialLevelFraction);
                 };
+            }
+        }
+
+        // ------------------------------------------------------------- Equipment holdup
+
+        /// <summary>
+        /// Every unit with a dynamic holdup carries a volume the steady state never asked for, and
+        /// the default it ships with (1 m³ for a heater, 10 L for a pump casing) is a placeholder,
+        /// not a size. The volume sets the lag the unit shows, so each one is checked against the
+        /// flow it carries now: a residence time far from what the class of equipment has is
+        /// reported with a volume that gives the target residence time. Reactors and column drums
+        /// take the vessel residence time; heaters, coolers, exchanger sides and component
+        /// separators a shorter one; machine casings a couple of seconds.
+        /// </summary>
+        private static void AddEquipmentHoldup(IFlowsheet flowsheet, List<DynamicsIssue> issues, DynamicsSetupOptions options)
+        {
+            foreach (var obj in flowsheet.SimulationObjects.Values.ToList())
+            {
+                var graphic = obj.GraphicObject;
+                if (graphic == null || !graphic.Active || !obj.HasPropertiesForDynamicMode) continue;
+
+                var specs = HoldupSpecs(flowsheet, obj, options);
+                if (specs == null) continue;
+
+                var tag = graphic.Tag;
+                foreach (var spec in specs)
+                {
+                    if (spec.Throughput <= 0.0 || double.IsNaN(spec.Throughput) || double.IsInfinity(spec.Throughput)) continue;
+
+                    var current = DynamicsReadiness.DynamicValue(obj, spec.Property);
+                    var suggested = spec.Throughput * spec.TargetSeconds;
+                    if (suggested <= 0.0) continue;
+
+                    var tau = current > 0.0 ? current / spec.Throughput : 0.0;
+                    var inBand = current > 0.0 && tau >= spec.TargetSeconds / 10.0 && tau <= spec.TargetSeconds * 10.0;
+                    if (inBand) continue;
+
+                    var target = obj;
+                    var property = spec.Property;
+                    var setsHeight = spec.SetsHeight;
+                    var what = current > 0.0
+                        ? "The " + spec.Label + " of " + DynamicsReadiness.Fmt(current) + " m³ holds the flow for " + DescribeTime(tau) +
+                          ", which is " + (tau < spec.TargetSeconds ? "much shorter" : "much longer") + " than the " + DescribeTime(spec.TargetSeconds) +
+                          " this kind of equipment usually has."
+                        : "The " + spec.Label + " is zero, so nothing accumulates and the unit shows no lag.";
+
+                    issues.Add(new DynamicsIssue
+                    {
+                        Code = "HOLDUP_VOLUME_CHECK",
+                        Severity = current > 0.0 ? DynamicsIssueSeverity.Warning : DynamicsIssueSeverity.Blocker,
+                        Category = DynamicsIssueCategory.Holdup,
+                        ObjectId = obj.Name,
+                        ObjectTag = tag,
+                        Message = what,
+                        Fix = "Give it " + DynamicsReadiness.Fmt(suggested) + " m³, which is " + DescribeTime(spec.TargetSeconds) +
+                              " of the flow it carries now. Keep your own value if the real volume is known.",
+                        CanAutoFix = true,
+                        ValueLabel = spec.Label,
+                        SuggestedValue = suggested,
+                        UnitType = UnitOfMeasure.volume,
+                        Apply = v =>
+                        {
+                            var chosen = Convert.ToDouble(v, CultureInfo.InvariantCulture);
+                            target.AddDynamicProperty(property, chosen);
+                            if (setsHeight)
+                            {
+                                // a vertical drum about three diameters tall, as for the vessels
+                                var h = Math.Pow(12.0 * chosen / Math.PI, 1.0 / 3.0);
+                                target.AddDynamicProperty("Height", h);
+                            }
+                        }
+                    });
+                }
+
+                // The metal of a heater or exchanger is a heat capacity the outlet temperature has to
+                // drag along; at zero the outlet follows the duty at once. Reported, not sized: the
+                // mass of the metal is not something the flowsheet can guess.
+                var type = graphic.ObjectType;
+                if (type == ObjectType.Heater || type == ObjectType.Cooler || type == ObjectType.HeatExchanger)
+                {
+                    if (DynamicsReadiness.DynamicValue(obj, "Wall Thermal Mass") <= 0.0)
+                    {
+                        issues.Add(new DynamicsIssue
+                        {
+                            Code = "WALL_MASS_ZERO",
+                            Severity = DynamicsIssueSeverity.Info,
+                            Category = DynamicsIssueCategory.Holdup,
+                            ObjectId = obj.Name,
+                            ObjectTag = tag,
+                            Message = "The wall has no thermal mass, so the outlet temperature answers a change in duty or flow with no lag from the metal.",
+                            Fix = "Enter the metal's mass times its specific heat (Wall Thermal Mass, kJ/K) if that lag matters to the study.",
+                            CanAutoFix = false
+                        });
+                    }
+                }
+            }
+        }
+
+        private sealed class HoldupSpec
+        {
+            public string Property;
+            public string Label;
+            public double Throughput;    // m3/s of the flow that fills this volume
+            public double TargetSeconds;
+            public bool SetsHeight;
+        }
+
+        /// <summary>The holdup volumes a unit carries and the flow each one sees, or null for a unit with none.</summary>
+        private static List<HoldupSpec> HoldupSpecs(IFlowsheet flowsheet, ISimulationObject obj, DynamicsSetupOptions options)
+        {
+            var type = obj.GraphicObject.ObjectType;
+            var total = InletVolumetricFlow(flowsheet, obj);
+
+            switch (type)
+            {
+                case ObjectType.Heater:
+                case ObjectType.Cooler:
+                case ObjectType.ComponentSeparator:
+                    return new List<HoldupSpec> { new HoldupSpec { Property = "Volume", Label = "holdup volume", Throughput = total, TargetSeconds = EquipmentTarget(ConnectedStream(flowsheet, obj, 0, true), options) } };
+
+                case ObjectType.Pump:
+                case ObjectType.Compressor:
+                case ObjectType.Expander:
+                    return new List<HoldupSpec> { new HoldupSpec { Property = "Volume", Label = "casing volume", Throughput = total, TargetSeconds = options.MachineResidenceTimeSeconds } };
+
+                case ObjectType.RCT_Conversion:
+                case ObjectType.RCT_Equilibrium:
+                case ObjectType.RCT_Gibbs:
+                    return new List<HoldupSpec> { new HoldupSpec { Property = "Volume", Label = "reactor volume", Throughput = total, TargetSeconds = options.TargetResidenceTimeSeconds, SetsHeight = true } };
+
+                case ObjectType.ShortcutColumn:
+                    return new List<HoldupSpec>
+                    {
+                        new HoldupSpec { Property = "Condenser Volume", Label = "condenser drum volume", Throughput = total, TargetSeconds = options.TargetResidenceTimeSeconds },
+                        new HoldupSpec { Property = "Reboiler Volume", Label = "reboiler volume", Throughput = total, TargetSeconds = options.TargetResidenceTimeSeconds }
+                    };
+
+                case ObjectType.HeatExchanger:
+                {
+                    // the exchanger tells its sides apart by inlet temperature: the hotter inlet is the hot side
+                    IMaterialStream hotIn, coldIn;
+                    ExchangerSides(flowsheet, obj, out hotIn, out coldIn);
+                    if (hotIn == null || coldIn == null) return null;
+                    return new List<HoldupSpec>
+                    {
+                        new HoldupSpec { Property = "Volume for Hot Fluid", Label = "hot-side volume", Throughput = SafeVolumetricFlow(hotIn), TargetSeconds = EquipmentTarget(hotIn, options) },
+                        new HoldupSpec { Property = "Volume for Cold Fluid", Label = "cold-side volume", Throughput = SafeVolumetricFlow(coldIn), TargetSeconds = EquipmentTarget(coldIn, options) }
+                    };
+                }
+            }
+            return null;
+        }
+
+        /// <summary>The hot and the cold inlet of an exchanger (the hotter inlet is the hot side, as the exchanger itself decides).</summary>
+        private static void ExchangerSides(IFlowsheet flowsheet, ISimulationObject obj, out IMaterialStream hotIn, out IMaterialStream coldIn)
+        {
+            hotIn = null; coldIn = null;
+            var in0 = ConnectedStream(flowsheet, obj, 0, true);
+            var in1 = ConnectedStream(flowsheet, obj, 1, true);
+            if (in0 == null || in1 == null) return;
+            if (in0.GetTemperature() < in1.GetTemperature()) { coldIn = in0; hotIn = in1; } else { coldIn = in1; hotIn = in0; }
+        }
+
+        /// <summary>Residence-time target of a heater, cooler, exchanger side or component separator: a few seconds for gas, tens of seconds for liquid.</summary>
+        private static double EquipmentTarget(IMaterialStream inlet, DynamicsSetupOptions options)
+        {
+            return IsGas(inlet) ? options.GasEquipmentResidenceTimeSeconds : options.EquipmentResidenceTimeSeconds;
+        }
+
+        /// <summary>True when the stream is mostly vapour by mass.</summary>
+        private static bool IsGas(IMaterialStream stream)
+        {
+            if (stream == null) return false;
+            try
+            {
+                IPhase vapour;
+                if (!stream.Phases.TryGetValue(2, out vapour) || vapour == null) return false;
+                var wv = vapour.Properties.massfraction;
+                return wv.HasValue && wv.Value >= 0.5;
+            }
+            catch { return false; }
+        }
+
+        private static double SafeVolumetricFlow(IMaterialStream stream)
+        {
+            try
+            {
+                var q = stream.GetVolumetricFlow();
+                return double.IsNaN(q) || double.IsInfinity(q) || q < 0.0 ? 0.0 : q;
+            }
+            catch { return 0.0; }
+        }
+
+        /// <summary>The material stream attached to an inlet or outlet connector, or null.</summary>
+        private static IMaterialStream ConnectedStream(IFlowsheet flowsheet, ISimulationObject obj, int index, bool inlet)
+        {
+            var graphic = obj.GraphicObject;
+            var connectors = inlet ? graphic.InputConnectors : graphic.OutputConnectors;
+            if (index < 0 || index >= connectors.Count) return null;
+            var c = connectors[index];
+            if (!c.IsAttached || c.AttachedConnector == null) return null;
+            var other = inlet ? c.AttachedConnector.AttachedFrom : c.AttachedConnector.AttachedTo;
+            if (other == null) return null;
+            ISimulationObject so;
+            if (!flowsheet.SimulationObjects.TryGetValue(other.Name, out so)) return null;
+            return so as IMaterialStream;
+        }
+
+        private static string DescribeTime(double seconds)
+        {
+            if (seconds >= 3600.0) return DynamicsReadiness.Fmt(seconds / 3600.0) + " h";
+            if (seconds >= 120.0) return DynamicsReadiness.Fmt(seconds / 60.0) + " min";
+            return DynamicsReadiness.Fmt(seconds) + " s";
+        }
+
+        // ------------------------------------------------------------- Flow conductance
+
+        /// <summary>
+        /// Heaters, coolers and exchangers resolve their pressure drop in dynamic mode from a flow
+        /// conductance K, dP = (W / K)², and ship with K = 1, which is no size at all: at 10 kg/s it
+        /// gives 100 Pa, at 100 kg/s 10 kPa, whatever the steady state said. K is sized so the unit
+        /// reproduces its converged pressure drop at its converged flow; a unit with no pressure
+        /// drop gets a token 1 kPa so the pressure-flow network stays well posed. For a pump,
+        /// compressor or expander the conductance is an internal loss (suction, volute) the steady
+        /// state has no counterpart for; it is sized to a few percent of the machine's differential
+        /// pressure, which is where such losses sit.
+        /// </summary>
+        private static void AddFlowConductance(IFlowsheet flowsheet, List<DynamicsIssue> issues, DynamicsSetupOptions options)
+        {
+            const double tokenDrop = 1000.0; // Pa
+
+            foreach (var obj in flowsheet.SimulationObjects.Values.ToList())
+            {
+                var graphic = obj.GraphicObject;
+                if (graphic == null || !graphic.Active) continue;
+                var type = graphic.ObjectType;
+
+                var isMachine = type == ObjectType.Pump || type == ObjectType.Compressor || type == ObjectType.Expander;
+                var sides = new List<Tuple<string, int>>();
+                if (type == ObjectType.Heater || type == ObjectType.Cooler || isMachine) sides.Add(Tuple.Create("Flow Conductance", 0));
+                else if (type == ObjectType.HeatExchanger)
+                {
+                    var in0 = ConnectedStream(flowsheet, obj, 0, true);
+                    var in1 = ConnectedStream(flowsheet, obj, 1, true);
+                    if (in0 == null || in1 == null) continue;
+                    var hotIndex = in0.GetTemperature() < in1.GetTemperature() ? 1 : 0;
+                    sides.Add(Tuple.Create("Hot Fluid Flow Conductance", hotIndex));
+                    sides.Add(Tuple.Create("Cold Fluid Flow Conductance", 1 - hotIndex));
+                }
+                else continue;
+
+                foreach (var side in sides)
+                {
+                    var inlet = ConnectedStream(flowsheet, obj, side.Item2, true);
+                    var outlet = ConnectedStream(flowsheet, obj, side.Item2, false);
+                    if (inlet == null || outlet == null) continue;
+
+                    double w, pin, pout;
+                    try { w = inlet.GetMassFlow(); pin = inlet.GetPressure(); pout = outlet.GetPressure(); }
+                    catch { continue; }
+                    if (w <= 0.0 || pin <= 0.0 || pout <= 0.0 || double.IsNaN(w + pin + pout)) continue;
+
+                    // a machine's loss is a share of its own differential; a unit's is its converged drop
+                    var dropSteady = isMachine ? Math.Abs(pout - pin) * options.MachineInternalLossFraction : Math.Max(pin - pout, 0.0);
+                    if (isMachine && dropSteady <= 0.0) continue;
+                    var dropSize = Math.Max(dropSteady, tokenDrop);
+                    var kNeeded = w / Math.Sqrt(dropSize);
+
+                    var kNow = DynamicsReadiness.DynamicValue(obj, side.Item1);
+                    var dropNow = kNow > 0.0 ? Math.Pow(w / kNow, 2.0) : double.PositiveInfinity;
+                    if (Math.Abs(dropNow - dropSize) <= Math.Max(0.2 * dropSize, 0.5 * tokenDrop)) continue;
+
+                    var target = obj;
+                    var property = side.Item1;
+                    issues.Add(new DynamicsIssue
+                    {
+                        Code = "FLOW_CONDUCTANCE_CHECK",
+                        Severity = DynamicsIssueSeverity.Warning,
+                        Category = DynamicsIssueCategory.Hydraulics,
+                        ObjectId = obj.Name,
+                        ObjectTag = graphic.Tag,
+                        Message = "At its converged flow of " + DynamicsReadiness.Fmt(w) + " kg/s the " + property.ToLowerInvariant() + " of " +
+                                  DynamicsReadiness.Fmt(kNow) + " gives an internal pressure drop of " + DynamicsReadiness.Fmt(dropNow / 1000.0) +
+                                  " kPa in dynamic mode; " + (isMachine
+                                      ? "a machine's suction and volute losses run to " + DynamicsReadiness.Fmt(options.MachineInternalLossFraction * 100.0) +
+                                        " % of its differential, " + DynamicsReadiness.Fmt(dropSteady / 1000.0) + " kPa here."
+                                      : "the steady state has " + DynamicsReadiness.Fmt(dropSteady / 1000.0) + " kPa."),
+                        Fix = "Set it to " + DynamicsReadiness.Fmt(kNeeded) + " (flow over the square root of the pressure drop" +
+                              (dropSteady < tokenDrop ? ", with a token 1 kPa drop since the steady state has none" : "") +
+                              (isMachine ? "), so the machine carries a realistic internal loss." : "), so the unit reproduces its steady-state pressure drop."),
+                        CanAutoFix = true,
+                        ValueLabel = property,
+                        SuggestedValue = kNeeded,
+                        UnitType = UnitOfMeasure.none,
+                        Apply = v => { target.AddDynamicProperty(property, Convert.ToDouble(v, CultureInfo.InvariantCulture)); }
+                    });
+                }
             }
         }
 

@@ -91,21 +91,31 @@
         <MenuItem Header="_Dynamics Manager"       Name="MenuDynManager" />
         <MenuItem Header="_Integrator Controls"    Name="MenuDynIntegrator" />
         <MenuItem Header="_PID Controller Tuning"  Name="MenuDynPIDTuning" />
+        <MenuItem Header="_Vessel Depressurization..." Name="MenuDepressurization" />
       </MenuItem>
       <MenuItem Header="_Utilities">
         <MenuItem Header="Pressure Safety _Valve Sizing..." Name="MenuPsvSizing" />
         <MenuItem Header="_Gas-Liquid Separator Sizing..." Name="MenuSepSizing" />
+        <MenuItem Header="_Column Internals..."           Name="MenuColumnInternals" />
         <MenuItem Header="_Binary Envelope..."        Name="MenuUtilBE" />
         <MenuItem Header="Ternary Envelope (_LLE)..." Name="MenuUtilLLE" />
         <MenuItem Header="_Phase Envelope..."         Name="MenuUtilPE" />
         <MenuItem Header="_True Critical Point..."    Name="MenuUtilTCP" />
         <MenuItem Header="Petroleum Cold _Flow Properties..." Name="MenuColdFlow" />
         <MenuItem Header="Natural Gas H_ydrates..."   Name="MenuHydrates" />
+        <Separator />
+        <MenuItem Header="_McCabe-Thiele Diagram..."  Name="MenuMcCabeThiele" />
+        <MenuItem Header="_Equation of State Explorer..." Name="MenuEosExplorer" />
+        <MenuItem Header="Property Package _Comparison..." Name="MenuPackageComparison" />
       </MenuItem>
       <MenuItem Header="Flowsheet _Analysis">
         <MenuItem Header="_Sensitivity Analysis..."  Name="MenuSensitivity" />
         <MenuItem Header="_Multivariate Optimizer..." Name="MenuOptimizer" />
         <MenuItem Header="Mass and Energy _Balance Summary..." Name="MenuBalance" />
+        <MenuItem Header="Flowsheet Chec_k..."   Name="MenuFlowsheetCheck" InputGesture="F8" />
+        <MenuItem Header="E_xplain Result..."   Name="MenuExplainResult" />
+        <MenuItem Header="Scenario Compa_rison..."   Name="MenuScenarioComparison" />
+        <MenuItem Header="_Live Sliders..."   Name="MenuLiveSliders" />
         <MenuItem Header="Property _Chart..."        Name="MenuPropertyChart" />
       </MenuItem>
       <MenuItem Header="_Results">
@@ -122,6 +132,15 @@
         <Separator />
         <MenuItem Header="Close All Opened _Editors" Name="MenuCloseAllEditors" />
         <Separator />
+        <MenuItem Header="Colour Streams _By" Name="MenuStreamColor">
+          <MenuItem Header="Solver _Status"    Name="MenuStreamColorStatus"   ToggleType="Radio" GroupName="StreamColor" />
+          <MenuItem Header="_Temperature"      Name="MenuStreamColorT"        ToggleType="Radio" GroupName="StreamColor" />
+          <MenuItem Header="_Pressure"         Name="MenuStreamColorP"        ToggleType="Radio" GroupName="StreamColor" />
+          <MenuItem Header="_Vapour Fraction"  Name="MenuStreamColorVF"       ToggleType="Radio" GroupName="StreamColor" />
+          <MenuItem Header="P_hase"            Name="MenuStreamColorPhase"    ToggleType="Radio" GroupName="StreamColor" />
+          <MenuItem Header="_Mass Flow"        Name="MenuStreamColorFlow"     ToggleType="Radio" GroupName="StreamColor" />
+        </MenuItem>
+        <Separator />
         <MenuItem Header="_Zoom In"        Name="MenuZoomIn" />
         <MenuItem Header="Zoom _Out"       Name="MenuZoomOut" />
         <MenuItem Header="Fit to _Window"  Name="MenuZoomFit" />
@@ -130,6 +149,8 @@
         <MenuItem Header="Size Symbols by Equipment Type" Name="MenuSizeSymbolsByType" />
       </MenuItem>
       <MenuItem Header="_Help">
+        <MenuItem Header="Help for the _Selection" Name="MenuHelpContext" InputGesture="F1" />
+        <MenuItem Header="Online _Tutorials"       Name="MenuHelpTutorials" />
         <MenuItem Header="_User Guide (HTML)..."   Name="MenuHelpHtml" />
         <Separator />
         <MenuItem Header="_Support"                Name="MenuHelpSupport" />

@@ -3795,10 +3795,25 @@ Imports DWSIM.ExtensionMethods
                 Return New Utilities.PetroleumColdFlowUtility()
             Case FlowsheetUtility.PureCompoundProperties
                 Return New Utilities.PureCompoundPropertiesUtility()
+            Case FlowsheetUtility.ColumnInternals
+                'lives in the runner assembly, which references this one; found by name in whatever assembly carries it
+                Return CreateUtilityByName("DWSIM.Automation.DynamicRunner.ColumnInternals.ColumnInternalsUtility")
             Case Else
                 Return Nothing
         End Select
 
+    End Function
+
+    ''' <summary>Instantiates a utility class by its full name from the assemblies already loaded.</summary>
+    Private Shared Function CreateUtilityByName(typeName As String) As IAttachedUtility
+        For Each asm In AppDomain.CurrentDomain.GetAssemblies()
+            Try
+                Dim t = asm.GetType(typeName, False)
+                If t IsNot Nothing Then Return TryCast(Activator.CreateInstance(t), IAttachedUtility)
+            Catch
+            End Try
+        Next
+        Return Nothing
     End Function
 
     Public Property MasterFlowsheet As IFlowsheet Implements IFlowsheet.MasterFlowsheet
@@ -5609,15 +5624,26 @@ Label_00CC:
 
                     'compounds
 
-                    Options.SelectedComponents.Clear()
-
+                    ' material streams and property packages hold the selected compound instances by
+                    ' reference, so restore into the existing instances instead of replacing them;
+                    ' only names missing from the flowsheet get a new instance
                     data = xdoc.Element("DWSIM_Simulation_Data").Element("Compounds").Elements.ToList
 
+                    Dim restoredNames As New HashSet(Of String)
+
                     For Each xel As XElement In data
-                        Dim obj As New ConstantProperties
-                        obj.Name = xel.Element("Name").Value
-                        If Not AvailableCompounds.ContainsKey(obj.Name) Then AvailableCompounds.Add(obj.Name, obj)
-                        Options.SelectedComponents.Add(obj.Name, obj)
+                        Dim cname = xel.Element("Name").Value
+                        restoredNames.Add(cname)
+                        If Not Options.SelectedComponents.ContainsKey(cname) Then
+                            Dim obj As New ConstantProperties
+                            obj.Name = cname
+                            If Not AvailableCompounds.ContainsKey(obj.Name) Then AvailableCompounds.Add(obj.Name, obj)
+                            Options.SelectedComponents.Add(obj.Name, obj)
+                        End If
+                    Next
+
+                    For Each cname In Options.SelectedComponents.Keys.Where(Function(k) Not restoredNames.Contains(k)).ToList()
+                        Options.SelectedComponents.Remove(cname)
                     Next
 
                     Parallel.ForEach(data, Sub(xel)
@@ -5627,6 +5653,8 @@ Label_00CC:
                                                    excs.Add(New Exception("Error Loading Compound Information", ex))
                                                End Try
                                            End Sub)
+
+                    ResetCalculationStatus()
 
                 End If
 

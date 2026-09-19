@@ -142,7 +142,7 @@ Namespace UnitOperations
 
                         Dim newdist = condrec.GraphicObject.OutputConnectors(0).AttachedConnector.AttachedTo.Owner
 
-                        Dim si As New StreamInformation With {.AssociatedStage = Stages(0).Name, .ID = Guid.NewGuid().ToString(),
+                        Dim si As New StreamInformation With {.AssociatedStage = Stages(0).ID, .ID = Guid.NewGuid().ToString(),
                             .StreamBehavior = StreamInformation.Behavior.Feed,
                             .StreamPhase = StreamInformation.Phase.L, .StreamType = StreamInformation.Type.Material,
                             .StreamPosition = StreamInformation.Position.Above, .StreamID = newdist.Name}
@@ -153,7 +153,7 @@ Namespace UnitOperations
 
                         Dim overhs As MaterialStream = cond.GraphicObject.InputConnectors(0).AttachedConnector.AttachedFrom.Owner
 
-                        si = New StreamInformation With {.AssociatedStage = Stages(0).Name, .ID = Guid.NewGuid().ToString(),
+                        si = New StreamInformation With {.AssociatedStage = Stages(0).ID, .ID = Guid.NewGuid().ToString(),
                             .StreamBehavior = StreamInformation.Behavior.OverheadVapor,
                             .StreamPhase = StreamInformation.Phase.V, .StreamType = StreamInformation.Type.Material,
                             .StreamPosition = StreamInformation.Position.Above, .StreamID = overhs.Name}
@@ -212,7 +212,7 @@ Namespace UnitOperations
 
                         Dim newrebfeed As MaterialStream = rebrec.GraphicObject.OutputConnectors(0).AttachedConnector.AttachedTo.Owner
 
-                        Dim si As New StreamInformation With {.AssociatedStage = Stages.Last.Name, .ID = Guid.NewGuid().ToString(),
+                        Dim si As New StreamInformation With {.AssociatedStage = Stages.Last.ID, .ID = Guid.NewGuid().ToString(),
                             .StreamBehavior = StreamInformation.Behavior.Feed,
                             .StreamPhase = StreamInformation.Phase.B, .StreamType = StreamInformation.Type.Material,
                             .StreamPosition = StreamInformation.Position.Above, .StreamID = newrebfeed.Name}
@@ -221,7 +221,7 @@ Namespace UnitOperations
 
                         Dim newreb As MaterialStream = rebspl.GraphicObject.InputConnectors(0).AttachedConnector.AttachedFrom.Owner
 
-                        si = New StreamInformation With {.AssociatedStage = Stages.Last.Name, .ID = Guid.NewGuid().ToString(),
+                        si = New StreamInformation With {.AssociatedStage = Stages.Last.ID, .ID = Guid.NewGuid().ToString(),
                             .StreamBehavior = StreamInformation.Behavior.BottomsLiquid,
                             .StreamPhase = StreamInformation.Phase.B, .StreamType = StreamInformation.Type.Material,
                             .StreamPosition = StreamInformation.Position.Below, .StreamID = newreb.Name}
@@ -249,7 +249,7 @@ Namespace UnitOperations
                 If Not con.IsAttached Then
                     FlowSheet.ConnectObjects(feed.GraphicObject, GraphicObject, 0, i)
                     Dim msi As New StreamInformation With {.ID = feed.Name, .StreamID = feed.Name,
-                        .AssociatedStage = Stages(stagenumber).Name,
+                        .AssociatedStage = Stages(stagenumber).ID,
                         .StreamBehavior = StreamInformation.Behavior.Feed,
                         .StreamType = StreamInformation.Type.Material}
                     MaterialStreams.Add(msi.ID, msi)
@@ -266,7 +266,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 9, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages(0).Name,
+                        .AssociatedStage = Stages(0).ID,
                         .StreamBehavior = StreamInformation.Behavior.OverheadVapor,
                         .StreamType = StreamInformation.Type.Material}
             MaterialStreams.Add(msi.ID, msi)
@@ -277,7 +277,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 0, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages(0).Name,
+                        .AssociatedStage = Stages(0).ID,
                         .StreamBehavior = StreamInformation.Behavior.Distillate,
                         .StreamType = StreamInformation.Type.Material}
             MaterialStreams.Add(msi.ID, msi)
@@ -288,7 +288,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 1, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages.Last.Name,
+                        .AssociatedStage = Stages.Last.ID,
                         .StreamBehavior = StreamInformation.Behavior.BottomsLiquid,
                         .StreamType = StreamInformation.Type.Material}
             MaterialStreams.Add(msi.ID, msi)
@@ -299,7 +299,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 10, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages(0).Name,
+                        .AssociatedStage = Stages(0).ID,
                         .StreamBehavior = StreamInformation.Behavior.Distillate,
                         .StreamType = StreamInformation.Type.Energy}
             EnergyStreams.Add(msi.ID, msi)
@@ -310,7 +310,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(stream.GraphicObject, GraphicObject, 0, 10)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages.Last.Name,
+                        .AssociatedStage = Stages.Last.ID,
                         .StreamBehavior = StreamInformation.Behavior.BottomsLiquid,
                         .StreamType = StreamInformation.Type.Energy}
             EnergyStreams.Add(msi.ID, msi)
@@ -427,6 +427,11 @@ Namespace UnitOperations
                     For i = 1 To Me.Stages.Count
                         proplist.Add("Stage_Temperature_" + CStr(i))
                     Next
+                    For i = 1 To Me.Stages.Count
+                        proplist.Add("Stage_VaporFlow_" + CStr(i))
+                        proplist.Add("Stage_LiquidFlow_" + CStr(i))
+                    Next
+                    proplist.Add("Sump_LiquidLevel")
                 Case PropertyType.RW, PropertyType.ALL
                     For i = 2 To 2
                         proplist.Add("PROP_DC_" + CStr(i))
@@ -443,6 +448,16 @@ Namespace UnitOperations
                     For i = 1 To Me.Stages.Count
                         proplist.Add("Stage_Temperature_" + CStr(i))
                     Next
+                    For i = 1 To Me.Stages.Count
+                        proplist.Add("Stage_LiquidLevel_" + CStr(i))
+                    Next
+                    If proptype = PropertyType.ALL Then
+                        For i = 1 To Me.Stages.Count
+                            proplist.Add("Stage_VaporFlow_" + CStr(i))
+                            proplist.Add("Stage_LiquidFlow_" + CStr(i))
+                        Next
+                    End If
+                    proplist.Add("Sump_LiquidLevel")
                     proplist.Add("Condenser_Specification_Value")
                     proplist.Add("Reboiler_Specification_Value")
                     proplist.Add("Global_Stage_Efficiency")
@@ -571,6 +586,24 @@ Namespace UnitOperations
                     If Me.Stages.Count >= stageindex Then value = SystemsOfUnits.Converter.ConvertFromSI(su.temperature, Me.Stages(stageindex - 1).T)
                 End If
 
+                If prop = "Sump_LiquidLevel" Then value = SystemsOfUnits.Converter.ConvertFromSI(su.distance, BottomLiquidLevel)
+
+                If prop.Contains("Stage_LiquidLevel_") Then
+                    Dim stageindex As Integer = prop.Split("_")(2)
+                    If Me.Stages.Count >= stageindex Then value = SystemsOfUnits.Converter.ConvertFromSI(su.distance, Me.Stages(stageindex - 1).LiquidLevel)
+                End If
+
+                'the vapor a stage sends up and the liquid it sends down (the last steady-state or dynamic rates)
+                If prop.Contains("Stage_VaporFlow_") Then
+                    Dim stageindex As Integer = prop.Split("_")(2)
+                    If Me.Stages.Count >= stageindex Then value = SystemsOfUnits.Converter.ConvertFromSI(su.molarflow, Me.Stages(stageindex - 1).Vout.Value)
+                End If
+
+                If prop.Contains("Stage_LiquidFlow_") Then
+                    Dim stageindex As Integer = prop.Split("_")(2)
+                    If Me.Stages.Count >= stageindex Then value = SystemsOfUnits.Converter.ConvertFromSI(su.molarflow, Me.Stages(stageindex - 1).Lout.Value)
+                End If
+
                 If prop.Contains("Stage_Efficiency_") Then
                     Dim stageindex As Integer = prop.Split("_")(2)
                     If Me.Stages.Count >= stageindex Then value = Me.Stages(stageindex - 1).Efficiency
@@ -679,6 +712,9 @@ Namespace UnitOperations
 
                 If prop.Contains("Stage_Pressure") Then value = su.pressure
                 If prop.Contains("Stage_Temperature") Then value = su.temperature
+                If prop.Contains("Stage_LiquidLevel") Then value = su.distance
+                If prop.Contains("Stage_VaporFlow") OrElse prop.Contains("Stage_LiquidFlow") Then value = su.molarflow
+                If prop = "Sump_LiquidLevel" Then value = su.distance
                 If prop.Contains("Stage_Efficiency") Then value = ""
                 If prop.Contains("Molar Flow") Then value = su.molarflow
 
@@ -748,7 +784,7 @@ Namespace UnitOperations
                     Try
                         Dim streamtag = FlowSheet.SimulationObjects(si.StreamID).GraphicObject.Tag
                         If prop = String.Format("Stream '{0}' Stage Index", streamtag) Then
-                            si.AssociatedStage = Stages(Convert.ToInt32(propval)).Name
+                            si.AssociatedStage = Stages(Convert.ToInt32(propval)).ID
                             Exit For
                         End If
                     Catch ex As Exception
@@ -860,7 +896,7 @@ Namespace UnitOperations
                 If Not con.IsAttached Then
                     FlowSheet.ConnectObjects(feed.GraphicObject, GraphicObject, 0, i)
                     Dim msi As New StreamInformation With {.ID = feed.Name, .StreamID = feed.Name,
-                        .AssociatedStage = Stages(stagenumber).Name,
+                        .AssociatedStage = Stages(stagenumber).ID,
                         .StreamBehavior = StreamInformation.Behavior.Feed,
                         .StreamType = StreamInformation.Type.Material}
                     MaterialStreams.Add(msi.ID, msi)
@@ -884,7 +920,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 0, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages(0).Name,
+                        .AssociatedStage = Stages(0).ID,
                         .StreamBehavior = StreamInformation.Behavior.OverheadVapor,
                         .StreamType = StreamInformation.Type.Material}
             MaterialStreams.Add(msi.ID, msi)
@@ -895,7 +931,7 @@ Namespace UnitOperations
 
             FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, 1, 0)
             Dim msi As New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
-                        .AssociatedStage = Stages.Last.Name,
+                        .AssociatedStage = Stages.Last.ID,
                         .StreamBehavior = StreamInformation.Behavior.BottomsLiquid,
                         .StreamType = StreamInformation.Type.Material}
             MaterialStreams.Add(msi.ID, msi)
@@ -986,6 +1022,7 @@ Namespace UnitOperations
                     proplist.Add("Estimated Height")
                     proplist.Add("Estimated Diameter")
                     proplist.Add("Number of Stages")
+                    proplist.Add("Sump_LiquidLevel")
                 Case PropertyType.ALL
                     For i = 0 To 2
                         proplist.Add("PROP_AC_" + CStr(i))
@@ -1017,6 +1054,7 @@ Namespace UnitOperations
                     proplist.Add("Estimated Height")
                     proplist.Add("Estimated Diameter")
                     proplist.Add("Number of Stages")
+                    proplist.Add("Sump_LiquidLevel")
             End Select
             Return proplist.ToArray(GetType(System.String))
             proplist = Nothing
@@ -1186,6 +1224,7 @@ Namespace UnitOperations
             If prop.Contains("Stage_DowncomerHeight") Then value = su.distance
             If prop.Contains("Stage_TotalHoleArea") Then value = su.area
             If prop.Contains("Stage_LiquidLevel") Then value = su.distance
+            If prop = "Sump_LiquidLevel" Then value = su.distance
             If prop.Contains("Stage_Height") Then value = su.distance
             If prop.Contains("Molar Flow") Then value = su.molarflow
 
@@ -1253,7 +1292,7 @@ Namespace UnitOperations
                     Try
                         Dim streamtag = FlowSheet.SimulationObjects(si.StreamID).GraphicObject.Tag
                         If prop = String.Format("Stream '{0}' Stage Index", streamtag) Then
-                            si.AssociatedStage = Stages(Convert.ToInt32(propval)).Name
+                            si.AssociatedStage = Stages(Convert.ToInt32(propval)).ID
                             Exit For
                         End If
                     Catch ex As Exception
@@ -1362,17 +1401,40 @@ Namespace UnitOperations
             AddDynamicProperty("Max. L change (%)", "Maximum Liquid Flow change (in percent) change between iterations", 10, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Max. V change (%)", "Maximum Vapor Flow change (in percent) change between iterations", 10, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Time step discretization", "Number of sub-steps per integration step for column dynamics.", 1, UnitOfMeasure.none, 1.0.GetType())
-            AddDynamicProperty("Souders-Brown Coefficient", "Souders-Brown coefficient C_SB (m/s) for flooding check. Typical 0.03-0.05 for sieve trays. Set to 0 to disable.", 0.0, UnitOfMeasure.none, 1.0.GetType())
-            AddDynamicProperty("Flooding Alarm", "True when any stage exceeds the flooding velocity limit.", False, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Weeping Alarm", "True when any stage vapor velocity is below minimum for tray support.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Souders-Brown Coefficient", "Souders-Brown coefficient C_SB (m/s) for the flooding check of tray stages. Typical 0.03-0.05 for sieve trays. Set to 0 to disable. Packed stages (marked by the Column Internals tool) are checked with their own packing correlations.", 0.0, UnitOfMeasure.none, 1.0.GetType())
+            AddDynamicProperty("Flooding Alarm", "True when any stage exceeds the flooding velocity limit (tray: Souders-Brown; packed stage: the flood point of its packing correlation).", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Weeping Alarm", "True when any tray stage vapor velocity is below minimum for tray support, or a packed stage is below the minimum wetting rate of its packing.", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Apply Murphree Efficiency", "Apply stage Murphree efficiency to dynamic simulation. Stage efficiency values are used.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Quasi-Steady Vapor", "Treat the vapor as quasi-steady: a stage keeps the vapor its free volume holds and sends the excess up within the step, the condenser drum is the pressure state and the stage pressures follow from the tray hydraulics top-down. Off, the vapor holdup of every tray is integrated against the pressure-driven flow law, which needs sub-steps of milliseconds on a real column.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Calibrate Tray Coefficients", "When the dynamic holdup is seeded from the steady state, set the dry tray pressure drop coefficient of every tray so the steady-state vapor rate passes through its holes at the steady-state stage pressure drop. Without it the coefficients are whatever the stages carry.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Start Empty", "Seed the first dynamic step with an empty column instead of the steady-state holdup: every stage and the sump hold a film of liquid of the feed composition at the initial temperature and pressure (the sump the initial level), with no vapor. The run is then a startup driven by the schedule: feed on, reboiler duty ramp, level controllers to automatic. Quasi-steady vapor and tray weeping on.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Initial Pressure", "Pressure of the empty column at the start (the inert blanket).", 101325.0, UnitOfMeasure.pressure, 1.0.GetType())
+            AddDynamicProperty("Initial Temperature", "Temperature of the empty column at the start.", 298.15, UnitOfMeasure.temperature, 1.0.GetType())
+            AddDynamicProperty("Initial Sump Level", "Liquid of the feed composition in the sump when the column starts empty.", 0.0, UnitOfMeasure.distance, 1.0.GetType())
+            AddDynamicProperty("Minimum Pressure", "The condenser drum pressure cannot fall below this value (an inert blanket, a vent to atmosphere). Zero for none. Quasi-steady vapor only.", 0.0, UnitOfMeasure.pressure, 1.0.GetType())
+            AddDynamicProperty("Coolant Temperature", "The condenser removes no heat from a holdup colder than this; a duty stage that holds only a film of liquid warms or cools by at most 25 K per sub-step.", 298.15, UnitOfMeasure.temperature, 1.0.GetType())
+            AddDynamicProperty("Tray Weeping", "Liquid weeps through the holes of a sieve tray when the dry pressure drop of the vapor cannot hold the liquid head (Fair criterion): with no vapor a tray drains to the stage below, and as the boilup rises the trays begin to hold liquid. Quasi-steady vapor only.", False, UnitOfMeasure.none, True.GetType())
 
         End Sub
-        Private Sub InitializeDynamicsFromSteadyStateSolution()
+        ''' <summary>Seeds the dynamic holdup of every stage and of the sump from the last steady-state solution: the
+        ''' composition and temperature of each stage, a tray liquid level that passes the steady-state liquid rate over
+        ''' the weir, the vapor space filled at the stage pressure, and a sump half full. Called by the first dynamic
+        ''' step when nothing is seeded yet; call it yourself to inspect or adjust the initial state before a run.</summary>
+        Public Sub InitializeDynamicsFromSteadyStateSolution()
 
+            ResetQuasiSteadyState()
             CalculateDowncomerAreas()
 
             Dim sol = GetLastSolution()
+
+            Dim calibrate As Boolean = False
+            Dim qsVapor As Boolean = False
+            Try
+                calibrate = Convert.ToBoolean(GetDynamicProperty("Calibrate Tray Coefficients"))
+                qsVapor = Convert.ToBoolean(GetDynamicProperty("Quasi-Steady Vapor"))
+            Catch ex As Exception
+            End Try
+            Dim colArea = Math.PI * EstimatedDiameter ^ 2 / 4.0
 
             For i As Integer = 0 To Stages.Count - 1
 
@@ -1411,6 +1473,79 @@ Namespace UnitOperations
 
                 Stages(i).LiquidLevel = s.AccumulationStream.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / ((Math.PI * EstimatedDiameter ^ 2 / 4) - Stages(i).DowncomerArea)
 
+                'A tray (the condenser and reboiler stages are trays in this model too) holds the liquid its weir passes at
+                'the steady-state liquid rate, and its vapor space is full at the stage pressure. The seed above is one
+                'second of flow, which is no holdup at all, so the content is rebuilt: liquid at the level the Francis weir
+                'relation gives for that rate, vapor filling the rest of the stage volume.
+                If Not s.IsPacked AndAlso EstimatedDiameter > 0 AndAlso s.DowncomerLength > 0 Then
+                    Dim st = s.AccumulationStream
+                    Dim vliq = st.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault()
+                    Dim ql = st.OverallLiquid.Properties.molarflow.GetValueOrDefault()
+                    Dim vvap = st.Phases(2).Properties.volumetric_flow.GetValueOrDefault()
+                    Dim qv = st.Phases(2).Properties.molarflow.GetValueOrDefault()
+                    Dim Lss = Math.Max(0.0, sol.LiqMolarFlows(i).Value)
+                    Dim area = colArea - s.DowncomerArea
+                    Dim stageVol As Double
+                    Dim rebIsSump As Boolean = qsVapor AndAlso i = Stages.Count - 1
+                    If i = 0 Then
+                        stageVol = colArea * BottomSpacing
+                    ElseIf rebIsSump Then
+                        'the reboiler stage of the quasi-steady model is the sump: the stage height plus the top spacing
+                        stageVol = colArea * (Math.Max(s.StageHeight, 0.05) + TopSpacing)
+                        area = colArea
+                    Else
+                        stageVol = colArea * Math.Max(s.StageHeight, 0.05)
+                    End If
+                    If vliq > 0 AndAlso ql > 0 AndAlso area > 0 Then
+                        Dim vl = vliq / ql
+                        Dim beta = s.LiquidFlowEquationCoefficient_Beta, alpha = s.LiquidFlowEquationCoefficient_Alpha
+                        Dim hL = beta * s.DowncomerHeight
+                        If Lss > 0 Then hL += beta * (Lss * vl / (alpha * s.DowncomerLength)) ^ (2.0 / 3.0)
+                        Dim liqVol = Math.Min(hL * area, 0.95 * stageVol)
+                        'the sump starts half full
+                        If rebIsSump Then liqVol = 0.5 * stageVol
+                        Dim nL = liqVol / vl
+                        Dim nV As Double = 0.0
+                        If vvap > 0 AndAlso qv > 0 Then nV = Math.Max(stageVol - liqVol, 0.0) / (vvap / qv)
+                        Dim xl = st.Phases(1).Compounds.Values.Select(Function(c) c.MoleFraction.GetValueOrDefault()).ToArray()
+                        Dim yv = st.Phases(2).Compounds.Values.Select(Function(c) c.MoleFraction.GetValueOrDefault()).ToArray()
+                        Dim seed = xl.MultiplyConstY(nL)
+                        If nV > 0 Then seed = seed.AddY(yv.MultiplyConstY(nV))
+                        If seed.SumY() > 0 Then
+                            st.SetOverallMolarComposition(seed.NormalizeY())
+                            st.SetMolarFlow(nL + nV)
+                            st.SetTemperature(sol.StageTemps(i).Value)
+                            st.SetPressure(Stages(i).P)
+                            st.SetFlashSpec("PT")
+                            st.Calculate()
+                            s.LiquidLevel = st.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / area
+                        End If
+                    End If
+                End If
+
+                'A packed stage holds the liquid its bed correlation keeps at the steady-state liquid rate: scale the
+                'seeded content so its liquid volume matches that holdup on the slice of bed.
+                If s.IsPacked AndAlso i > 0 AndAlso i < Stages.Count - 1 AndAlso EstimatedDiameter > 0 Then
+                    Dim A = Math.PI * EstimatedDiameter ^ 2 / 4.0
+                    Dim H = Math.Max(s.StageHeight, 0.05)
+                    Dim st = s.AccumulationStream
+                    Dim vliq = st.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault()
+                    Dim ql = st.OverallLiquid.Properties.molarflow.GetValueOrDefault()
+                    If vliq > 0 AndAlso ql > 0 Then
+                        Dim vl = vliq / ql
+                        Dim rhoV, rhoL, muV, muL, sigma As Double
+                        PackedBedProperties(st, rhoV, rhoL, muV, muL, sigma)
+                        Dim uL = Math.Max(0.0, sol.LiqMolarFlows(i).Value) * vl / A
+                        Dim hold = PackedBedHoldup(s, StagePacking(s), uL, rhoV, rhoL, muL, sigma)
+                        Dim target = Math.Max(0.005, hold) * A * H
+                        Dim factor = target / vliq
+                        If factor.IsValidDouble() AndAlso factor > 0 Then
+                            st.SetMolarFlow(st.GetMolarFlow() * factor)
+                            st.Calculate()
+                        End If
+                    End If
+                End If
+
             Next
 
             'Bottom sump: seed once from the bottom (reboiler) stage content.
@@ -1420,7 +1555,62 @@ Namespace UnitOperations
             BottomsAccumulationStream.AssignSelfToPP()
             BottomsAccumulationStream.Calculate()
 
-            BottomLiquidLevel = BottomsAccumulationStream.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / (Math.PI * EstimatedDiameter ^ 2 / 4)
+            'the sump starts half full of the reboiler stage liquid (explicit model); in the quasi-steady model the
+            'reboiler stage is the sump and the separate holdup is carried along as a film
+            If EstimatedDiameter > 0 AndAlso qsVapor Then
+                BottomsAccumulationStream.SetMolarFlow(Math.Max(1.0E-3 * BottomsAccumulationStream.GetMolarFlow(), 1.0E-6))
+                BottomsAccumulationStream.SetFlashSpec("PT")
+                BottomsAccumulationStream.Calculate()
+            ElseIf EstimatedDiameter > 0 Then
+                Dim sump = BottomsAccumulationStream
+                Dim vliq = sump.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault()
+                Dim ql = sump.OverallLiquid.Properties.molarflow.GetValueOrDefault()
+                If vliq > 0 AndAlso ql > 0 Then
+                    Dim sumpVol = colArea * (Stages.Last.StageHeight + TopSpacing)
+                    Dim xl = sump.Phases(1).Compounds.Values.Select(Function(c) c.MoleFraction.GetValueOrDefault()).ToArray()
+                    If xl.Sum() > 0 Then
+                        sump.SetOverallMolarComposition(xl.NormalizeY())
+                        sump.SetMolarFlow(0.5 * sumpVol / (vliq / ql))
+                        sump.SetTemperature(Stages.Last.AccumulationStream.GetTemperature())
+                        sump.SetPressure(Stages.Last.P)
+                        sump.SetFlashSpec("PT")
+                        sump.Calculate()
+                    End If
+                End If
+            End If
+
+            If qsVapor Then
+                BottomLiquidLevel = Stages.Last.AccumulationStream.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / colArea
+                Stages.Last.LiquidLevel = BottomLiquidLevel
+            Else
+                BottomLiquidLevel = BottomsAccumulationStream.OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / (Math.PI * EstimatedDiameter ^ 2 / 4)
+            End If
+
+            'the dry tray coefficient of every tray so the steady-state vapor rate leaves stage i upward through the holes
+            'of stage i-1 at the steady-state pressure drop between the two
+            If calibrate Then
+                For i = 1 To Stages.Count - 1
+                    Dim st = Stages(i).AccumulationStream
+                    Dim rhov = st.Phases(2).Properties.density.GetValueOrDefault()
+                    Dim vvap = st.Phases(2).Properties.volumetric_flow.GetValueOrDefault()
+                    Dim qv = st.Phases(2).Properties.molarflow.GetValueOrDefault()
+                    Dim V = Math.Max(0.0, sol.VapMolarFlows(i).Value)
+                    Dim dP = Stages(i).P - Stages(i - 1).P
+                    Dim calQS As Boolean = False
+                    Try
+                        calQS = Convert.ToBoolean(GetDynamicProperty("Quasi-Steady Vapor"))
+                    Catch ex As Exception
+                    End Try
+                    If calQS AndAlso Not Stages(i - 1).IsPacked AndAlso i - 1 > 0 Then
+                        dP -= Stages(i - 1).AccumulationStream.OverallLiquid.Properties.density.GetValueOrDefault() * 9.80665 * Stages(i - 1).LiquidLevel
+                    End If
+                    Dim Ah = Stages(i - 1).TotalHoleArea
+                    If rhov > 0 AndAlso vvap > 0 AndAlso qv > 0 AndAlso V > 0 AndAlso dP > 0 AndAlso Ah > 0 Then
+                        Dim uh = V * (vvap / qv) / Ah
+                        Stages(i - 1).DryTrayPressureDropCoefficient = dP / (101325.0 * rhov * uh ^ 2)
+                    End If
+                Next
+            End If
 
         End Sub
         Public Overrides Sub RunDynamicModel()
@@ -1430,7 +1620,16 @@ Namespace UnitOperations
             ' Nothing and the run below throws "Column needs to be (re)initialized" - and no UI step ever
             ' triggered the initialisation. Runs once; the holdup then evolves with the dynamics.
             If BottomsAccumulationStream Is Nothing OrElse Stages.Any(Function(st) st.AccumulationStream Is Nothing) Then
-                InitializeDynamicsFromSteadyStateSolution()
+                Dim startEmpty As Boolean = False
+                Try
+                    startEmpty = Convert.ToBoolean(GetDynamicProperty("Start Empty"))
+                Catch ex As Exception
+                End Try
+                If startEmpty Then
+                    InitializeDynamicsEmpty()
+                Else
+                    InitializeDynamicsFromSteadyStateSolution()
+                End If
             End If
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -1446,6 +1645,21 @@ Namespace UnitOperations
             Dim maxDV As Double = GetDynamicProperty("Max. V change (%)")
             Dim C_SB As Double = GetDynamicProperty("Souders-Brown Coefficient")
             Dim applyMurphree As Boolean = GetDynamicProperty("Apply Murphree Efficiency")
+            Dim quasiSteadyVapor As Boolean = False
+            Try
+                quasiSteadyVapor = Convert.ToBoolean(GetDynamicProperty("Quasi-Steady Vapor"))
+            Catch ex As Exception
+            End Try
+            Dim minP As Double = 0.0, coolantT As Double = 298.15
+            Dim weeping As Boolean = False
+            Try
+                minP = Convert.ToDouble(GetDynamicProperty("Minimum Pressure"))
+                coolantT = Convert.ToDouble(GetDynamicProperty("Coolant Temperature"))
+                weeping = Convert.ToBoolean(GetDynamicProperty("Tray Weeping"))
+            Catch ex As Exception
+            End Try
+            If Not minP.IsValidDouble() OrElse minP < 0 Then minP = 0.0
+            If Not coolantT.IsValidDouble() Then coolantT = 0.0
 
             Dim floodingDetected As Boolean = False
             Dim weepingDetected As Boolean = False
@@ -1457,6 +1671,8 @@ Namespace UnitOperations
             Dim _HeatStreams As New List(Of StreamInformation)
 
             Dim _StageIDs As New List(Of String)
+
+            ResolveStageReferences()
 
             Dim _BottomsProduct As StreamInformation = Nothing
 
@@ -1471,7 +1687,7 @@ Namespace UnitOperations
                     Throw New Exception("Column needs to be (re)initialized")
                 End If
                 _Streams.Add(s.AccumulationStream)
-                _StageIDs.Add(s.Name)
+                _StageIDs.Add(s.ID)
             Next
 
             If BottomsAccumulationStream Is Nothing Then
@@ -1504,8 +1720,31 @@ Namespace UnitOperations
                     _BottomsProduct = s
                 End If
             Next
+            'the condenser and reboiler duties (and side heaters) live in their own dictionary
+            For Each s In EnergyStreams.Values
+                If s.StreamID <> "" AndAlso FlowSheet.SimulationObjects.ContainsKey(s.StreamID) AndAlso Not _HeatStreams.Contains(s) Then _HeatStreams.Add(s)
+            Next
 
             CalculateDowncomerAreas()
+
+            'the tray pressure-flow coupling is far stiffer than the level dynamics: the whole balance below runs
+            'in sub-steps of the integration step ("Time step discretization")
+            Dim fullstep = timestep
+            Dim nsub As Integer = Math.Max(1, CInt(Math.Round(timestep_discretization)))
+            timestep = fullstep / nsub
+
+            For substep As Integer = 1 To nsub
+
+            If quasiSteadyVapor Then
+
+            QuasiSteadyVaporSubstep(_Streams, _StageIDs, _Feeds, _SideDraws, _HeatStreams, _TopProduct, _Distillate, _BottomsProduct,
+                                    timestep, maxDP, maxDV, C_SB, applyMurphree, minP, coolantT, weeping, floodingDetected, weepingDetected)
+            If C_SB > 0 OrElse weeping OrElse Stages.Any(Function(st) st.IsPacked) Then
+                SetDynamicProperty("Flooding Alarm", floodingDetected)
+                SetDynamicProperty("Weeping Alarm", weepingDetected)
+            End If
+
+            Else
 
             Dim Fv, Fl, rhov, rhol, vv, vl, Fv0, Fl0 As Double
 
@@ -1546,7 +1785,10 @@ Namespace UnitOperations
                 Dim duty = _HeatStreams.Where(Function(f) f.AssociatedStage = stageid).FirstOrDefault()
                 If duty IsNot Nothing AndAlso duty.IsValidDouble() Then
                     Dim estream = DirectCast(FlowSheet.SimulationObjects(duty.StreamID), EnergyStream)
-                    _Streams(i).SetMassEnthalpy(_Streams(i).GetMassEnthalpy() + estream.EnergyFlow.GetValueOrDefault() * timestep / _Streams(i).GetMassFlow())
+                    'the condenser duty stream carries the heat removed as a positive number (the steady state writes
+                    'V1 H1 - L0 H0 into it), so it leaves the stage; every other duty enters it
+                    Dim dutySign As Double = If(duty.StreamBehavior = StreamInformation.Behavior.Distillate, -1.0, 1.0)
+                    _Streams(i).SetMassEnthalpy(_Streams(i).GetMassEnthalpy() + dutySign * estream.EnergyFlow.GetValueOrDefault() * timestep / _Streams(i).GetMassFlow())
                 End If
                 _Streams(i).SetFlowsheet(FlowSheet)
                 _Streams(i).PropertyPackage = PropertyPackage
@@ -1562,8 +1804,17 @@ Namespace UnitOperations
                     'Bottom sump: it has no tray of its own (it is the extra holdup below the last
                     'stage), so its up-flowing vapor is tracked as the last tray's vapor inlet.
                     Fv0 = Stages(i - 1).Vin.Value
-                    Fv = Stages(i - 1).TotalHoleArea / vv * ((_Streams(i).GetPressure() - _Streams(i - 1).GetPressure()) / (101325 * rhov * Stages(i - 1).DryTrayPressureDropCoefficient)) ^ 0.5
-                    If Math.Abs((Fv - Fv0) / Fv0 * 100) > maxDV Then Fv = Fv0 * (1 + maxDV / 100.0 * Math.Sign(Fv - Fv0))
+                    Dim dPv = _Streams(i).GetPressure() - _Streams(i - 1).GetPressure()
+                    If dPv <= 0.0 OrElse rhov <= 0.0 OrElse vv <= 0.0 Then
+                        'no pressure drop upward (or no vapor): nothing rises
+                        Fv = 0.0
+                    ElseIf Stages(i - 1).IsPacked Then
+                        Fv = PackedVaporMolarFlow(i - 1, dPv, _Streams(i), vv, vl)
+                    Else
+                        Fv = Stages(i - 1).TotalHoleArea / vv * (dPv / (101325 * rhov * Stages(i - 1).DryTrayPressureDropCoefficient)) ^ 0.5
+                    End If
+                    'the rate limiter only makes sense against a flow that is not zero; from zero any flow is accepted
+                    If Fv0 > 1.0E-8 AndAlso Math.Abs((Fv - Fv0) / Fv0 * 100) > maxDV Then Fv = Fv0 * (1 + maxDV / 100.0 * Math.Sign(Fv - Fv0))
                     If Fv.IsValidDouble() Then
                         Stages(i - 1).Vin.Value = Fv
                         If rhov > 0 AndAlso vv > 0 AndAlso Fv > 0 Then
@@ -1578,7 +1829,7 @@ Namespace UnitOperations
                 ElseIf i = 0 Then
                     Fl0 = Stages(i).Lout.Value
                     Fl = Stages(i).LiquidFlowEquationCoefficient_Alpha * Stages(i).DowncomerLength / vl * ((Stages(i).LiquidLevel - Stages(i).LiquidFlowEquationCoefficient_Beta * Stages(i).DowncomerHeight) / Stages(i).LiquidFlowEquationCoefficient_Beta) ^ 1.5
-                    If Math.Abs((Fl - Fl0) / Fl0 * 100) > maxDL Then Fl = Fl0 * (1 + maxDL / 100.0 * Math.Sign(Fl - Fl0))
+                    If Fl0 > 1.0E-8 AndAlso Math.Abs((Fl - Fl0) / Fl0 * 100) > maxDL Then Fl = Fl0 * (1 + maxDL / 100.0 * Math.Sign(Fl - Fl0))
                     If Fl.IsValidDouble() Then
                         Stages(i).Lout.Value = Fl
                         Stages(i + 1).Lin.Value = Fl
@@ -1593,8 +1844,15 @@ Namespace UnitOperations
                     End If
                 Else
                     Fv0 = Stages(i).Vout.Value
-                    Fv = Stages(i).TotalHoleArea / vv * ((_Streams(i + 1).GetPressure() - _Streams(i).GetPressure()) / (101325 * rhov * Stages(i).DryTrayPressureDropCoefficient)) ^ 0.5
-                    If Math.Abs((Fv - Fv0) / Fv0 * 100) > maxDV Then Fv = Fv0 * (1 + maxDV / 100.0 * Math.Sign(Fv - Fv0))
+                    Dim dPv = _Streams(i + 1).GetPressure() - _Streams(i).GetPressure()
+                    If dPv <= 0.0 OrElse rhov <= 0.0 OrElse vv <= 0.0 Then
+                        Fv = 0.0
+                    ElseIf Stages(i).IsPacked Then
+                        Fv = PackedVaporMolarFlow(i, dPv, _Streams(i), vv, vl)
+                    Else
+                        Fv = Stages(i).TotalHoleArea / vv * (dPv / (101325 * rhov * Stages(i).DryTrayPressureDropCoefficient)) ^ 0.5
+                    End If
+                    If Fv0 > 1.0E-8 AndAlso Math.Abs((Fv - Fv0) / Fv0 * 100) > maxDV Then Fv = Fv0 * (1 + maxDV / 100.0 * Math.Sign(Fv - Fv0))
                     If Fv.IsValidDouble() Then
                         Stages(i).Vout.Value = Fv
                         If i > 0 Then Stages(i - 1).Vin.Value = Fv
@@ -1608,8 +1866,12 @@ Namespace UnitOperations
                         End If
                     End If
                     Fl0 = Stages(i).Lout.Value
-                    Fl = Stages(i).LiquidFlowEquationCoefficient_Alpha * Stages(i).DowncomerLength / vl * ((Stages(i).LiquidLevel - Stages(i).LiquidFlowEquationCoefficient_Beta * Stages(i).DowncomerHeight) / Stages(i).LiquidFlowEquationCoefficient_Beta) ^ 1.5
-                    If Math.Abs((Fl - Fl0) / Fl0 * 100) > maxDL Then Fl = Fl0 * (1 + maxDL / 100.0 * Math.Sign(Fl - Fl0))
+                    If Stages(i).IsPacked Then
+                        Fl = PackedLiquidMolarFlow(i, _Streams(i), vl)
+                    Else
+                        Fl = Stages(i).LiquidFlowEquationCoefficient_Alpha * Stages(i).DowncomerLength / vl * ((Stages(i).LiquidLevel - Stages(i).LiquidFlowEquationCoefficient_Beta * Stages(i).DowncomerHeight) / Stages(i).LiquidFlowEquationCoefficient_Beta) ^ 1.5
+                    End If
+                    If Fl0 > 1.0E-8 AndAlso Math.Abs((Fl - Fl0) / Fl0 * 100) > maxDL Then Fl = Fl0 * (1 + maxDL / 100.0 * Math.Sign(Fl - Fl0))
                     If Fl.IsValidDouble() Then
                         Stages(i).Lout.Value = Fl
                         'The tray below is a real stage only up to the last tray; below the last tray is
@@ -1626,7 +1888,12 @@ Namespace UnitOperations
                     End If
                 End If
 
-                If C_SB > 0 AndAlso i > 0 AndAlso i < _Streams.Count - 1 Then
+                If i > 0 AndAlso i < _Streams.Count - 1 AndAlso Stages(i).IsPacked Then
+                    Dim floodFraction, wettingRatio As Double
+                    PackedBedCheck(i, _Streams(i), Stages(i).Vout.Value, Stages(i).Lout.Value, vv, vl, floodFraction, wettingRatio)
+                    If floodFraction > 1.0 Then floodingDetected = True
+                    If wettingRatio < 1.0 Then weepingDetected = True
+                ElseIf C_SB > 0 AndAlso i > 0 AndAlso i < _Streams.Count - 1 Then
                     Dim activeArea = (Math.PI * EstimatedDiameter ^ 2 / 4) - Stages(i).DowncomerArea
                     If activeArea > 0 AndAlso rhov > 0 AndAlso rhol > 0 Then
                         Dim vVapor = _Streams(i).Vapor.Properties.volumetric_flow.GetValueOrDefault() / activeArea
@@ -1641,7 +1908,7 @@ Namespace UnitOperations
                 'streams in a dedicated pass below (it needs the incoming vapor, vTrans(i+1)).
             Next
 
-            If C_SB > 0 Then
+            If C_SB > 0 OrElse Stages.Any(Function(st) st.IsPacked) Then
                 SetDynamicProperty("Flooding Alarm", floodingDetected)
                 SetDynamicProperty("Weeping Alarm", weepingDetected)
             End If
@@ -1738,9 +2005,17 @@ Namespace UnitOperations
 
                     Dim P1i = _Streams(i).GetPressure()
 
-                    Dim result = PropertyPackage.CalculateEquilibrium2(
-                            FlashCalculationType.VolumeTemperature,
-                            M1, _Streams(i).GetTemperature(), _Streams(i).GetPressure())
+                    Dim result As IFlashCalculationResult
+                    Try
+                        result = PropertyPackage.CalculateEquilibrium2(
+                                FlashCalculationType.VolumeTemperature,
+                                M1, _Streams(i).GetTemperature(), _Streams(i).GetPressure())
+                    Catch ex As Exception
+                        Throw New Exception(String.Format(Globalization.CultureInfo.InvariantCulture,
+                            "stage {0} of {1}: the volume-temperature flash of the holdup failed ({2}); holdup {3:G4} mol in {4:G4} m3 ({5:G4} m3/mol), T {6:F2} K, P {7:F0} Pa, liquid {8:G4} m3",
+                            i + 1, _Streams.Count, ex.Message, _Streams(i).GetMolarFlow(), StageVol, M1, _Streams(i).GetTemperature(), _Streams(i).GetPressure(),
+                            _Streams(i).OverallLiquid.Properties.volumetric_flow.GetValueOrDefault()), ex)
+                    End Try
 
                     P1 = result.CalculatedPressure
                     H1 = result.CalculatedEnthalpy
@@ -1764,11 +2039,17 @@ Namespace UnitOperations
                 Else
                     Stages(i).LiquidLevel = _Streams(i).OverallLiquid.Properties.volumetric_flow.GetValueOrDefault() / ((Math.PI * EstimatedDiameter ^ 2 / 4) - Stages(i).DowncomerArea)
                     Stages(i).P = _Streams(i).GetPressure()
+                    Stages(i).T = _Streams(i).GetTemperature()
                 End If
 
             Next
 
-            'update connected streams
+            End If 'quasi-steady or explicit
+
+            'update connected streams (the bottoms come from the reboiler stage in the quasi-steady model, from the
+            'sump in the explicit one)
+
+            Dim bottomsIndex As Integer = If(quasiSteadyVapor, Stages.Count - 1, _Streams.Count - 1)
 
             For i = 0 To _Streams.Count - 1
                 Dim stageid = _StageIDs(i)
@@ -1807,16 +2088,40 @@ Namespace UnitOperations
                         diststream.SpecType = StreamSpec.Pressure_and_Enthalpy
                         diststream.AtEquilibrium = False
                     End If
-                ElseIf i = _Streams.Count - 1 Then
+                ElseIf i = bottomsIndex Then
                     If _BottomsProduct IsNot Nothing Then
                         Dim bottomstream = DirectCast(FlowSheet.SimulationObjects(_BottomsProduct.StreamID), MaterialStream)
                         bottomstream.AssignFromPhase(PhaseLabel.Liquid1, _Streams(i), False)
-                        bottomstream.SetPressure(bottomstream.GetPressure() + bottomstream.Liquid1.Properties.density.GetValueOrDefault() * 9.8 * BottomLiquidLevel)
+                        'the liquid head of the sump on the bottoms outlet (the holdup's own liquid density: the
+                        'stream's phase properties were just cleared by the assignment)
+                        bottomstream.SetPressure(_Streams(i).GetPressure() + _Streams(i).OverallLiquid.Properties.density.GetValueOrDefault() * 9.80665 * BottomLiquidLevel)
                         bottomstream.SpecType = StreamSpec.Pressure_and_Enthalpy
                         bottomstream.AtEquilibrium = False
                     End If
                 End If
             Next
+
+            'a per-stage trace for diagnosis, written when DWSIM_COLUMN_DYN_TRACE names a file
+            Dim tracePath = Environment.GetEnvironmentVariable("DWSIM_COLUMN_DYN_TRACE")
+            If Not String.IsNullOrEmpty(tracePath) Then
+                Try
+                    Dim ci = Globalization.CultureInfo.InvariantCulture
+                    Dim sb As New Text.StringBuilder()
+                    For i = 0 To _Streams.Count - 1
+                        Dim st = _Streams(i)
+                        Dim vin = If(i < Stages.Count, Stages(i).Vin.Value, 0.0), vout = If(i < Stages.Count, Stages(i).Vout.Value, 0.0)
+                        Dim lin = If(i < Stages.Count, Stages(i).Lin.Value, 0.0), lout = If(i < Stages.Count, Stages(i).Lout.Value, 0.0)
+                        Dim lvl = If(i < Stages.Count, Stages(i).LiquidLevel, BottomLiquidLevel)
+                        sb.AppendLine(String.Format(ci, "{0},{1},{2:G6},{3:G6},{4:G6},{5:F2},{6:F1},{7:G5},{8:G6},{9:G6},{10:G6},{11:G6},{12:G6}",
+                            substep, i + 1, st.GetMolarFlow(), st.OverallLiquid.Properties.molarflow.GetValueOrDefault(), st.Phases(2).Properties.molarflow.GetValueOrDefault(),
+                            st.GetTemperature(), st.GetPressure(), lvl, vin, vout, lin, lout, st.GetMassEnthalpy()))
+                    Next
+                    IO.File.AppendAllText(tracePath, sb.ToString())
+                Catch ex As Exception
+                End Try
+            End If
+
+            Next 'substep
 
             'Persist the updated holdups back to the stages. Add/Subtract return NEW stream objects,
             'so the per-stage AccumulationStream references must be refreshed or the dynamic state
@@ -1908,6 +2213,9 @@ Namespace UnitOperations
 
         Public Property EstimatedHeight As Double = Double.NaN 'm
 
+        ''' <summary>The column internals case (sections, geometry and models of the Column Internals tool) as XML text, saved with the column.</summary>
+        Public Property InternalsCase As String = ""
+
         Public Property BottomSpacing As Double = 0.5 'm
 
         Public Property BottomLiquidLevel As Double = 0.0 'm
@@ -1960,11 +2268,19 @@ Namespace UnitOperations
 
         <Xml.Serialization.XmlIgnore> Property Solver As ColumnSolver
 
+        ''' <summary>The downcomer of every stage is the circular segment cut off by its weir: DowncomerLength is the
+        ''' weir (chord) length, the same length the Francis weir relation of the dynamic model uses.</summary>
         Public Sub CalculateDowncomerAreas()
 
+            Dim R = EstimatedDiameter / 2.0
             For Each s In Stages
-                s.DowncomerArea = EstimatedDiameter ^ 2 * Math.Acos((EstimatedDiameter / 2 - s.DowncomerLength) / (EstimatedDiameter / 2)) -
-                    (EstimatedDiameter / 2 - s.DowncomerLength) * (EstimatedDiameter * s.DowncomerLength - s.DowncomerLength ^ 2) ^ 0.5
+                If R <= 0 OrElse s.DowncomerLength <= 0 Then
+                    s.DowncomerArea = 0.0
+                    Continue For
+                End If
+                Dim half = Math.Min(s.DowncomerLength / 2.0, R)
+                Dim h = R - Math.Sqrt(Math.Max(R ^ 2 - half ^ 2, 0.0))   'segment height behind the weir
+                s.DowncomerArea = R ^ 2 * Math.Acos((R - h) / R) - (R - h) * Math.Sqrt(Math.Max(2 * R * h - h ^ 2, 0.0))
             Next
 
         End Sub
@@ -1987,14 +2303,28 @@ Namespace UnitOperations
             Dim dif As Integer = ne - nep
 
             If dif < 0 Then
-                Stages.RemoveRange(nep + dif - 1, -dif)
-                With InitialEstimates
-                    .LiqCompositions.RemoveRange(nep + dif - 1, -dif)
-                    .VapCompositions.RemoveRange(nep + dif - 1, -dif)
-                    .LiqMolarFlows.RemoveRange(nep + dif - 1, -dif)
-                    .VapMolarFlows.RemoveRange(nep + dif - 1, -dif)
-                    .StageTemps.RemoveRange(nep + dif - 1, -dif)
-                End With
+                'remove interior stages from the bottom up, skipping the ones a feed, a draw or a duty is attached to
+                Dim refs = ReferencedStageIDs()
+                Dim removed As Integer = 0
+                Dim i As Integer = nep - 2
+                While removed < -dif AndAlso i > 0
+                    If Not refs.Contains(Stages(i).ID) Then
+                        Stages.RemoveAt(i)
+                        With InitialEstimates
+                            If .LiqCompositions.Count > i Then .LiqCompositions.RemoveAt(i)
+                            If .VapCompositions.Count > i Then .VapCompositions.RemoveAt(i)
+                            If .LiqMolarFlows.Count > i Then .LiqMolarFlows.RemoveAt(i)
+                            If .VapMolarFlows.Count > i Then .VapMolarFlows.RemoveAt(i)
+                            If .StageTemps.Count > i Then .StageTemps.RemoveAt(i)
+                        End With
+                        removed += 1
+                    End If
+                    i -= 1
+                End While
+                If removed < -dif Then
+                    NumberOfStages = Stages.Count
+                    FlowSheet?.ShowMessage(String.Format("{0}: only {1} of {2} stages removed; the others carry feeds, draws or duties. The column keeps {3} stages.", GraphicObject?.Tag, removed, -dif, Stages.Count), IFlowsheet.MessageType.Warning)
+                End If
             ElseIf dif > 0 Then
                 Dim i As Integer
                 For i = 1 To dif
@@ -2013,6 +2343,8 @@ Namespace UnitOperations
                     End With
                 Next
             End If
+
+            RefreshStageNames()
 
         End Sub
 
@@ -2166,6 +2498,10 @@ Namespace UnitOperations
                 Next
 
             End If
+
+            ResolveStageReferences()
+            RefreshStageNames()
+
             Return True
         End Function
 
@@ -2280,24 +2616,7 @@ Namespace UnitOperations
             Dim i As Integer
             For i = 0 To Me.NumberOfStages - 1
                 _st.Add(New Stage(Guid.NewGuid().ToString))
-                Select Case Me.ColumnType
-                    Case ColType.DistillationColumn
-                        If i = 0 Then
-                            _st(_st.Count - 1).Name = FlowSheet.GetTranslatedString("DCCondenser")
-                        ElseIf i = Me.NumberOfStages - 1 Then
-                            _st(_st.Count - 1).Name = FlowSheet.GetTranslatedString("DCReboiler")
-                        Else
-                            _st(_st.Count - 1).Name = "Stage" & _st.Count - 1
-                        End If
-                    Case ColType.AbsorptionColumn
-                        If i = 0 Then
-                            _st(_st.Count - 1).Name = "TopStage"
-                        ElseIf i = NumberOfStages - 1 Then
-                            _st(_st.Count - 1).Name = "BottomStage"
-                        Else
-                            _st(_st.Count - 1).Name = "Stage" & _st.Count - 1
-                        End If
-                End Select
+                _st(_st.Count - 1).Name = StageNameFor(i, Me.NumberOfStages)
             Next
 
             InitialEstimates = RebuildEstimates()
@@ -2696,6 +3015,109 @@ Namespace UnitOperations
                 i = i + 1
             Next
             Return i
+        End Function
+
+        Private Function TranslatedOr(key As String, fallback As String) As String
+            If FlowSheet Is Nothing Then Return fallback
+            Dim t = FlowSheet.GetTranslatedString(key)
+            If String.IsNullOrWhiteSpace(t) OrElse t = key Then Return fallback
+            Return t
+        End Function
+
+        ''' <summary>The name a stage at this position gets when nobody typed one: Stage1 to StageN counted from the top,
+        ''' the condenser being stage 1 and the reboiler stage N, each with its role in parentheses.</summary>
+        Public Function StageNameFor(index As Integer, count As Integer) As String
+            Dim n = "Stage" & (index + 1)
+            If ColumnType = ColType.DistillationColumn Then
+                Dim dc = TryCast(Me, DistillationColumn)
+                Dim noCondenser = dc IsNot Nothing AndAlso dc.ReboiledAbsorber
+                Dim noReboiler = dc IsNot Nothing AndAlso dc.RefluxedAbsorber
+                If index = 0 AndAlso Not noCondenser Then Return n & " (" & TranslatedOr("DCCondenser", "Condenser") & ")"
+                If index = count - 1 AndAlso Not noReboiler Then Return n & " (" & TranslatedOr("DCReboiler", "Reboiler") & ")"
+            End If
+            Return n
+        End Function
+
+        ''' <summary>True for a name the column generated itself (StageN with an optional role in parentheses, the legacy
+        ''' condenser, reboiler, TopStage and BottomStage names, or nothing); a name typed by the user is left alone.</summary>
+        Public Function IsAutomaticStageName(name As String) As Boolean
+            If String.IsNullOrWhiteSpace(name) Then Return True
+            Dim t = name.Trim()
+            If System.Text.RegularExpressions.Regex.IsMatch(t, "^Stage\s*\d+(\s*\(.*\))?$") Then Return True
+            'older files: the translated word for stage, an underscore or a space and the number (Estágio_1, Stage_1, Etapa 3)
+            If System.Text.RegularExpressions.Regex.IsMatch(t, "^[^\s\d_]+_\d+$") Then Return True
+            If System.Text.RegularExpressions.Regex.IsMatch(t, "^(Estágio|Estagio|Etapa|Stufe|Étape|Etape|Stadio|Ступень|Тарелка|段|阶段)\s*\d+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) Then Return True
+            If LegacyEndStageNames().Contains(t) Then Return True
+            Return False
+        End Function
+
+        ''' <summary>The condenser and reboiler names older files carry, in every language DWSIM has spoken, plus the
+        ''' absorber's TopStage and BottomStage.</summary>
+        Private Function LegacyEndStageNames() As HashSet(Of String)
+            Dim names As New HashSet(Of String) From {"TopStage", "BottomStage", "Condenser", "Reboiler", "Condensador", "Refervedor", "Rehervidor",
+                                                      "Kondensator", "Verdampfer", "Aufkocher", "Condensateur", "Rebouilleur", "Condensatore", "Ribollitore",
+                                                      "冷凝器", "再沸器", "Конденсатор", "Ребойлер", "Кипятильник"}
+            names.Add(TranslatedOr("DCCondenser", "Condenser"))
+            names.Add(TranslatedOr("DCReboiler", "Reboiler"))
+            If FlowSheet IsNot Nothing Then
+                For Each locale In {"en", "pt-BR", "es", "de", "fr", "it", "zh-CN", "ru", "ja", "nl"}
+                    Try
+                        Dim c = FlowSheet.GetTranslatedString("DCCondenser", locale)
+                        Dim r = FlowSheet.GetTranslatedString("DCReboiler", locale)
+                        If Not String.IsNullOrWhiteSpace(c) Then names.Add(c)
+                        If Not String.IsNullOrWhiteSpace(r) Then names.Add(r)
+                    Catch ex As Exception
+                    End Try
+                Next
+            End If
+            Return names
+        End Function
+
+        ''' <summary>Gives every stage carrying an automatic name the name of its current position, so the numbering runs
+        ''' 1 to N from the top after stages were added, removed or moved. Call ResolveStageReferences first when a
+        ''' stream may still be attached to a stage by name.</summary>
+        Public Sub RefreshStageNames()
+            For i = 0 To Stages.Count - 1
+                If IsAutomaticStageName(Stages(i).Name) Then Stages(i).Name = StageNameFor(i, Stages.Count)
+            Next
+        End Sub
+
+        ''' <summary>Re-keys every stream attached to a stage by its name (older files, scripts) to the stage ID, so
+        ''' renaming or renumbering the stages never moves a feed, a draw or a duty.</summary>
+        Public Sub ResolveStageReferences()
+            Dim ids As New HashSet(Of String)(Stages.Select(Function(st) st.ID))
+            Dim infos As New List(Of StreamInformation)
+            infos.AddRange(MaterialStreams.Values)
+            infos.AddRange(EnergyStreams.Values)
+            For Each si In infos
+                'the condenser and reboiler duties belong to the end stages whatever their reference says
+                If si.StreamType = StreamInformation.Type.Energy AndAlso Stages.Count > 0 Then
+                    If si.StreamBehavior = StreamInformation.Behavior.Distillate Then
+                        si.AssociatedStage = Stages(0).ID
+                        Continue For
+                    ElseIf si.StreamBehavior = StreamInformation.Behavior.BottomsLiquid Then
+                        si.AssociatedStage = Stages(Stages.Count - 1).ID
+                        Continue For
+                    End If
+                End If
+                'products of older files carry an empty value or a bare "0": the stream behaviour places them
+                If String.IsNullOrWhiteSpace(si.AssociatedStage) OrElse ids.Contains(si.AssociatedStage) Then Continue For
+                Dim byName = Stages.FirstOrDefault(Function(st) st.Name = si.AssociatedStage)
+                If byName IsNot Nothing Then si.AssociatedStage = byName.ID
+            Next
+        End Sub
+
+        ''' <summary>The IDs of the stages a stream, a draw or a duty is attached to.</summary>
+        Public Function ReferencedStageIDs() As HashSet(Of String)
+            ResolveStageReferences()
+            Dim refs As New HashSet(Of String)
+            For Each si In MaterialStreams.Values
+                If si.AssociatedStage IsNot Nothing Then refs.Add(si.AssociatedStage)
+            Next
+            For Each si In EnergyStreams.Values
+                If si.AssociatedStage IsNot Nothing Then refs.Add(si.AssociatedStage)
+            Next
+            Return refs
         End Function
 
         Public Property AutoUpdateInitialEstimates As Boolean
@@ -3485,7 +3907,7 @@ Namespace UnitOperations
 
             i = 0
             For Each st As Stage In Me.Stages
-                eff(i) = st.Efficiency
+                eff(i) = StageEfficiencyForSolver(i)
                 If Me.UseTemperatureEstimates And InitialEstimates.ValidateTemperatures() And Not ignoreuserestimates Then
                     T(i) = Me.InitialEstimates.StageTemps(i).Value
                 Else
@@ -3826,6 +4248,7 @@ Namespace UnitOperations
                 .StagePressures = P.ToList
                 .StageHeats = Q.ToList
                 .StageEfficiencies = eff.ToList
+                .ComponentEfficiencies = ComponentEfficienciesForSolver()
                 .NumberOfCompounds = nc
                 .NumberOfStages = ns
                 .ColumnType = ColumnType
@@ -4517,7 +4940,7 @@ Namespace UnitOperations
 
             i = 0
             For Each st As Stage In Me.Stages
-                eff(i) = st.Efficiency
+                eff(i) = StageEfficiencyForSolver(i)
                 If Me.UseTemperatureEstimates And InitialEstimates.ValidateTemperatures() And Not ignoreuserestimates Then
                     T(i) = Me.InitialEstimates.StageTemps(i).Value
                 Else
@@ -4878,6 +5301,7 @@ Namespace UnitOperations
                 .StagePressures = P.ToList
                 .StageHeats = Q.ToList
                 .StageEfficiencies = eff.ToList
+                .ComponentEfficiencies = ComponentEfficienciesForSolver()
                 .NumberOfCompounds = nc
                 .NumberOfStages = ns
                 .ColumnType = ColumnType
@@ -5516,7 +5940,7 @@ Namespace UnitOperations
 
             i = 0
             For Each st As Stage In Me.Stages
-                eff(i) = st.Efficiency
+                eff(i) = StageEfficiencyForSolver(i)
 
                 ' Temperature profile: linear interpolation between T1 and T2
                 If Me.UseTemperatureEstimates And InitialEstimates.ValidateTemperatures() And Not ignoreuserestimates Then
@@ -5900,6 +6324,7 @@ Namespace UnitOperations
                 .StagePressures = P.ToList
                 .StageHeats = Q.ToList
                 .StageEfficiencies = eff.ToList
+                .ComponentEfficiencies = ComponentEfficienciesForSolver()
                 .NumberOfCompounds = nc
                 .NumberOfStages = ns
                 .ColumnType = ColumnType
@@ -6426,9 +6851,12 @@ Namespace UnitOperations
                     End Select
                 Next
 
+                ' relative errors, against the compound's own feed or 100 ppm of the total feed, whichever is
+                ' larger: the solvers converge an absolute residual, and a compound at a few ppm cannot be held
+                ' to a fraction of itself that the tolerance never asked of the column as a whole
+                Dim totalfeed As Double = compound_feeds.Values.Sum()
                 For Each c In comps
-                    'relative errors
-                    compound_balances(c) = compound_balances(c) / (compound_feeds(c) + 1.0E-20)
+                    compound_balances(c) = compound_balances(c) / Math.Max(compound_feeds(c), 0.0001 * totalfeed + 1.0E-20)
                 Next
 
                 Dim mintol = tol.MinY_NonZero() * 10
@@ -6466,6 +6894,9 @@ Namespace UnitOperations
 
             End If
 
+            'rate-based mode: the efficiencies come from the solution just found; solve again while they move
+            If RateBased Then RunRateBasedPasses(args)
+
         End Sub
 
         Private Sub GeneratePropertiesProfileReport()
@@ -6473,6 +6904,36 @@ Namespace UnitOperations
             Dim units = FlowSheet.FlowsheetOptions.SelectedUnitSystem
 
             Dim reporter = New Text.StringBuilder()
+
+            If RateBased AndAlso RateBasedEfficiencies IsNot Nothing Then
+                reporter.AppendLine("========================================================")
+                reporter.AppendLine("Rate-Based Stage Efficiencies (Murphree, from mass transfer)")
+                reporter.AppendLine("========================================================")
+                Dim cnames As String() = DirectCast(PropertyPackage, DWSIM.Thermodynamics.PropertyPackages.PropertyPackage).RET_VNAMES()
+                Dim header As New Text.StringBuilder()
+                For Each n In cnames
+                    header.Append(String.Format("{0,12}  ", If(n.Length > 12, n.Substring(0, 12), n)))
+                Next
+                reporter.AppendLine(String.Format("{0,-8}{1,10}  {2}", "Stage", "Mean", header.ToString()))
+                For i = 0 To RateBasedEfficiencies.Length - 1
+                    Dim e = RateBasedEfficiencies(i)
+                    If e Is Nothing OrElse e.Length = 0 Then Continue For
+                    Dim row As New Text.StringBuilder()
+                    Dim mean As Double = 0.0
+                    For Each v In e
+                        row.Append(String.Format("{0,12:F3}  ", v))
+                        mean += v / e.Length
+                    Next
+                    reporter.AppendLine(String.Format("{0,-8}{1,10:F3}  {2}", i + 1, mean, row.ToString()))
+                Next
+                For Each l In RateBasedStageNotes
+                    reporter.AppendLine(l)
+                Next
+                For Each l In RateBasedLog
+                    reporter.AppendLine(l)
+                Next
+                reporter.AppendLine()
+            End If
 
             reporter.AppendLine("========================================================")
             reporter.AppendLine(String.Format("Column Properties Profile"))
@@ -7020,6 +7481,36 @@ Namespace UnitOperations.Auxiliary.SepOps
 
         Public Property StageHeight As Double = 0.0
 
+        ''' <summary>True when the stage is a slice of a packed bed (set by the Column Internals tool): the dynamic model then takes
+        ''' its vapour flow from the bed pressure drop and its liquid flow from the bed holdup instead of the tray equations.</summary>
+        Public Property IsPacked As Boolean = False
+
+        ''' <summary>The packing of a packed stage: the catalogue name and, for a user-defined packing, its constants.</summary>
+        Public Property PackingName As String = ""
+
+        Public Property PackingStructured As Boolean = False
+
+        Public Property PackingFp As Double = Double.NaN
+
+        Public Property PackingFpd As Double = Double.NaN
+
+        Public Property PackingArea As Double = Double.NaN
+
+        Public Property PackingVoid As Double = Double.NaN
+
+        Public Property PackingCh As Double = Double.NaN
+
+        Public Property PackingCp As Double = Double.NaN
+
+        Public Property PackingCs As Double = Double.NaN
+
+        Public Property PackingCorrugationSide As Double = Double.NaN
+
+        Public Property PackingCorrugationAngle As Double = 45.0
+
+        ''' <summary>The capacity and pressure drop model of the bed (0 Robbins, 1 Billet and Schultes, 2 Rocha, Bravo and Fair).</summary>
+        Public Property PackingModel As Integer = 0
+
         Public Property AccumulationStream As MaterialStream
 
         Sub New(_id As String)
@@ -7296,6 +7787,9 @@ Namespace UnitOperations.Auxiliary.SepOps
         Public Property StageHeats As List(Of Double)
         Public Property StageEfficiencies As List(Of Double)
 
+        ''' <summary>Rate-based mode: the Murphree efficiency of every component on every stage (stage x compound); Nothing to use the stage values.</summary>
+        Public Property ComponentEfficiencies As List(Of Double()) = Nothing
+
         Public Property FeedFlows As List(Of Double)
         Public Property FeedCompositions As List(Of Double())
         Public Property FeedEnthalpies As List(Of Double)
@@ -7480,6 +7974,22 @@ Namespace UnitOperations.Auxiliary.SepOps
     End Class
 
     Public MustInherit Class ColumnSolver
+
+        ''' <summary>The Murphree efficiency of component j on stage i: the rate-based value when there is one, the stage value otherwise.</summary>
+        Protected Shared Function Ef(effc()() As Double, eff() As Double, i As Integer, j As Integer) As Double
+            If effc IsNot Nothing AndAlso i < effc.Length AndAlso effc(i) IsNot Nothing AndAlso j < effc(i).Length Then Return effc(i)(j)
+            Return eff(i)
+        End Function
+
+        ''' <summary>The efficiency to apply on stage i to component j given its equilibrium vapour value ystar = K x and the
+        ''' vapour ynext arriving from the stage below (both may be scaled by the same flow). An efficiency above 1 is applied
+        ''' as given when the component is enriched on the stage; when it is stripped (ystar below ynext) the overshoot below
+        ''' the equilibrium value is stopped at half of it, so the outlet fraction stays positive whatever the efficiency.</summary>
+        Protected Shared Function Ef(effc()() As Double, eff() As Double, i As Integer, j As Integer, ystar As Double, ynext As Double) As Double
+            Dim e = Ef(effc, eff, i, j)
+            If e <= 1.0 OrElse ystar >= ynext OrElse ynext <= 0.0 Then Return e
+            Return Math.Min(e, (ynext - 0.5 * Math.Max(ystar, 0.0)) / (ynext - Math.Max(ystar, 0.0)))
+        End Function
 
         Public MustOverride ReadOnly Property Name As String
 

@@ -161,7 +161,7 @@ Public Class Settings
 
     Public Shared Property CalculationRequestID As String = ""
 
-    Public Shared Property InspectorEnabled As Boolean = True
+    Public Shared Property InspectorEnabled As Boolean = False
 
     Public Shared Property ClearInspectorHistoryOnNewCalculationRequest As Boolean = True
 
@@ -179,7 +179,10 @@ Public Class Settings
 
     Public Shared Property DarkMode As Boolean = False
 
-    Public Shared Property UIScalingFactor As Double = 1.0
+    ''' <summary>Interface scaling factor of the cross-platform interface (the classic interface
+    ''' overwrites it with the display DPI at startup). Fresh installs start at 0.9, which fits
+    ''' the WinForms proportions; a value saved in the settings file wins.</summary>
+    Public Shared Property UIScalingFactor As Double = 0.9
 
     Public Shared Property ObjectEditor As Integer = 0
 
@@ -517,6 +520,60 @@ Public Class Settings
 
     End Function
 
+    ''' <summary>
+    ''' Path of the site settings file, when one exists: the same sections and keys as dwsim.ini,
+    ''' laid over the user's file on every start so a classroom or a company can pin the
+    ''' language, the solver mode, the inspector, the update check and so on. Looked for, in
+    ''' order, at the DWSIM_SITE_INI environment variable, next to the application, in the
+    ''' machine's program data folder (Windows) or /etc/dwsim (Linux and macOS).
+    ''' </summary>
+    Public Shared Function GetSiteSettingsFile() As String
+
+        Dim candidates As New List(Of String)
+        Dim fromEnv = Environment.GetEnvironmentVariable("DWSIM_SITE_INI")
+        If Not String.IsNullOrWhiteSpace(fromEnv) Then candidates.Add(fromEnv)
+        candidates.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dwsim.site.ini"))
+        If Environment.OSVersion.Platform = PlatformID.Win32NT Then
+            Dim programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+            If programData <> "" Then candidates.Add(Path.Combine(programData, "DWSIM", "dwsim.site.ini"))
+        Else
+            candidates.Add("/etc/dwsim/dwsim.site.ini")
+        End If
+        For Each c In candidates
+            Try
+                If File.Exists(c) Then Return c
+            Catch ex As Exception
+            End Try
+        Next
+        Return ""
+
+    End Function
+
+    ''' <summary>The site settings file in use, or an empty string; set by LoadSettings so the interfaces can say so.</summary>
+    Public Shared Property SiteSettingsFile As String = ""
+
+    ''' <summary>Copies every key of the site settings file over the user's settings, section by section.</summary>
+    Private Shared Sub ApplySiteOverrides(source As IniConfigSource)
+
+        SiteSettingsFile = ""
+        Dim path = GetSiteSettingsFile()
+        If path = "" Then Return
+        Try
+            Dim site As New IniConfigSource(path)
+            For Each cfg In site.Configs.All()
+                Dim target = source.Configs(cfg.Name)
+                If target Is Nothing Then target = source.AddConfig(cfg.Name)
+                For Each key In cfg.Keys
+                    target.Set(key, cfg.Get(key))
+                Next
+            Next
+            SiteSettingsFile = path
+        Catch ex As Exception
+            ' a site file that cannot be read must not stop the program from starting
+        End Try
+
+    End Sub
+
     Shared Sub LoadSettings(Optional ByVal configfile As String = "")
 
         Dim configfiledir = GetConfigFileDir()
@@ -529,6 +586,8 @@ Public Class Settings
 
         Dim source As New IniConfigSource(configfile)
         Dim col() As String
+
+        ApplySiteOverrides(source)
 
         MostRecentFiles = New List(Of String)
 
@@ -614,7 +673,7 @@ Public Class Settings
 
         CallSolverOnEditorPropertyChanged = source.Configs("Misc").GetBoolean("CallSolverOnEditorPropertyChanged", True)
 
-        UIScalingFactor = source.Configs("Misc").GetDouble("UIScalingFactor", 1.0)
+        UIScalingFactor = source.Configs("Misc").GetDouble("UIScalingFactor", 0.9)
 
         LinuxDisplayDPI = source.Configs("Misc").GetDouble("LinuxDisplayDPI", 96.0)
 
