@@ -477,7 +477,9 @@ namespace DWSIM.UI.Desktop.Editors
             updateTotal();
 
             // Accept Changes pinned at the bottom, the auxiliary buttons scrolling above it.
-            var actions = new DockPanel { Margin = new Thickness(6, 0, 4, 0), Width = 110 };
+            // Width follows the UI scaling factor so the button captions (Normalize, Equalize,
+            // Accept Changes) are not clipped when the interface is scaled up.
+            var actions = new DockPanel { Margin = new Thickness(6, 0, 4, 0), Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(110) };
             DockPanel.SetDock(accept, global::Avalonia.Controls.Dock.Bottom);
             actions.Children.Add(accept);
             actions.Children.Add(new ScrollViewer

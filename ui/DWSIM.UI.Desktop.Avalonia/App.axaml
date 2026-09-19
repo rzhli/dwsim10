@@ -210,7 +210,9 @@
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="Padding" Value="8,0" />
       <Setter Property="MinHeight" Value="0" />
-      <Setter Property="Height" Value="{DynamicResource TabStripHeight}" />
+      <!-- Same height as the tool tab (Editor) so the Flowsheet document tab does not stand
+           taller than the docked-panel headers beside it. -->
+      <Setter Property="Height" Value="{DynamicResource DockHeaderHeight}" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
       <!-- The close X binds its fill to the item Foreground, so set it here (not only on the
            title TextBlock) or the X is invisible. -->
