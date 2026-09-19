@@ -178,16 +178,15 @@ public partial class FlowsheetView : UserControl
     }
 
     /// <summary>The full path of the file this simulation was loaded from or last saved to, or null
-    /// when it has never been saved. The title bar shows it after the flowsheet name, as the classic
-    /// UI does; the tab keeps only the flowsheet name.</summary>
+    /// when it has never been saved. The title bar shows it after the display name;
+    /// the tab keeps only the display name.</summary>
     public string? FilePath => string.IsNullOrEmpty(_flowsheet?.FilePath) ? null : _flowsheet!.FilePath;
 
-    /// <summary>What the tab and the title bar show for the flowsheet. A new simulation carries no
-    /// name until the user sets one or saves it (at which point the file name becomes the name); an
-    /// unnamed simulation falls back to its file name, or to "Untitled" before it has ever been saved.</summary>
+    /// <summary>What the tab and the title bar show for the flowsheet. Saved simulations use the file
+    /// name without its extension; unsaved simulations use their internal name or "Untitled".</summary>
     public string DisplayName =>
-        !string.IsNullOrWhiteSpace(SimulationName) ? SimulationName
-        : FilePath != null ? Path.GetFileNameWithoutExtension(FilePath)
+        FilePath != null ? Path.GetFileNameWithoutExtension(FilePath)
+        : !string.IsNullOrWhiteSpace(SimulationName) ? SimulationName
         : "Untitled";
 
     // -------------------------------------------------------------------------
@@ -1065,7 +1064,7 @@ public partial class FlowsheetView : UserControl
 
             // Saving does not rename a flowsheet the user has named. A flowsheet that was never named
             // adopts the file name (without extension) as its name on the first save. Either way the
-            // title bar is refreshed so it picks up the new file path after the flowsheet name.
+            // tab and title bar are refreshed to show the current file name and path.
             if (string.IsNullOrWhiteSpace(SimulationName))
             {
                 var name = Path.GetFileNameWithoutExtension(path);
@@ -1097,7 +1096,7 @@ public partial class FlowsheetView : UserControl
         {
             Title = "Save DWSIM Simulation",
             DefaultExtension = "dwxmz",
-            SuggestedFileName = SimulationName,
+            SuggestedFileName = DisplayName,
             FileTypeChoices = new[]
             {
                 new FilePickerFileType("DWSIM Simulation (compressed)") { Patterns = new[] { "*.dwxmz" } },

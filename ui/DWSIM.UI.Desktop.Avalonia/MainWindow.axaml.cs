@@ -690,7 +690,10 @@ public partial class MainWindow : Window
             Padding = new Thickness(2),
             Width = 18,
             Height = 18,
-            Margin = new Thickness(6, 0, 0, 0),
+            // Normal button minimums would stretch the tab, especially at larger UI scales.
+            MinWidth = 0,
+            MinHeight = 0,
+            Margin = new Thickness(4, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Cursor = new global::Avalonia.Input.Cursor(global::Avalonia.Input.StandardCursorType.Hand)
         };
@@ -704,7 +707,8 @@ public partial class MainWindow : Window
         {
             Content = row,
             Background = Brushes.Transparent,
-            Padding = new Thickness(10, 4),
+            MinHeight = 0,
+            Padding = new Thickness(8, 2),
             Margin = new Thickness(0, 0, 2, 0),
             BorderThickness = new Thickness(0, 0, 0, 2),
             BorderBrush = Brushes.Transparent,
@@ -737,8 +741,8 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The window title: the flowsheet name, followed by the full file path in parentheses
-    /// once the simulation has been saved, mirroring the classic Windows title bar.</summary>
+    /// <summary>The window title: the display name, followed by the full file path in parentheses
+    /// once the simulation has been saved.</summary>
     private static string FormatTitle(FlowsheetView view) =>
         view.FilePath != null
             ? $"DWSIM - {view.DisplayName} ({view.FilePath})"
