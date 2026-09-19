@@ -2,12 +2,12 @@ name: build-linux-fixed
 
 # 只构建 Linux x64 自包含产物，用于验证/部署本地修改。
 # 触发方式：
-#   1. 推送 fix-settings-load 分支时自动触发
+#   1. 推送 ci-linux-build 分支（本地改动的落脚分支）时自动触发
 #   2. 仓库 Actions 页面手动 "Run workflow"
 
 on:
   push:
-    branches: ['fix-settings-load']
+    branches: ['ci-linux-build']
   workflow_dispatch:
 
 env:
