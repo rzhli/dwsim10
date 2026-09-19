@@ -857,6 +857,10 @@ public partial class FlowsheetView : UserControl
 
             SimulationName = fs.Options?.SimulationName ?? "";
             SetStatus("Ready");
+            // Bring the canvas up at the UI scaling factor so its icons and labels match the rest
+            // of the interface. ZoomAll below overrides this to fit a flowsheet that has objects
+            // (a large sheet must still land on screen); an empty one keeps the scaled baseline.
+            _surface.Zoom = Math.Clamp((float)DWSIM.UI.Shared.Avalonia.UiScale.Factor, 0.1f, 10f);
             _surface.Center(Canvas.DeviceWidth, Canvas.DeviceHeight);
             _surface.ZoomAll(Canvas.DeviceWidth, Canvas.DeviceHeight);
             Canvas.Refresh();
@@ -1011,6 +1015,9 @@ public partial class FlowsheetView : UserControl
         CloseAllEditors();
         SimulationName = "";
         SetStatus("Ready");
+        // A new sheet has no objects, so ZoomAll would leave it at 1.0; bring the empty canvas up
+        // at the UI scaling factor so its icons and labels match the rest of the interface.
+        _surface.Zoom = Math.Clamp((float)DWSIM.UI.Shared.Avalonia.UiScale.Factor, 0.1f, 10f);
         Canvas.Refresh();
         UpdateResultsPanel();
         LoadFlowsheetExtensions();
@@ -3773,9 +3780,9 @@ public partial class FlowsheetView : UserControl
     public async Task<bool> ConfirmCloseAsync()
     {
         bool? result = null;
-        var no  = new Button { Content = "No",  Width = 80, IsDefault = true };
+        var no  = new Button { Content = "No",  MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(80), IsDefault = true };
         no.Classes.Add("dialog");
-        var yes = new Button { Content = "Yes", Width = 80 };
+        var yes = new Button { Content = "Yes", MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(80) };
         yes.Classes.Add("dialog");
 
         var btnPanel = new StackPanel
@@ -3802,7 +3809,10 @@ public partial class FlowsheetView : UserControl
         var dlg = new Window
         {
             Title = "Close Simulation",
-            Width = 380, Height = 160,
+            // Size to the (scaled) content instead of a fixed box, so the message and buttons are
+            // not clipped when the UI scaling factor grows the fonts.
+            SizeToContent = SizeToContent.WidthAndHeight,
+            MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(380),
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Icon = IconHelper.GetWindowIcon(),

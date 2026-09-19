@@ -331,19 +331,24 @@
       <Setter Property="Margin" Value="0,0,0,6" />
     </Style>
 
-    <!-- Editor panel compact controls -->
+    <!-- Editor panel compact controls. Height is pinned to EditorControlHeight so these input
+         rows stay compact: the Semi theme's own control Height (32 px, scaled) would otherwise
+         win over MinHeight and leave the box far taller than its text at larger scaling factors. -->
     <Style Selector="StackPanel.editorPanel TextBox">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="MinHeight" Value="{DynamicResource TextControlThemeMinHeight}" />
+      <Setter Property="Height" Value="{DynamicResource EditorControlHeight}" />
     </Style>
     <Style Selector="StackPanel.editorPanel ComboBox">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Height" Value="{DynamicResource EditorControlHeight}" />
     </Style>
     <Style Selector="StackPanel.editorPanel NumericUpDown">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="MinHeight" Value="{DynamicResource TextControlThemeMinHeight}" />
+      <Setter Property="Height" Value="{DynamicResource EditorControlHeight}" />
     </Style>
     <Style Selector="StackPanel.editorPanel CheckBox">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
@@ -351,6 +356,7 @@
     <Style Selector="StackPanel.editorPanel AutoCompleteBox">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="MinHeight" Value="{DynamicResource TextControlThemeMinHeight}" />
+      <Setter Property="Height" Value="{DynamicResource EditorControlHeight}" />
     </Style>
 
     <!-- =================================================================

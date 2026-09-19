@@ -521,8 +521,10 @@ public partial class MainWindow : Window
         var dlg = new Window
         {
             Title = title,
-            Width = 460,
-            Height = 220,
+            // Size to the (scaled) content instead of a fixed box, so the message and buttons are
+            // not clipped when the UI scaling factor grows the fonts.
+            SizeToContent = SizeToContent.WidthAndHeight,
+            MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(460),
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Icon = IconHelper.GetWindowIcon()
@@ -530,13 +532,13 @@ public partial class MainWindow : Window
 
         if (!okOnly)
         {
-            var no = new Button { Content = "No", Width = 80, IsCancel = true };
+            var no = new Button { Content = "No", MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(80), IsCancel = true };
             no.Classes.Add("dialog");
             no.Click += (_, _) => dlg.Close();
             buttons.Children.Add(no);
         }
 
-        var ok = new Button { Content = okOnly ? "OK" : "Yes", Width = 80, IsDefault = true };
+        var ok = new Button { Content = okOnly ? "OK" : "Yes", MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(80), IsDefault = true };
         ok.Classes.Add("dialog");
         ok.Click += (_, _) => { result = true; dlg.Close(); };
         buttons.Children.Add(ok);
