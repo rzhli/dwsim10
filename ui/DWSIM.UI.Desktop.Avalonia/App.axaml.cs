@@ -97,11 +97,21 @@ public class App : Application
         Resources["FontSizeSmall"] = 11.0 * scale;
         Resources["FontSizeSectionHeader"] = 15.0 * scale;
         Resources["FontSizePageTitle"] = 20.0 * scale;
-        Resources["TextControlThemeMinHeight"] = 24.0 * scale;
-        // Compact fixed height for the object-editor input rows (App.axaml editorPanel selectors).
-        // Kept just above the text so the box hugs its content instead of taking the Semi theme's
-        // taller default control height, which grows out of proportion at larger scaling factors.
-        Resources["EditorControlHeight"] = 26.0 * scale;
+        // Compact floor for every text input (text box, combo box, spinner, auto-complete). Kept
+        // just above the scaled font so the box hugs its text and its own (scaled) padding, instead
+        // of the Semi theme's 32 px default control height, which grew out of all proportion to the
+        // text at larger scaling factors. Both the editor rows (editorPanel selectors) and the raw
+        // controls elsewhere read these, so inputs are the same compact height across the whole app.
+        var inputHeight = 22.0 * scale;
+        Resources["TextControlThemeMinHeight"] = inputHeight;
+        Resources["EditorControlHeight"] = inputHeight;
+        // Override the Semi theme's own control-height resources (the MinHeight the theme binds onto
+        // each input) so the floor is compact at every scale, including 1.0. These are deliberately
+        // left out of the theme-rescale loop below, which would otherwise stretch them back to 32*scale.
+        Resources["TextBoxDefaultHeight"] = inputHeight;
+        Resources["ComboBoxDefaultHeight"] = inputHeight;
+        Resources["NumericUpDownDefaultHeight"] = inputHeight;
+        Resources["AutoCompleteBoxDefaultHeight"] = inputHeight;
 
         // Controls built in code (object editors, the Objects palette, the integrator panel)
         // read the same factor so their hard-coded sizes follow the preference too.
@@ -140,10 +150,11 @@ public class App : Application
         {
             "SemiHeightControlSmall", "SemiHeightControlDefault", "SemiHeightControlLarge",
             "ButtonSmallHeight", "ButtonDefaultHeight", "ButtonLargeHeight",
-            "TextBoxSmallHeight", "TextBoxDefaultHeight", "TextBoxLargeHeight", "TextBoxTextAreaHeight",
-            "ComboBoxSmallHeight", "ComboBoxDefaultHeight", "ComboBoxLargeHeight",
-            "NumericUpDownSmallHeight", "NumericUpDownDefaultHeight", "NumericUpDownLargeHeight",
-            "AutoCompleteBoxSmallHeight", "AutoCompleteBoxDefaultHeight", "AutoCompleteBoxLargeHeight",
+            // The *DefaultHeight keys are set to a compact inputHeight above and must not be rescaled here.
+            "TextBoxSmallHeight", "TextBoxLargeHeight", "TextBoxTextAreaHeight",
+            "ComboBoxSmallHeight", "ComboBoxLargeHeight",
+            "NumericUpDownSmallHeight", "NumericUpDownLargeHeight",
+            "AutoCompleteBoxSmallHeight", "AutoCompleteBoxLargeHeight",
             "TopLevelMenuItemMinHeight", "TabItemCardDefaultHeight",
             "CheckBoxBoxWidth", "CheckBoxBoxHeight", "CheckBoxBoxGlyphWidth", "CheckBoxBoxGlyphHeight"
         })

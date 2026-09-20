@@ -84,20 +84,20 @@ public class AvaloniaEditorPanel : StackPanel
         };
     }
 
-    /// <summary>Creates a two-column row: label on the left, control filling the rest on the right.</summary>
+    /// <summary>Creates a two-column row: label on the left, control sized to its content on the right.</summary>
     /// <remarks>
-    /// The control stretches to the panel's right edge instead of sitting at a fixed width. Row
-    /// builders hand controls a hard-coded width (160 px and the like) that does not grow with the
-    /// UI scaling factor, so at larger factors the font outgrew the box and clipped (a drop-down
-    /// showing "Counter C" for "Counter Current"). Filling the column makes every input as wide as
-    /// the panel and lets the scaled font breathe; the label column auto-sizes and keeps its
-    /// ellipsis. The fixed Width the caller set is cleared here so Stretch can take effect.
+    /// The control sizes to its own content rather than a hard-coded width (160 px and the like)
+    /// that did not grow with the UI scaling factor and clipped the scaled font (a drop-down showing
+    /// "Counter C" for "Counter Current"). The label column takes the left, keeps its ellipsis, and
+    /// the control column auto-sizes: a short value stays short, a long one grows just enough to show
+    /// it. A scaled MinWidth keeps very short inputs from collapsing. The caller's fixed Width is
+    /// cleared here so the auto-sizing takes effect.
     /// </remarks>
     public static Grid MakeLabelControlRow(string label, Control control, bool boldLabel = false)
     {
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
             Margin = new Thickness(0, 1, 0, 1)
         };
 
@@ -113,8 +113,9 @@ public class AvaloniaEditorPanel : StackPanel
         Grid.SetColumn(lbl, 0);
         grid.Children.Add(lbl);
 
-        control.HorizontalAlignment = HorizontalAlignment.Stretch;
         control.Width = double.NaN;
+        if (double.IsNaN(control.MinWidth) || control.MinWidth <= 0)
+            control.MinWidth = UiScale.Size(70);
         Grid.SetColumn(control, 1);
         grid.Children.Add(control);
 
