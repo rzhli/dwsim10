@@ -1299,7 +1299,11 @@ Public Class GraphicsSurface
                     draggingfs = Not SelectRectangle
                 Else
 #If LINUX Then
-                        If Not justselected Then Me.SelectedObjects.Clear()
+                        'Pressing an object that is already part of the multi-selection keeps the whole
+                        'group so it can be dragged again; pressing a fresh object resets to just it.
+                        'Without the ContainsKey guard the group collapsed to a single object after the
+                        'first drag (justselected is only true straight after a rubber-band select).
+                        If Not justselected AndAlso Not Me.SelectedObjects.ContainsKey(Me.SelectedObject.Name) Then Me.SelectedObjects.Clear()
                         If Not Me.SelectedObjects.ContainsKey(Me.SelectedObject.Name) Then
                             Me.SelectedObjects.Add(Me.SelectedObject.Name, Me.SelectedObject)
                         End If

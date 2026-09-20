@@ -2448,19 +2448,28 @@ public partial class FlowsheetView : UserControl
     private void HandleDelete()
     {
         if (_surface == null || _flowsheet == null) return;
-        var obj = _surface.SelectedObject;
-        if (obj == null) return;
 
-        var tag = obj.Tag;
-        // Route deletion through the flowsheet's own logic (the same path the WinForms edition uses).
-        // It disconnects every attached input/output/energy port, removes the connection lines, clears
-        // any spec/adjust/PID references and drops the object from both the simulation-object and
-        // graphic-object dictionaries. The previous surface-only delete left ports occupied and the
-        // connection lines still drawn on the canvas.
-        _flowsheet.DeleteSelectedObject(this, EventArgs.Empty, obj, confirmation: false, triggercalc: false);
+        // Delete the whole multi-selection when there is one, otherwise the single selected object.
+        // Snapshot the list first: DeleteSelectedObject mutates the surface's selection collections.
+        var targets = _surface.SelectedObjects.Values.ToList();
+        if (targets.Count == 0 && _surface.SelectedObject != null)
+            targets.Add(_surface.SelectedObject);
+        if (targets.Count == 0) return;
+
+        var tag = targets[0].Tag;
+        // Route each deletion through the flowsheet's own logic (the same path the WinForms edition
+        // uses). It disconnects every attached input/output/energy port, removes the connection lines,
+        // clears any spec/adjust/PID references and drops the object from both the simulation-object
+        // and graphic-object dictionaries. The previous surface-only delete left ports occupied and
+        // the connection lines still drawn on the canvas.
+        foreach (var obj in targets)
+            _flowsheet.DeleteSelectedObject(this, EventArgs.Empty, obj, confirmation: false, triggercalc: false);
+
+        _surface.SelectedObjects.Clear();
+        _surface.SelectedObject = null;
         Canvas.Refresh();
         UpdateResultsPanel();
-        AppendLog($"Deleted '{tag}'.");
+        AppendLog(targets.Count == 1 ? $"Deleted '{tag}'." : $"Deleted {targets.Count} objects.");
     }
 
     private void HandleConnectClick()
