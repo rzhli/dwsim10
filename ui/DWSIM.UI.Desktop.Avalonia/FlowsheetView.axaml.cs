@@ -3222,7 +3222,8 @@ public partial class FlowsheetView : UserControl
             {
                 Orientation = global::Avalonia.Layout.Orientation.Horizontal,
                 Cursor = new Cursor(StandardCursorType.Hand),
-                Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(30),
+                // Same height as the dock/panel headers (DockHeaderHeight = 22 * factor).
+                Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(22),
             };
             // Theme-aware band: light in the light variant, dark in the dark one, so the
             // header text (which inherits the theme foreground) stays legible in both.

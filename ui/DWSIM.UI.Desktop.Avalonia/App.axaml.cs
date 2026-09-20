@@ -123,6 +123,9 @@ public class App : Application
         // stayed small).
         Resources["ControlMinHeight"] = 28.0 * scale;
         Resources["ControlPadding"] = new Thickness(12.0 * scale, 5.0 * scale);
+        // Padding for buttons pinned to the dock header height (panel/action/dialog/…): comfortable
+        // horizontally, tight vertically so the caption fits inside DockHeaderHeight.
+        Resources["BarButtonPadding"] = new Thickness(12.0 * scale, 2.0 * scale);
         Resources["TabHeaderMinHeight"] = 34.0 * scale;
         Resources["TabStripHeight"] = 28.0 * scale;
         Resources["DockHeaderHeight"] = 22.0 * scale;
@@ -132,6 +135,10 @@ public class App : Application
         Resources["DockToolChromeTitleMargin"] = new Thickness(4.0 * scale, 0);
         Resources["DataGridRowHeight"] = 28.0 * scale;
         Resources["DataGridHeaderHeight"] = 24.0 * scale;
+        // Top menu bar shares the dock header height; a compact padding keeps the bar from growing
+        // past it while leaving the items comfortable horizontally.
+        Resources["TopLevelMenuItemMinHeight"] = 22.0 * scale;
+        Resources["TopLevelMenuItemPadding"] = new Thickness(8.0 * scale, 2.0 * scale);
         Resources["ToolbarIconSize"] = 16.0 * scale;
         Resources["ToolbarButtonMinSize"] = 32.0 * scale;
         Resources["SubToolbarButtonMinSize"] = 24.0 * scale;
@@ -155,7 +162,7 @@ public class App : Application
             "ComboBoxSmallHeight", "ComboBoxLargeHeight",
             "NumericUpDownSmallHeight", "NumericUpDownLargeHeight",
             "AutoCompleteBoxSmallHeight", "AutoCompleteBoxLargeHeight",
-            "TopLevelMenuItemMinHeight", "TabItemCardDefaultHeight",
+            "TabItemCardDefaultHeight",
             "CheckBoxBoxWidth", "CheckBoxBoxHeight", "CheckBoxBoxGlyphWidth", "CheckBoxBoxGlyphHeight"
         })
             ScaleThemeDouble(key, scale);
@@ -166,7 +173,7 @@ public class App : Application
             "TextBoxContentPadding", "TextBoxInnerLeftContentPadding", "TextBoxInnerRightContentPadding",
             "TextBoxTextAreaContentPadding",
             "ComboBoxSelectorDefaultPadding", "ComboBoxItemDefaultPadding",
-            "TopLevelMenuItemPadding", "MenuItemPadding", "ListBoxItemDefaultPadding",
+            "MenuItemPadding", "ListBoxItemDefaultPadding",
             "RadioButtonButtonSmallPadding", "RadioButtonButtonDefaultPadding", "RadioButtonButtonLargePadding"
         })
             ScaleThemeThickness(key, scale);

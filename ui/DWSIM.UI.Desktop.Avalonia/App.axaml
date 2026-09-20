@@ -137,9 +137,11 @@
       <Setter Property="VerticalContentAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     </Style>
-    <!-- A touch more height on the TabControl headers so they are not cramped. -->
+    <!-- TabControl headers share the dock header height so the editor sub-tabs line up with the
+         panel title bars. -->
     <Style Selector="TabItem">
-      <Setter Property="MinHeight" Value="{DynamicResource TabHeaderMinHeight}" />
+      <Setter Property="MinHeight" Value="{DynamicResource DockHeaderHeight}" />
+      <Setter Property="Height" Value="{DynamicResource DockHeaderHeight}" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
@@ -166,6 +168,10 @@
       <Setter Property="BorderBrush" Value="{DynamicResource AppButtonBorder}" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
+      <!-- Same height as the dock header so panel/action/dialog buttons line up with the bars;
+           a compact vertical padding keeps the caption from pushing past it. -->
+      <Setter Property="MinHeight" Value="{DynamicResource DockHeaderHeight}" />
+      <Setter Property="Padding" Value="{DynamicResource BarButtonPadding}" />
     </Style>
     <Style Selector="Button.panel:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.dialog:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.action:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.wizard:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.group:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource AppButtonBackgroundHover}" />
@@ -411,8 +417,8 @@
            when the interface was scaled down. The scaled MinHeight alone sets the height. -->
       <Setter Property="Padding" Value="6,0" />
       <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="MinWidth" Value="{DynamicResource ToolbarButtonMinSize}" />
-      <Setter Property="MinHeight" Value="{DynamicResource ToolbarButtonMinSize}" />
+      <Setter Property="MinWidth" Value="{DynamicResource DockHeaderHeight}" />
+      <Setter Property="MinHeight" Value="{DynamicResource DockHeaderHeight}" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
       <Setter Property="Cursor" Value="Hand" />
@@ -445,8 +451,8 @@
       <Setter Property="CornerRadius" Value="3" />
       <Setter Property="Padding" Value="4,0" />
       <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="MinWidth" Value="{DynamicResource SubToolbarButtonMinSize}" />
-      <Setter Property="MinHeight" Value="{DynamicResource SubToolbarButtonMinSize}" />
+      <Setter Property="MinWidth" Value="{DynamicResource DockHeaderHeight}" />
+      <Setter Property="MinHeight" Value="{DynamicResource DockHeaderHeight}" />
       <Setter Property="FontSize" Value="{DynamicResource ToolbarIconSize}" />
       <Setter Property="Cursor" Value="Hand" />
     </Style>
