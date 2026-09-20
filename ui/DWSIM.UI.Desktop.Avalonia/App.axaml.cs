@@ -139,6 +139,9 @@ public class App : Application
         // past it while leaving the items comfortable horizontally.
         Resources["TopLevelMenuItemMinHeight"] = 22.0 * scale;
         Resources["TopLevelMenuItemPadding"] = new Thickness(8.0 * scale, 2.0 * scale);
+        // Drop-down menu item rows: compact vertical padding so the row hugs the dock header height
+        // instead of the theme's taller default.
+        Resources["MenuItemPadding"] = new Thickness(12.0 * scale, 3.0 * scale);
         Resources["ToolbarIconSize"] = 16.0 * scale;
         Resources["ToolbarButtonMinSize"] = 32.0 * scale;
         Resources["SubToolbarButtonMinSize"] = 24.0 * scale;
@@ -173,7 +176,7 @@ public class App : Application
             "TextBoxContentPadding", "TextBoxInnerLeftContentPadding", "TextBoxInnerRightContentPadding",
             "TextBoxTextAreaContentPadding",
             "ComboBoxSelectorDefaultPadding", "ComboBoxItemDefaultPadding",
-            "MenuItemPadding", "ListBoxItemDefaultPadding",
+            "ListBoxItemDefaultPadding",
             "RadioButtonButtonSmallPadding", "RadioButtonButtonDefaultPadding", "RadioButtonButtonLargePadding"
         })
             ScaleThemeThickness(key, scale);

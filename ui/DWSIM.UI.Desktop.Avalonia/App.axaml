@@ -112,6 +112,9 @@
     </Style>
     <Style Selector="MenuItem">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
+      <!-- Drop-down rows share the dock header height; the theme's tall MinHeight and vertical
+           padding would otherwise make each item far taller than its text when scaled up. -->
+      <Setter Property="MinHeight" Value="{DynamicResource DockHeaderHeight}" />
     </Style>
     <Style Selector="ContextMenu">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
