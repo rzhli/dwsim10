@@ -19,10 +19,10 @@
         <TextBlock DockPanel.Dock="Top" Text="Reaction Sets"
                    FontWeight="SemiBold" Margin="2,0,0,4" />
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,4">
-          <Button Name="BtnSetNew"    Classes="panel" Content="New"    Width="60" />
-          <Button Name="BtnSetEdit"   Classes="panel" Content="Edit"   Width="60" />
-          <Button Name="BtnSetCopy"   Classes="panel" Content="Copy"   Width="60" />
-          <Button Name="BtnSetRemove" Classes="panel" Content="Remove" Width="70" />
+          <Button Name="BtnSetNew"    Classes="panel" Content="New"    MinWidth="60" />
+          <Button Name="BtnSetEdit"   Classes="panel" Content="Edit"   MinWidth="60" />
+          <Button Name="BtnSetCopy"   Classes="panel" Content="Copy"   MinWidth="60" />
+          <Button Name="BtnSetRemove" Classes="panel" Content="Remove" MinWidth="70" />
         </StackPanel>
         <DataGrid Name="GridSets" AutoGenerateColumns="False" IsReadOnly="True"
                   HeadersVisibility="Column" GridLinesVisibility="All"
@@ -36,12 +36,12 @@
         <TextBlock DockPanel.Dock="Top" Text="Chemical Reactions"
                    FontWeight="SemiBold" Margin="2,0,0,4" />
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,4">
-          <Button Name="BtnRxnAdd"    Classes="panel" Content="Add ▾"  Width="70" />
-          <Button Name="BtnRxnEdit"   Classes="panel" Content="Edit"   Width="60" />
-          <Button Name="BtnRxnCopy"   Classes="panel" Content="Copy"   Width="60" />
-          <Button Name="BtnRxnDelete" Classes="panel" Content="Delete" Width="65" />
-          <Button Name="BtnRxnExport" Classes="panel" Content="Export" Width="65" />
-          <Button Name="BtnRxnImport" Classes="panel" Content="Import" Width="65" />
+          <Button Name="BtnRxnAdd"    Classes="panel" Content="Add ▾"  MinWidth="70" />
+          <Button Name="BtnRxnEdit"   Classes="panel" Content="Edit"   MinWidth="60" />
+          <Button Name="BtnRxnCopy"   Classes="panel" Content="Copy"   MinWidth="60" />
+          <Button Name="BtnRxnDelete" Classes="panel" Content="Delete" MinWidth="65" />
+          <Button Name="BtnRxnExport" Classes="panel" Content="Export" MinWidth="65" />
+          <Button Name="BtnRxnImport" Classes="panel" Content="Import" MinWidth="65" />
         </StackPanel>
         <DataGrid Name="GridReactions" AutoGenerateColumns="False" IsReadOnly="True"
                   HeadersVisibility="Column" GridLinesVisibility="All"
