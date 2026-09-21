@@ -99,8 +99,8 @@ namespace DWSIM.UI.Desktop.Avalonia
             root.Children.Add(left);
 
             // --- middle: selected objects, in report order, with up/down ---
-            var btnUp = new Button { Content = "Move Up", Width = 100 };
-            var btnDown = new Button { Content = "Move Down", Width = 100 };
+            var btnUp = new Button { Content = "Move Up", MinWidth = 100 };
+            var btnDown = new Button { Content = "Move Down", MinWidth = 100 };
             btnUp.Click += (_, _) => Move(-1);
             btnDown.Click += (_, _) => Move(+1);
             var order = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -123,10 +123,10 @@ namespace DWSIM.UI.Desktop.Avalonia
             root.Children.Add(right);
 
             // --- bottom: actions ---
-            var btnView = new Button { Content = "View Report", Width = 130 };
-            var btnCsv = new Button { Content = "Export CSV...", Width = 120 };
-            var btnTxt = new Button { Content = "Export Text...", Width = 120 };
-            var btnClose = new Button { Content = "Close", Width = 90 };
+            var btnView = new Button { Content = "View Report", MinWidth = 130 };
+            var btnCsv = new Button { Content = "Export CSV...", MinWidth = 120 };
+            var btnTxt = new Button { Content = "Export Text...", MinWidth = 120 };
+            var btnClose = new Button { Content = "Close", MinWidth = 90 };
             btnView.Click += (_, _) => ViewReport();
             btnCsv.Click += async (_, _) => await Export("csv");
             btnTxt.Click += async (_, _) => await Export("txt");

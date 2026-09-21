@@ -107,10 +107,10 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             content.Children.Add(GroupBox("Components and Stoichiometry", stoichBody));
             content.Children.Add(GroupBox("Parameters", paramsPanel));
 
-            var ok = new Button { Content = "OK", Width = 90, IsDefault = true };
+            var ok = new Button { Content = "OK", MinWidth = 90, IsDefault = true };
             ok.Classes.Add("dialog");
             ok.Click += (_, _) => OnOk();
-            var cancel = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+            var cancel = new Button { Content = "Cancel", MinWidth = 90, IsCancel = true };
             cancel.Classes.Add("dialog");
             cancel.Click += (_, _) => Close();
             var buttons = new StackPanel
@@ -330,7 +330,7 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
 
         protected static Button PanelButton(string label, Action onClick)
         {
-            var b = new Button { Content = label, Width = 110 };
+            var b = new Button { Content = label, MinWidth = 110 };
             b.Classes.Add("panel");
             b.Click += (_, _) => onClick();
             return b;
@@ -338,7 +338,7 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
 
         protected async System.Threading.Tasks.Task Msg(string title, string message)
         {
-            var ok = new Button { Content = "OK", Width = 80, IsDefault = true };
+            var ok = new Button { Content = "OK", MinWidth = 80, IsDefault = true };
             ok.Classes.Add("dialog");
             var dlg = new Window
             {

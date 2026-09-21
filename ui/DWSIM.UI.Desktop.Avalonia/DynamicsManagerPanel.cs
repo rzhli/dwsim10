@@ -1160,9 +1160,9 @@ public sealed class DynamicsManagerPanel : DockPanel
         };
 
         var tb = new TextBox { Text = defaultValue, FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), Margin = new Thickness(12, 12, 12, 8) };
-        var btnCancel = new Button { Content = "Cancel", Width = 80, FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), IsCancel = true };
+        var btnCancel = new Button { Content = "Cancel", MinWidth = 80, FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), IsCancel = true };
         btnCancel.Classes.Add("dialog");
-        var btnOk = new Button { Content = "OK", Width = 80, FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), IsDefault = true };
+        var btnOk = new Button { Content = "OK", MinWidth = 80, FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), IsDefault = true };
         btnOk.Classes.Add("dialog");
 
         string? result = null;

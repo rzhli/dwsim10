@@ -194,10 +194,10 @@ public sealed class CompoundPropertyEditorWindow : Window
         linkBar.Children.Add(_linkPath);
         ToolTip.SetTip(linkBar, "Link this compound to a .json file. Reload brings the file's values into the editor (you still press OK to apply them to the simulation); Save writes what you see here to the file; Show diff lists what differs between the file and the editor.");
 
-        _btnOk = new Button { Content = "OK", Width = 90, IsDefault = true };
+        _btnOk = new Button { Content = "OK", MinWidth = 90, IsDefault = true };
         _btnOk.Classes.Add("dialog");
         _btnOk.Click += async (_, _) => await OnOkAsync();
-        var cancel = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+        var cancel = new Button { Content = "Cancel", MinWidth = 90, IsCancel = true };
         cancel.Classes.Add("dialog");
         cancel.Click += (_, _) => Close();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12, 6, 12, 12), Children = { cancel, _btnOk } };
@@ -838,7 +838,7 @@ public sealed class CompoundPropertyEditorWindow : Window
 
     private async System.Threading.Tasks.Task MsgAsync(string title, string message)
     {
-        var ok = new Button { Content = "OK", Width = 80, IsDefault = true };
+        var ok = new Button { Content = "OK", MinWidth = 80, IsDefault = true };
         ok.Classes.Add("dialog");
         var dlg = new Window
         {
@@ -858,9 +858,9 @@ public sealed class CompoundPropertyEditorWindow : Window
     private async System.Threading.Tasks.Task<bool> ConfirmAsync(string title, string message)
     {
         var result = false;
-        var yes = new Button { Content = "Yes", Width = 80, IsDefault = true };
+        var yes = new Button { Content = "Yes", MinWidth = 80, IsDefault = true };
         yes.Classes.Add("dialog");
-        var no = new Button { Content = "No", Width = 80, IsCancel = true };
+        var no = new Button { Content = "No", MinWidth = 80, IsCancel = true };
         no.Classes.Add("dialog");
         var dlg = new Window
         {

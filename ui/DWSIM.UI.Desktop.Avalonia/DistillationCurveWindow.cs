@@ -299,8 +299,8 @@ public sealed class DistillationCurveWindow : Window
             FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11)
         };
 
-        var accept = new Button { Content = "Add Compounds", Width = 140, IsDefault = true };
-        var cancel = new Button { Content = "Discard", Width = 100, IsCancel = true };
+        var accept = new Button { Content = "Add Compounds", MinWidth = 140, IsDefault = true };
+        var cancel = new Button { Content = "Discard", MinWidth = 100, IsCancel = true };
         accept.Classes.Add("dialog");
         cancel.Classes.Add("dialog");
         accept.Click += (_, _) => dlg.Close(true);

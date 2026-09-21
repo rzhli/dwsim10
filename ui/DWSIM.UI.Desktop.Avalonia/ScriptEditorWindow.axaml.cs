@@ -702,9 +702,9 @@ public partial class ScriptEditorWindow : Window
     {
         var result = false;
 
-        var no = new Button { Content = "No", Width = 80, IsCancel = true };
+        var no = new Button { Content = "No", MinWidth = 80, IsCancel = true };
         no.Classes.Add("dialog");
-        var yes = new Button { Content = "Yes", Width = 80, IsDefault = true };
+        var yes = new Button { Content = "Yes", MinWidth = 80, IsDefault = true };
         yes.Classes.Add("dialog");
 
         var buttons = new StackPanel

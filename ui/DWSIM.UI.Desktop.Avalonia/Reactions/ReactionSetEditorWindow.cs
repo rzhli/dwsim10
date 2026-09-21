@@ -90,10 +90,10 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
 
             LoadRows();
 
-            var btnAdd = new Button { Content = "Add Reaction ▾", Width = 150 };
+            var btnAdd = new Button { Content = "Add Reaction ▾", MinWidth = 150 };
             btnAdd.Classes.Add("panel");
             btnAdd.Click += (_, _) => ShowAddFlyout(btnAdd);
-            var btnRemove = new Button { Content = "Remove Selected", Width = 150 };
+            var btnRemove = new Button { Content = "Remove Selected", MinWidth = 150 };
             btnRemove.Classes.Add("panel");
             btnRemove.Click += (_, _) => { if (_grid.SelectedItem is Row r) _rows.Remove(r); };
 
@@ -112,10 +112,10 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             content.Children.Add(GroupBox("Identification", id));
             content.Children.Add(GroupBox("Reactions", reactionsBody));
 
-            var ok = new Button { Content = "OK", Width = 90, IsDefault = true };
+            var ok = new Button { Content = "OK", MinWidth = 90, IsDefault = true };
             ok.Classes.Add("dialog");
             ok.Click += (_, _) => OnOk();
-            var cancel = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+            var cancel = new Button { Content = "Cancel", MinWidth = 90, IsCancel = true };
             cancel.Classes.Add("dialog");
             cancel.Click += (_, _) => Close();
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Margin = new Thickness(0, 0, 16, 12), Children = { cancel, ok } };

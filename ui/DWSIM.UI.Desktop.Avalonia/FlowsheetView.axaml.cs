@@ -2751,7 +2751,7 @@ public partial class FlowsheetView : UserControl
                         simObj.DebugMode = false;
                         return r;
                     });
-                    var okBtn = new Button { Content = "OK", IsDefault = true, Width = 80 };
+                    var okBtn = new Button { Content = "OK", IsDefault = true, MinWidth = 80 };
                     okBtn.Classes.Add("dialog");
                     var okPanel = new StackPanel
                     {
@@ -2988,9 +2988,9 @@ public partial class FlowsheetView : UserControl
     {
         string? result = null;
         var tb   = new TextBox { Text = defaultValue };
-        var cancel = new Button { Content = "Cancel", Width = 80, IsCancel  = true };
+        var cancel = new Button { Content = "Cancel", MinWidth = 80, IsCancel  = true };
         cancel.Classes.Add("dialog");
-        var ok     = new Button { Content = "OK",     Width = 80, IsDefault = true };
+        var ok     = new Button { Content = "OK",     MinWidth = 80, IsDefault = true };
         ok.Classes.Add("dialog");
 
         var btnPanel = new StackPanel
@@ -3473,7 +3473,7 @@ public partial class FlowsheetView : UserControl
     {
         var panel = DWSIM.UI.Desktop.Editors.AvaloniaEditorFactory.BuildAppearanceEditor(simobj);
 
-        var close = new Button { Content = "Close", Width = 90, IsCancel = true };
+        var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
         close.Classes.Add("dialog");
 
         var bottom = new StackPanel

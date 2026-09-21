@@ -159,19 +159,19 @@ public sealed class ColumnInternalsWindow : Window
     {
         _left = new ScrollViewer { Content = BuildInputPanel(), Padding = new Thickness(10, 8, 22, 8), AllowAutoHide = false, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
 
-        _run = new Button { Content = "Rate", Width = 110, IsDefault = true };
+        _run = new Button { Content = "Rate", MinWidth = 110, IsDefault = true };
         _run.Classes.Add("dialog");
         _run.Click += async (_, _) => await RunAsync(false);
         _iterate = new Button { Content = "Rate and iterate with the solver" };
         _iterate.Classes.Add("dialog");
         _iterate.Click += async (_, _) => await RunAsync(true);
-        _export = new Button { Content = "Export CSV...", Width = 130, IsEnabled = false };
+        _export = new Button { Content = "Export CSV...", MinWidth = 130, IsEnabled = false };
         _export.Classes.Add("dialog");
         _export.Click += async (_, _) => await ExportAsync();
-        _load = new Button { Content = "Load case...", Width = 120 };
+        _load = new Button { Content = "Load case...", MinWidth = 120 };
         _load.Classes.Add("dialog");
         _load.Click += async (_, _) => await LoadCaseAsync();
-        _save = new Button { Content = "Save case...", Width = 120 };
+        _save = new Button { Content = "Save case...", MinWidth = 120 };
         _save.Classes.Add("dialog");
         _save.Click += async (_, _) => await SaveCaseAsync();
         var topButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 8, 12, 4), Children = { _load, _save } };
@@ -288,7 +288,7 @@ public sealed class ColumnInternalsWindow : Window
                 _in.Sections.RemoveAt(_selected); _selected = Math.Min(_selected, _in.Sections.Count - 1); Rebuild();
             });
         remove.IsEnabled = _selected >= 0;
-        add.Width = 120; remove.Width = 120;
+        add.MinWidth = 120; remove.MinWidth = 120;
 
         if (_selected >= 0 && _selected < _in.Sections.Count) BuildSectionRows(p, _in.Sections[_selected], nStages);
         // room under the last row so the bottom buttons do not cover it

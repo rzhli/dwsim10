@@ -229,10 +229,10 @@ public sealed class DataRegressionWindow : Window
         left.Children.Add(actions);
 
         // ---- middle: experimental data ----
-        var btnAddRow = new Button { Content = "Add Row", Width = 90 };
-        var btnDelRow = new Button { Content = "Remove", Width = 90 };
-        var btnPaste = new Button { Content = "Paste (TSV/CSV)", Width = 140 };
-        var btnClear = new Button { Content = "Clear", Width = 80 };
+        var btnAddRow = new Button { Content = "Add Row", MinWidth = 90 };
+        var btnDelRow = new Button { Content = "Remove", MinWidth = 90 };
+        var btnPaste = new Button { Content = "Paste (TSV/CSV)", MinWidth = 140 };
+        var btnClear = new Button { Content = "Clear", MinWidth = 80 };
         foreach (var b in new[] { btnAddRow, btnDelRow, btnPaste, btnClear }) b.Classes.Add("panel");
 
         btnAddRow.Click += (_, _) => _dataRows.Add(new DataRow());
@@ -273,8 +273,8 @@ public sealed class DataRegressionWindow : Window
         tabs.Items.Add(new TabItem { Header = "Parameters (BIPs)", Content = bipPanel });
 
         // ---- toolbar ----
-        var btnLoad = new Button { Content = "Load Case...", Width = 110 };
-        var btnSave = new Button { Content = "Save Case...", Width = 110 };
+        var btnLoad = new Button { Content = "Load Case...", MinWidth = 110 };
+        var btnSave = new Button { Content = "Save Case...", MinWidth = 110 };
         foreach (var b in new[] { btnLoad, btnSave }) b.Classes.Add("panel");
         btnLoad.Click += async (_, _) => await LoadCaseAsync();
         btnSave.Click += async (_, _) => await SaveCaseAsync();
@@ -425,8 +425,8 @@ public sealed class DataRegressionWindow : Window
     private async Task<bool> ConfirmAsync(string title, string message)
     {
         var result = false;
-        var yes = new Button { Content = "Yes", Width = 80 };
-        var no = new Button { Content = "No", Width = 80, IsCancel = true, IsDefault = true };
+        var yes = new Button { Content = "Yes", MinWidth = 80 };
+        var no = new Button { Content = "No", MinWidth = 80, IsCancel = true, IsDefault = true };
         yes.Classes.Add("dialog");
         no.Classes.Add("dialog");
 

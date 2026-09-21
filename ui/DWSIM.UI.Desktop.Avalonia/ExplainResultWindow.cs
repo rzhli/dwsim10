@@ -51,10 +51,10 @@ public sealed class ExplainResultWindow : Window
     private Control BuildContent()
     {
         _objectBox = new ComboBox { Width = 320, ItemsSource = _objects.Select(o => o.GraphicObject.Tag + "  (" + Kind(o) + ")").ToList() };
-        _run = new Button { Content = "Explain", Width = 110, IsDefault = true };
+        _run = new Button { Content = "Explain", MinWidth = 110, IsDefault = true };
         _run.Classes.Add("dialog");
         _run.Click += async (_, _) => await RunAsync();
-        _copy = new Button { Content = "Copy report", Width = 130, IsEnabled = false };
+        _copy = new Button { Content = "Copy report", MinWidth = 130, IsEnabled = false };
         _copy.Classes.Add("dialog");
         _copy.Click += async (_, _) =>
         {

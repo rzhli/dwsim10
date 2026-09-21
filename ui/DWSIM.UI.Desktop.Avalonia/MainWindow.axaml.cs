@@ -134,8 +134,8 @@ public partial class MainWindow : Window
                 Margin = new Thickness(14)
             };
 
-            var later = new Button { Content = "Later", IsCancel = true, Width = 90, Margin = new Thickness(6) };
-            var download = new Button { Content = "Open Downloads", IsDefault = true, Width = 150, Margin = new Thickness(6) };
+            var later = new Button { Content = "Later", IsCancel = true, MinWidth = 90, Margin = new Thickness(6) };
+            var download = new Button { Content = "Open Downloads", IsDefault = true, MinWidth = 150, Margin = new Thickness(6) };
             download.Classes.Add("dialog");
 
             var buttons = new StackPanel

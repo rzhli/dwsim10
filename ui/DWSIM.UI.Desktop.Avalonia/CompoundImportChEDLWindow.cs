@@ -50,7 +50,7 @@ public sealed class CompoundImportChEDLWindow : Window
     {
         _checklist.ItemsSource = _rows;
 
-        _btnSearch = new Button { Content = "Search", Width = 90, Margin = new Thickness(6, 0, 0, 0) };
+        _btnSearch = new Button { Content = "Search", MinWidth = 90, Margin = new Thickness(6, 0, 0, 0) };
         _btnSearch.Classes.Add("panel");
         _btnSearch.Click += async (_, _) => await SearchAsync();
 
@@ -101,7 +101,7 @@ public sealed class CompoundImportChEDLWindow : Window
             if (!string.IsNullOrEmpty(message)) _status.Text = message;
         };
 
-        var btnClose = new Button { Content = "Close", Width = 90, IsCancel = true };
+        var btnClose = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
         btnClose.Classes.Add("dialog");
         btnClose.Click += (_, _) => Close();
 

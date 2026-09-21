@@ -9,8 +9,8 @@
 
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal"
                 HorizontalAlignment="Right" Spacing="8" Margin="0,14,0,0">
-      <Button Name="BtnAdd"    Classes="dialog" Content="Add to Flowsheet" Width="160" IsDefault="True" />
-      <Button Name="BtnCancel" Classes="dialog" Content="Cancel" Width="100" IsCancel="True" />
+      <Button Name="BtnAdd"    Classes="dialog" Content="Add to Flowsheet" MinWidth="160" IsDefault="True" />
+      <Button Name="BtnCancel" Classes="dialog" Content="Cancel" MinWidth="100" IsCancel="True" />
     </StackPanel>
 
     <ScrollViewer>

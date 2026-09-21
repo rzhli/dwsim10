@@ -138,23 +138,23 @@ public sealed class McCabeThieleWindow : Window
     {
         _left = new ScrollViewer { Content = BuildInputPanel(), Padding = new Thickness(10, 8, 10, 8), AllowAutoHide = false };
 
-        _run = new Button { Content = "Draw", Width = 110, IsDefault = true };
+        _run = new Button { Content = "Draw", MinWidth = 110, IsDefault = true };
         _run.Classes.Add("dialog");
         _run.Click += async (_, _) => await RunAsync();
-        _cancel = new Button { Content = "Stop", Width = 90, IsEnabled = false };
+        _cancel = new Button { Content = "Stop", MinWidth = 90, IsEnabled = false };
         _cancel.Classes.Add("dialog");
         _cancel.Click += (_, _) => _cts?.Cancel();
-        _copy = new Button { Content = "Copy report", Width = 130, IsEnabled = false };
+        _copy = new Button { Content = "Copy report", MinWidth = 130, IsEnabled = false };
         _copy.Classes.Add("dialog");
         _copy.Click += async (_, _) =>
         {
             var top = GetTopLevel(this);
             if (top?.Clipboard != null && _result != null) { await top.Clipboard.SetTextAsync(_result.TextReport); _status.Text = "Report copied."; }
         };
-        _load = new Button { Content = "Load case...", Width = 120 };
+        _load = new Button { Content = "Load case...", MinWidth = 120 };
         _load.Classes.Add("dialog");
         _load.Click += async (_, _) => await LoadCaseAsync();
-        _save = new Button { Content = "Save case...", Width = 120 };
+        _save = new Button { Content = "Save case...", MinWidth = 120 };
         _save.Classes.Add("dialog");
         _save.Click += async (_, _) => await SaveCaseAsync();
         var topButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 8, 12, 4), Children = { _load, _save } };

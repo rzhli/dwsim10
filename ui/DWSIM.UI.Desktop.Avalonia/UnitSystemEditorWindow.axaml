@@ -14,9 +14,9 @@
         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
           <TextBlock Text="System:" VerticalAlignment="Center" />
           <ComboBox Name="CbSystem" Width="200" />
-          <Button Name="BtnNew" Classes="panel" Content="New" Width="70" />
-          <Button Name="BtnClone" Classes="panel" Content="Duplicate" Width="90" />
-          <Button Name="BtnDelete" Classes="panel" Content="Delete" Width="70" />
+          <Button Name="BtnNew" Classes="panel" Content="New" MinWidth="70" />
+          <Button Name="BtnClone" Classes="panel" Content="Duplicate" MinWidth="90" />
+          <Button Name="BtnDelete" Classes="panel" Content="Delete" MinWidth="70" />
         </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
           <TextBlock Text="Name:" VerticalAlignment="Center" Width="52" />
@@ -31,7 +31,7 @@
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
                 HorizontalAlignment="Right" Margin="0,8,0,0">
       <TextBlock Name="TbStatus" Text="" VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" Opacity="0.8" />
-      <Button Name="BtnClose" Classes="dialog" Content="Close" Width="80" IsCancel="True" />
+      <Button Name="BtnClose" Classes="dialog" Content="Close" MinWidth="80" IsCancel="True" />
     </StackPanel>
 
     <ScrollViewer Name="UnitsHost" />

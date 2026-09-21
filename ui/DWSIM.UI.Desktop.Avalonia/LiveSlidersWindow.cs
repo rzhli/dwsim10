@@ -88,7 +88,7 @@ public sealed class LiveSlidersWindow : Window
         _specObject = new ComboBox { Width = 200, ItemsSource = _specObjects.Select(o => o.GraphicObject.Tag).ToList() };
         _specProperty = new ComboBox { Width = 260 };
         _specObject.SelectionChanged += (_, _) => FillSpecProperties();
-        var addSlider = new Button { Content = "Add slider", Width = 100 };
+        var addSlider = new Button { Content = "Add slider", MinWidth = 100 };
         addSlider.Classes.Add("dialog");
         addSlider.Click += (_, _) => AddSliderFromChoice();
         left.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _specObject, _specProperty, addSlider } });
@@ -98,29 +98,29 @@ public sealed class LiveSlidersWindow : Window
         _resObject = new ComboBox { Width = 200, ItemsSource = _resObjects.Select(o => o.GraphicObject.Tag).ToList() };
         _resProperty = new ComboBox { Width = 260 };
         _resObject.SelectionChanged += (_, _) => FillResultProperties();
-        var addWatch = new Button { Content = "Watch", Width = 100 };
+        var addWatch = new Button { Content = "Watch", MinWidth = 100 };
         addWatch.Classes.Add("dialog");
         addWatch.Click += (_, _) => AddWatchFromChoice();
         left.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _resObject, _resProperty, addWatch } });
         left.Children.Add(_watchPanel);
 
-        var reset = new Button { Content = "Reset sliders", Width = 120 };
+        var reset = new Button { Content = "Reset sliders", MinWidth = 120 };
         reset.Classes.Add("dialog");
         reset.Click += (_, _) => { foreach (var s in _sliders) s.Control.Value = s.Initial; Queue(); };
-        var solveNow = new Button { Content = "Solve now", Width = 100 };
+        var solveNow = new Button { Content = "Solve now", MinWidth = 100 };
         solveNow.Classes.Add("dialog");
         solveNow.Click += (_, _) => Queue(true);
-        var clear = new Button { Content = "Clear trace", Width = 100 };
+        var clear = new Button { Content = "Clear trace", MinWidth = 100 };
         clear.Classes.Add("dialog");
         clear.Click += (_, _) => { _history.Clear(); DrawTrace(); };
         left.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 10, 0, 0), Children = { _liveBox, solveNow, reset, clear } });
         if (_specObjects.Count > 0) _specObject.SelectedIndex = 0;
         if (_resObjects.Count > 0) _resObject.SelectedIndex = 0;
 
-        var load = new Button { Content = "Load case...", Width = 120 };
+        var load = new Button { Content = "Load case...", MinWidth = 120 };
         load.Classes.Add("dialog");
         load.Click += async (_, _) => await LoadCaseAsync();
-        var save = new Button { Content = "Save case...", Width = 120 };
+        var save = new Button { Content = "Save case...", MinWidth = 120 };
         save.Classes.Add("dialog");
         save.Click += async (_, _) => await SaveCaseAsync();
         var topButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 8, 12, 4), Children = { load, save } };

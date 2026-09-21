@@ -97,7 +97,7 @@ public sealed class DatabaseManagerWindow : Window
         compTools.Children.Add(btnDelete);
         compTools.Children.Add(btnRefresh);
 
-        var btnClose = new Button { Content = "Close", IsCancel = true, Width = 90 };
+        var btnClose = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
         btnClose.Classes.Add("dialog");
         btnClose.Click += (_, _) => Close();
 

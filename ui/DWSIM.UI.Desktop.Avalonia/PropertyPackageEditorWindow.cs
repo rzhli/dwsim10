@@ -83,7 +83,7 @@ public class PropertyPackageEditorWindow : Window
         // Dialog layout
         var root = new DockPanel { Margin = new Thickness(8) };
 
-        var btnClose = new Button { Content = "Close", Width = 80 };
+        var btnClose = new Button { Content = "Close", MinWidth = 80 };
         btnClose.Classes.Add("dialog");
         btnClose.Click += (_, _) => Close();
 

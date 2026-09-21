@@ -103,7 +103,7 @@ public sealed class UnitOpExtensionsManagerWindow : Window
         body.Children.Add(left);
         body.Children.Add(right);
 
-        var btnClose = new Button { Content = "Close", Width = 80, IsCancel = true };
+        var btnClose = new Button { Content = "Close", MinWidth = 80, IsCancel = true };
         btnClose.Classes.Add("dialog");
         btnClose.Click += (_, _) => Close();
 

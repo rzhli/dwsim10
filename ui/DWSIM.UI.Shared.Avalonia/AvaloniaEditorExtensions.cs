@@ -507,7 +507,7 @@ public static class AvaloniaEditorExtensions
         string label, string buttonLabel, string? imageResId,
         Action<Button, EventArgs>? command)
     {
-        var btn = new Button { Content = buttonLabel, Width = ControlWidth };
+        var btn = new Button { Content = buttonLabel, MinWidth = ControlWidth };
         btn.Classes.Add("panel");
 
         if (command != null) btn.Click += (s, e) => command((Button)s!, e);
@@ -520,7 +520,7 @@ public static class AvaloniaEditorExtensions
         string label, string buttonLabel, string? imageResId,
         Action<Button, EventArgs>? command)
     {
-        var btn = new Button { Content = buttonLabel, Width = ControlWidth };
+        var btn = new Button { Content = buttonLabel, MinWidth = ControlWidth };
         btn.Classes.Add("panel");
 
         if (command != null) btn.Click += (s, e) => command((Button)s!, e);
@@ -548,9 +548,9 @@ public static class AvaloniaEditorExtensions
         string buttonLabel2, string? imageResId2,
         Action<Button, EventArgs>? command, Action<Button, EventArgs>? command2)
     {
-        var btn = new Button { Content = buttonLabel, Width = 100 };
+        var btn = new Button { Content = buttonLabel, MinWidth = 100 };
         btn.Classes.Add("panel");
-        var btn2 = new Button { Content = buttonLabel2, Width = 100 };
+        var btn2 = new Button { Content = buttonLabel2, MinWidth = 100 };
         btn2.Classes.Add("panel");
 
         if (command != null) btn.Click += (s, e) => command((Button)s!, e);
@@ -569,9 +569,9 @@ public static class AvaloniaEditorExtensions
         string buttonLabel2, string? imageResId2,
         Action<Button, EventArgs>? command, Action<Button, EventArgs>? command2)
     {
-        var btn = new Button { Content = buttonLabel, Width = 100 };
+        var btn = new Button { Content = buttonLabel, MinWidth = 100 };
         btn.Classes.Add("panel");
-        var btn2 = new Button { Content = buttonLabel2, Width = 100 };
+        var btn2 = new Button { Content = buttonLabel2, MinWidth = 100 };
         btn2.Classes.Add("panel");
 
         if (command != null) btn.Click += (s, e) => command((Button)s!, e);
@@ -593,7 +593,7 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { HorizontalAlignment = HorizontalAlignment.Stretch };
         tb.Text = textboxValue;
-        var btn = new Button { Content = buttonLabel, Width = 80 };
+        var btn = new Button { Content = buttonLabel, MinWidth = 80 };
         btn.Classes.Add("panel");
 
         if (txteditcommand != null) tb.TextChanged += (s, e) => txteditcommand((TextBox)s!, e);
@@ -630,9 +630,9 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Width = 250 };
         tb.Text = tbText;
-        var btn = new Button { Content = buttonLabel, Width = 100 };
+        var btn = new Button { Content = buttonLabel, MinWidth = 100 };
         btn.Classes.Add("panel");
-        var btn2 = new Button { Content = buttonLabel2, Width = 100 };
+        var btn2 = new Button { Content = buttonLabel2, MinWidth = 100 };
         btn2.Classes.Add("panel");
 
         if (command0 != null) tb.TextChanged += (s, e) => command0((TextBox)s!, e);
@@ -655,11 +655,11 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Width = 300 };
         tb.Text = tbText;
-        var b1 = new Button { Content = bl1, Width = 100 };
+        var b1 = new Button { Content = bl1, MinWidth = 100 };
         b1.Classes.Add("panel");
-        var b2 = new Button { Content = bl2, Width = 100 };
+        var b2 = new Button { Content = bl2, MinWidth = 100 };
         b2.Classes.Add("panel");
-        var b3 = new Button { Content = bl3, Width = 100 };
+        var b3 = new Button { Content = bl3, MinWidth = 100 };
         b3.Classes.Add("panel");
 
         if (command0 != null) tb.TextChanged += (s, e) => command0((TextBox)s!, e);
@@ -684,13 +684,13 @@ public static class AvaloniaEditorExtensions
     {
         var tb = new TextBox { Width = 300 };
         tb.Text = tbText;
-        var b1 = new Button { Content = bl1, Width = 100 };
+        var b1 = new Button { Content = bl1, MinWidth = 100 };
         b1.Classes.Add("panel");
-        var b2 = new Button { Content = bl2, Width = 100 };
+        var b2 = new Button { Content = bl2, MinWidth = 100 };
         b2.Classes.Add("panel");
-        var b3 = new Button { Content = bl3, Width = 100 };
+        var b3 = new Button { Content = bl3, MinWidth = 100 };
         b3.Classes.Add("panel");
-        var b4 = new Button { Content = bl4, Width = 100 };
+        var b4 = new Button { Content = bl4, MinWidth = 100 };
         b4.Classes.Add("panel");
 
         if (command0 != null) tb.TextChanged += (s, e) => command0((TextBox)s!, e);

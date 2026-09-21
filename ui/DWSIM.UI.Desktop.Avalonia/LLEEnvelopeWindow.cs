@@ -113,7 +113,7 @@ public sealed class LLEEnvelopeWindow : Window
         body.Children.Add(side);
         body.Children.Add(right);
 
-        var btnClose = new Button { Content = "Close", Width = 90, IsCancel = true };
+        var btnClose = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
         btnClose.Classes.Add("dialog");
         btnClose.Click += (_, _) => Close();
 

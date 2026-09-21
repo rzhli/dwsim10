@@ -443,7 +443,7 @@ public partial class SimulationSettingsWindow : Window
                 ev.Row, section ? global::Avalonia.Media.FontWeight.Bold : global::Avalonia.Media.FontWeight.Normal);
         };
 
-        var close = new Button { Content = "Close", Width = 90, IsCancel = true, Margin = new Thickness(12) };
+        var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true, Margin = new Thickness(12) };
         close.Classes.Add("dialog");
 
         var root = new DockPanel();
@@ -476,7 +476,7 @@ public partial class SimulationSettingsWindow : Window
             var panel = AvaloniaCommon.GetDefaultContainer();
             pp.PopulateCrossPlatformEditor(panel);
 
-            var close = new Button { Content = "Close", Width = 90, IsCancel = true };
+            var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
             close.Classes.Add("dialog");
 
             var bottom = new StackPanel

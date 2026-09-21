@@ -104,9 +104,9 @@ public sealed class PropertySelectorDialog : Window
         grid.Children.Add(col3);
 
         // Buttons
-        var btnCancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
+        var btnCancel = new Button { Content = "Cancel", MinWidth = 80, IsCancel = true };
         btnCancel.Classes.Add("dialog");
-        var btnOk = new Button { Content = "OK", Width = 80, IsDefault = true };
+        var btnOk = new Button { Content = "OK", MinWidth = 80, IsDefault = true };
         btnOk.Classes.Add("dialog");
 
         btnOk.Click += (_, _) =>

@@ -635,7 +635,7 @@ public partial class SimulationSetupWizard : Window
             var panel = AvaloniaCommon.GetDefaultContainer();
             pp.PopulateCrossPlatformEditor(panel);
 
-            var close = new Button { Content = "Close", Width = 90, IsCancel = true };
+            var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
             close.Classes.Add("dialog");
 
             var bottom = new StackPanel

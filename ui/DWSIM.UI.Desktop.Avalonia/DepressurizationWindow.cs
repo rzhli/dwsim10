@@ -127,19 +127,19 @@ public sealed class DepressurizationWindow : Window
     {
         _left = new ScrollViewer { Content = BuildInputPanel(), Padding = new Thickness(10, 8, 10, 8), AllowAutoHide = false };
 
-        _run = new Button { Content = "Run", Width = 110, IsDefault = true };
+        _run = new Button { Content = "Run", MinWidth = 110, IsDefault = true };
         _run.Classes.Add("dialog");
         _run.Click += async (_, _) => await RunAsync();
-        _cancel = new Button { Content = "Stop", Width = 90, IsEnabled = false };
+        _cancel = new Button { Content = "Stop", MinWidth = 90, IsEnabled = false };
         _cancel.Classes.Add("dialog");
         _cancel.Click += (_, _) => _cts?.Cancel();
-        _export = new Button { Content = "Export CSV...", Width = 130, IsEnabled = false };
+        _export = new Button { Content = "Export CSV...", MinWidth = 130, IsEnabled = false };
         _export.Classes.Add("dialog");
         _export.Click += async (_, _) => await ExportAsync();
-        _load = new Button { Content = "Load case...", Width = 120 };
+        _load = new Button { Content = "Load case...", MinWidth = 120 };
         _load.Classes.Add("dialog");
         _load.Click += async (_, _) => await LoadCaseAsync();
-        _save = new Button { Content = "Save case...", Width = 120 };
+        _save = new Button { Content = "Save case...", MinWidth = 120 };
         _save.Classes.Add("dialog");
         _save.Click += async (_, _) => await SaveCaseAsync();
         var topButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 8, 12, 4), Children = { _load, _save } };

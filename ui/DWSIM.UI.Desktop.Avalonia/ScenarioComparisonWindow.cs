@@ -65,13 +65,13 @@ public sealed class ScenarioComparisonWindow : Window
     {
         Control ScenarioBar(string which, TextBox name, TextBlock label, Action capture, Func<Task> load, Func<Task> save)
         {
-            var btnCapture = new Button { Content = "Capture " + which + " now", Width = 140 };
+            var btnCapture = new Button { Content = "Capture " + which + " now", MinWidth = 140 };
             btnCapture.Classes.Add("dialog");
             btnCapture.Click += (_, _) => capture();
-            var btnLoad = new Button { Content = "Load...", Width = 90 };
+            var btnLoad = new Button { Content = "Load...", MinWidth = 90 };
             btnLoad.Classes.Add("dialog");
             btnLoad.Click += async (_, _) => await load();
-            var btnSave = new Button { Content = "Save...", Width = 90 };
+            var btnSave = new Button { Content = "Save...", MinWidth = 90 };
             btnSave.Classes.Add("dialog");
             btnSave.Click += async (_, _) => await save();
             return new StackPanel
@@ -83,7 +83,7 @@ public sealed class ScenarioComparisonWindow : Window
         var barA = ScenarioBar("A", _nameA, _labelA, () => Capture(true), () => LoadAsync(true), () => SaveAsync(true));
         var barB = ScenarioBar("B", _nameB, _labelB, () => Capture(false), () => LoadAsync(false), () => SaveAsync(false));
 
-        _copy = new Button { Content = "Copy report", Width = 130, IsEnabled = false };
+        _copy = new Button { Content = "Copy report", MinWidth = 130, IsEnabled = false };
         _copy.Classes.Add("dialog");
         _copy.Click += async (_, _) =>
         {

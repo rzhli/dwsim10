@@ -14,8 +14,8 @@
         <ComboBox Name="CbObjectType" Width="170" />
         <TextBlock Text="Property:" VerticalAlignment="Center" Margin="8,0,0,0" />
         <ComboBox Name="CbProperty" Width="220" />
-        <Button Name="BtnPlot" Classes="action" Content="Plot" Width="80" Margin="8,0,0,0" />
-        <Button Name="BtnCopyCsv" Classes="panel" Content="Copy as CSV" Width="110" />
+        <Button Name="BtnPlot" Classes="action" Content="Plot" MinWidth="80" Margin="8,0,0,0" />
+        <Button Name="BtnCopyCsv" Classes="panel" Content="Copy as CSV" MinWidth="110" />
       </StackPanel>
     </Border>
 

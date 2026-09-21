@@ -37,7 +37,7 @@
 
     <!-- ===== Footer ===== -->
     <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0">
-      <Button Name="BtnOK" Classes="dialog" Content="OK" Width="90"
+      <Button Name="BtnOK" Classes="dialog" Content="OK" MinWidth="90"
               HorizontalAlignment="Right" IsDefault="True" IsCancel="True" />
     </Border>
 

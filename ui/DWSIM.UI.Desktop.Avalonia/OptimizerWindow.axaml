@@ -14,9 +14,9 @@
       <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
         <TextBlock Text="Case:" VerticalAlignment="Center" />
         <ComboBox Name="CbCase" Width="240" />
-        <Button Name="BtnNewCase" Classes="panel" Content="New" Width="70" />
-        <Button Name="BtnCloneCase" Classes="panel" Content="Duplicate" Width="90" />
-        <Button Name="BtnDeleteCase" Classes="panel" Content="Delete" Width="70" />
+        <Button Name="BtnNewCase" Classes="panel" Content="New" MinWidth="70" />
+        <Button Name="BtnCloneCase" Classes="panel" Content="Duplicate" MinWidth="90" />
+        <Button Name="BtnDeleteCase" Classes="panel" Content="Delete" MinWidth="70" />
         <TextBlock Text="Cases are stored with the simulation; save the file to keep them."
                    VerticalAlignment="Center" FontSize="{DynamicResource FontSizeSmall}" Opacity="0.7" Margin="12,0,0,0" />
       </StackPanel>
@@ -26,7 +26,7 @@
                 HorizontalAlignment="Right" Margin="0,8,0,0">
       <TextBlock Name="TbProgress" Text="" VerticalAlignment="Center"
                  FontSize="{DynamicResource FontSizeSmall}" Opacity="0.8" />
-      <Button Name="BtnClose" Classes="dialog" Content="Close" Width="80" IsCancel="True" />
+      <Button Name="BtnClose" Classes="dialog" Content="Close" MinWidth="80" IsCancel="True" />
     </StackPanel>
 
     <Grid ColumnDefinitions="320,4,330,4,*">
@@ -89,8 +89,8 @@
                    Text="IND: a decision variable. DEP: the value being minimized/maximized. AUX: only referenced by the expression. CON: kept within its limits at the solution." />
 
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
-          <Button Name="BtnAddVar" Classes="panel" Content="Add Variable" Width="110" />
-          <Button Name="BtnRemoveVar" Classes="panel" Content="Remove" Width="90" />
+          <Button Name="BtnAddVar" Classes="panel" Content="Add Variable" MinWidth="110" />
+          <Button Name="BtnRemoveVar" Classes="panel" Content="Remove" MinWidth="90" />
         </StackPanel>
 
         <ListBox Name="LbVariables" DockPanel.Dock="Top" Height="150" />

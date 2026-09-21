@@ -267,11 +267,11 @@ public sealed class WatchPanelControl : UserControl
             Row(0, "Object:", _objBox);
             Row(1, "Property:", _propBox);
 
-            var btnOk = new Button { Content = "Add", IsDefault = true, Width = 80 };
+            var btnOk = new Button { Content = "Add", IsDefault = true, MinWidth = 80 };
             btnOk.Classes.Add("dialog");
             btnOk.Click += (_, _) => Commit();
 
-            var btnCancel = new Button { Content = "Cancel", IsCancel = true, Width = 80 };
+            var btnCancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 80 };
             btnCancel.Classes.Add("dialog");
             btnCancel.Click += (_, _) => Close(false);
 

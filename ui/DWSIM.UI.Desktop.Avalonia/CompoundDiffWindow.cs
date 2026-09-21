@@ -106,7 +106,7 @@ public sealed class CompoundDiffWindow : Window
         var takeAll = new Button { Content = "Take all from " + rightTitle.ToLowerInvariant(), IsVisible = canTake && offerTakeAll };
         takeAll.Classes.Add("panel");
         takeAll.Click += (_, _) => { foreach (var r in _rows.Where(x => x.CanTake).ToList()) Take(r); };
-        var close = new Button { Content = "Close", Width = 90, IsCancel = true, IsDefault = true };
+        var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true, IsDefault = true };
         close.Classes.Add("dialog");
         close.Click += (_, _) => Close();
 

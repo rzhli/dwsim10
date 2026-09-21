@@ -402,7 +402,7 @@ public partial class DynamicsWizard : Window
         scan.Children.Add(_scanSummary);
         scan.Children.Add(_unsupported);
 
-        var rescan = new Button { Content = "Scan again", Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(130) };
+        var rescan = new Button { Content = "Scan again", MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(130) };
         rescan.Classes.Add("action");
         rescan.Click += (_, _) => Rescan();
         scan.Children.Add(rescan);
@@ -759,7 +759,7 @@ public partial class DynamicsWizard : Window
             TextWrapping = TextWrapping.Wrap
         });
 
-        _btnRun = new Button { Content = "Run a short test", Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(170) };
+        _btnRun = new Button { Content = "Run a short test", MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(170) };
         _btnRun.Classes.Add("action");
         _btnRun.Click += async (_, _) => await RunTestAsync();
         run.Children.Add(_btnRun);

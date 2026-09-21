@@ -31,8 +31,8 @@
         <TabItem Header="Data">
           <DockPanel LastChildFill="True">
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" Margin="4">
-              <Button Name="BtnCopyData" Classes="panel" Content="Copy Report" Width="110" />
-              <Button Name="BtnCopyCsv" Classes="panel" Content="Copy Curves (TSV)" Width="150" />
+              <Button Name="BtnCopyData" Classes="panel" Content="Copy Report" MinWidth="110" />
+              <Button Name="BtnCopyCsv" Classes="panel" Content="Copy Curves (TSV)" MinWidth="150" />
             </StackPanel>
             <DataGrid Name="GridData" AutoGenerateColumns="False" IsReadOnly="True"
                       HeadersVisibility="Column" GridLinesVisibility="All"

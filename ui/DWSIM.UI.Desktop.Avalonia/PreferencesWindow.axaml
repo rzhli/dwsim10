@@ -11,8 +11,8 @@
     <!-- Footer buttons -->
     <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" Padding="12,8">
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-        <Button Name="BtnCancel" Classes="dialog" Content="Cancel" Width="80" IsCancel="True" />
-        <Button Name="BtnOK"     Classes="dialog" Content="OK"     Width="80" IsDefault="True" />
+        <Button Name="BtnCancel" Classes="dialog" Content="Cancel" MinWidth="80" IsCancel="True" />
+        <Button Name="BtnOK"     Classes="dialog" Content="OK"     MinWidth="80" IsDefault="True" />
       </StackPanel>
     </Border>
 
