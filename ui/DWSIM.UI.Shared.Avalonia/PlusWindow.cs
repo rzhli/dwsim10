@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 
 namespace DWSIM.UI.Shared.Avalonia;
@@ -31,6 +32,27 @@ public class PlusWindow : UserControl
 
     /// <summary>Raised once the form is closed, whichever way it was shown.</summary>
     public event EventHandler? Closed;
+
+    /// <summary>
+    /// Raised before a desktop window closes, with the chance to cancel (a form that asks whether to
+    /// save its edits). A single-view host closes without asking.
+    /// </summary>
+    public event EventHandler<WindowClosingEventArgs>? Closing;
+
+    /// <summary>
+    /// Where to put the window on screen, in physical pixels; when set the startup location is
+    /// manual. A faceplate opened beside the pointer uses it. Ignored on a single-view host.
+    /// </summary>
+    public PixelPoint? Position { get; set; }
+
+    /// <summary>
+    /// Lets the desktop window take the size of its content (a faceplate, a small dialog) instead of
+    /// the Width and Height set on the form. Ignored on a single-view host.
+    /// </summary>
+    public SizeToContent SizeToContent { get; set; } = SizeToContent.Manual;
+
+    /// <summary>The desktop window behind this form once shown; null before that and on a single-view host.</summary>
+    public Window? NativeWindow => _window;
 
     public void Show()
     {
@@ -107,6 +129,13 @@ public class PlusWindow : UserControl
         };
         if (!double.IsNaN(width)) _window.Width = width;
         if (!double.IsNaN(height)) _window.Height = height;
+        _window.SizeToContent = SizeToContent;
+        if (Position is PixelPoint p)
+        {
+            _window.WindowStartupLocation = WindowStartupLocation.Manual;
+            _window.Position = p;
+        }
+        _window.Closing += (s, e) => Closing?.Invoke(this, e);
         _window.Closed += (_, _) => Closed?.Invoke(this, EventArgs.Empty);
         return _window;
     }

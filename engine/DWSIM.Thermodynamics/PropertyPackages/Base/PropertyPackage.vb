@@ -9009,23 +9009,27 @@ Final3:
                 val = AUX_MMM(Vx) / MathEx.Common.Sum(vk)
             End If
 
-            'The molar volume can never be smaller than the equation-of-state covolume b, so the liquid
-            'density can never exceed M/b. Correlation paths (Rackett, per-compound) can break this near
-            'the mixture critical point; when they do, fall back to the equation of state, whose
-            'compressibility factor now stays above the covolume. The re-entrancy flag keeps activity
-            'packages, whose AUX_Z is itself derived from this density, from recursing.
+            'Correlation paths (Rackett, per-compound) can blow the density up near the mixture critical
+            'point; when the value is not physical, fall back to the equation of state. The bound is taken
+            'from the critical volume of the compounds: no liquid is denser than about five times its
+            'critical density. The equation-of-state covolume is not that bound. Real liquids can be denser
+            'than the cubic covolume allows (water at 80 C is 971.8 kg/m3 while M/b of Peng-Robinson is
+            '949.6 kg/m3), and a covolume cap replaced the experimental density of every water stream with
+            'the EOS value, which in the Raoult's Law package is the ideal gas density. The fallback only
+            'stands when the equation of state returns a liquid-like root. The re-entrancy flag keeps
+            'activity packages, whose AUX_Z is itself derived from this density, from recursing.
             If Not _inLiqDensMbGuard Then
-                Dim bmix As Double = 0.0
-                Dim vtc = RET_VTC() : Dim vpc = RET_VPC()
+                Dim vcmix As Double = 0.0
+                Dim vvc = RET_VVC()
                 For k As Integer = 0 To Vx.Length - 1
-                    If vpc(k) > 0.0 Then bmix += CDbl(Vx(k)) * 0.0778 * 8.314 * vtc(k) / vpc(k)
+                    vcmix += CDbl(Vx(k)) * vvc(k) 'm3/kmol
                 Next
                 Dim mkg As Double = AUX_MMM(Vx) / 1000.0
-                If bmix > 0.0 AndAlso val > mkg / bmix Then
+                If vcmix > 0.0 AndAlso val > AUX_MMM(Vx) / (0.2 * vcmix) Then
                     _inLiqDensMbGuard = True
                     Try
                         Dim zeos = AUX_Z(Vx, T, P, PhaseName.Liquid)
-                        If zeos > 0.0 Then val = mkg / (zeos * 8.314 * T / P)
+                        If zeos > 0.0 AndAlso zeos < 0.5 Then val = mkg / (zeos * 8.314 * T / P)
                     Finally
                         _inLiqDensMbGuard = False
                     End Try
@@ -9931,24 +9935,24 @@ Final3:
             t2 = 0
             t3 = 0
 
+            ' path: liquid from 298.15 K up to Tv = min(T, Tb), vaporization at Tv, ideal gas from Tv up to T.
+            ' Below Tb the gas leg is empty; integrating the ideal gas Cp from 298.15 K again would count the
+            ' sensible heat twice.
+            Dim Tv, Tvm As Double
             For i As Integer = 0 To Vz.Length - 1
                 Tb = props(i).Normal_Boiling_Point
                 If Tb = 0.0 Then Tb = 0.7 * props(i).Critical_Temperature
                 If Tb = 0.0 Then Throw New Exception("Unable to calculate Enthalpy from Liquid Cp data - Normal Boiling Point / Critical Temperature not defined")
                 If Vz(i) > 0.0 Then
-                    If T > Tb Then
-                        t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, Tb, i) + P / 1000 / Me.AUX_LIQDENS(Tb, Vz, P)
-                        t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tb)
-                        t3 += Vw(i) * RET_Hid_i(Tb, T, props(i).Name)
-                    Else
-                        t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, T, i) + P / 1000 / Me.AUX_LIQDENS(T, Vz, P)
-                        t2 += Vw(i) * AUX_HVAPi(props(i).Name, T)
-                        t3 += Vw(i) * RET_Hid_i(298.15, T, props(i).Name)
-                    End If
+                    Tv = If(T > Tb, Tb, T)
+                    Tvm += Vw(i) * Tv
+                    t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, Tv, i)
+                    t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tv)
+                    t3 += Vw(i) * RET_Hid_i(Tv, T, props(i).Name)
                 End If
             Next
 
-            H = t1 + t2 + t3
+            H = t1 + t2 + t3 + P / 1000 / Me.AUX_LIQDENS(Tvm, Vz, P)
 
             Return H
 
@@ -9966,24 +9970,22 @@ Final3:
             t2 = 0
             t3 = 0
 
+            ' same path as RET_Hid_FromLiqCp: below Tb only the pressure term of the ideal gas entropy remains
+            Dim Tv, Tvm As Double
             For i As Integer = 0 To Vz.Length - 1
                 Tb = props(i).Normal_Boiling_Point
                 If Tb = 0.0 Then Tb = 0.7 * props(i).Critical_Temperature
                 If Tb = 0.0 Then Throw New Exception("Unable to calculate Entropy from Liquid Cp data - Normal Boiling Point / Critical Temperature not defined")
                 If Vz(i) > 0.0 Then
-                    If T > Tb Then
-                        t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, Tb, i) / T + P / 1000 / Me.AUX_LIQDENS(Tb, Vz, P) / T
-                        t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tb) / T
-                        t3 += Vw(i) * RET_Sid_i(Tb, T, P, props(i).Name)
-                    Else
-                        t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, T, i) / T + P / 1000 / Me.AUX_LIQDENS(T, Vz, P) / T
-                        t2 += Vw(i) * AUX_HVAPi(props(i).Name, T) / T
-                        t3 += Vw(i) * RET_Sid_i(298.15, T, P, props(i).Name)
-                    End If
+                    Tv = If(T > Tb, Tb, T)
+                    Tvm += Vw(i) * Tv
+                    t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, Tv, i) / T
+                    t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tv) / T
+                    t3 += Vw(i) * RET_Sid_i(Tv, T, P, props(i).Name)
                 End If
             Next
 
-            S = t1 + t2 + t3
+            S = t1 + t2 + t3 + P / 1000 / Me.AUX_LIQDENS(Tvm, Vz, P) / T
 
             Return S
 
