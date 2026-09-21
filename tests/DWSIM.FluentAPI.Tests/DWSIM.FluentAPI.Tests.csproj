@@ -4,6 +4,7 @@
     <RootNamespace>DWSIM.FluentAPI.Tests</RootNamespace>
     <AssemblyName>DWSIM.FluentAPI.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)../tests.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +26,10 @@
     <ProjectReference Include="..\..\engine\DWSIM.Thermodynamics\DWSIM.Thermodynamics.vbproj" />
     <ProjectReference Include="..\..\engine\DWSIM.Thermodynamics.AdvancedEOS.PCSAFT\DWSIM.Thermodynamics.AdvancedEOS.PCSAFT2.vbproj" />
     <ProjectReference Include="..\..\engine\DWSIM.UnitOperations\DWSIM.UnitOperations.vbproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\TestTiming.cs" Link="TestTiming.cs" />
   </ItemGroup>
 
 </Project>
