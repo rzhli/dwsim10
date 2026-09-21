@@ -5,6 +5,7 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -158,17 +159,22 @@ public sealed class CompoundPropertyEditorWindow : Window
             Stack(Description("Type a temperature and see the value the equation gives, both in the raw equation unit and converted to the simulation's unit. Compare it with a value you know."), tryRow, _tryResult)));
         right.Children.Add(Group("Preview", _plot));
 
-        // three columns with a thin rule between them, so the rail, the editor and the explainer read as separate panes
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("280,Auto,*,Auto,440") };
+        // three columns split by draggable rules: the left rail and the right explainer keep their
+        // starting widths but can be resized left/right, the centre editor takes the rest. The
+        // MinWidth on the side columns stops a drag from hiding a pane entirely.
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("280,6,*,6,440") };
+        grid.ColumnDefinitions[0].MinWidth = 140;
+        grid.ColumnDefinitions[2].MinWidth = 240;
+        grid.ColumnDefinitions[4].MinWidth = 200;
         // AllowAutoHide = false: the scrollbar takes its own column instead of floating over the text
         var railScroll = new ScrollViewer { Content = rail, AllowAutoHide = false };
         Grid.SetColumn(railScroll, 0);
-        var rule1 = ColumnRule();
+        var rule1 = ColumnSplitter();
         Grid.SetColumn(rule1, 1);
         _centre.Padding = new Thickness(14, 10, 14, 10);
         _centre.AllowAutoHide = false;
         Grid.SetColumn(_centre, 2);
-        var rule2 = ColumnRule();
+        var rule2 = ColumnSplitter();
         Grid.SetColumn(rule2, 3);
         var rightScroll = new ScrollViewer { Content = right, AllowAutoHide = false };
         Grid.SetColumn(rightScroll, 4);
@@ -782,8 +788,16 @@ public sealed class CompoundPropertyEditorWindow : Window
 
     private static readonly IBrush RuleBrush = new SolidColorBrush(Color.FromArgb(70, 128, 128, 128));
 
-    /// <summary>A vertical hairline between two panes; the low-alpha grey reads on both themes.</summary>
-    private static Control ColumnRule() => new Border { Width = 1, Background = RuleBrush, Margin = new Thickness(2, 8, 2, 8) };
+    /// <summary>A draggable vertical divider between two panes: it resizes the columns on either
+    /// side and shows the low-alpha grey hairline, which reads on both themes, with a resize cursor.</summary>
+    private static Control ColumnSplitter() => new GridSplitter
+    {
+        Background = RuleBrush,
+        ResizeDirection = GridResizeDirection.Columns,
+        ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        Cursor = new Cursor(StandardCursorType.SizeWestEast)
+    };
 
     private static Control Group(string header, Control content)
     {
