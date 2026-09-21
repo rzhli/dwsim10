@@ -911,6 +911,14 @@ public partial class SimulationSettingsWindow : Window
         };
         BtnClearSearch.Click += (_, _) => TbCompoundSearch.Text = "";
         BtnViewCompound.Click += (_, _) => ViewSelectedCompound();
+        // Clicking the "Added" checkbox (or anywhere in a cell) selects that row too: the checkbox
+        // template swallows the click, so without this the row is never highlighted and "Edit
+        // Selected Compound" reported "Select a compound first" even though a box was ticked.
+        GridCompounds.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
+        {
+            if ((e.Source as Control)?.DataContext is CompoundRow row)
+                GridCompounds.SelectedItem = row;
+        }, RoutingStrategies.Tunnel);
         GridCompounds.DoubleTapped += (_, _) =>
         {
             if (GridCompounds.SelectedItem is CompoundRow row) row.Added = !row.Added;
