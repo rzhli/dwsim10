@@ -294,6 +294,11 @@ Namespace UnitOperations
             Curves = 3
             ''' <summary>Calculate results from a specified shaft power value.</summary>
             Power = 4
+            ''' <summary>
+            ''' Positive displacement machine: the flow comes from the displacement and the
+            ''' speed, and the system decides the discharge pressure.
+            ''' </summary>
+            PositiveDisplacement = 5
         End Enum
 
         Protected m_dp As Nullable(Of Double)
@@ -326,6 +331,49 @@ Namespace UnitOperations
         Public Property PumpCurveSet As New PumpOps.CurveSet
 
         ''' <summary>
+        ''' Gets or sets the measured curve sets of a variable-speed pump, keyed by the speed (RPM)
+        ''' each one was measured at. <see cref="PumpCurveSet"/> is always one of the measured sets,
+        ''' at its own <see cref="PumpOps.CurveSet.ImpellerSpeed"/>; this dictionary holds the others.
+        ''' While it is empty the pump behaves exactly as a single-curve pump, covering other speeds
+        ''' with the affinity laws.
+        ''' </summary>
+        Public Property CurveSets As New Dictionary(Of Integer, PumpOps.CurveSet)
+
+        ''' <summary>
+        ''' Gets or sets the volume the machine displaces per revolution (m3/rev), used by the
+        ''' PositiveDisplacement calculation mode. The flow it delivers is this volume times
+        ''' the speed times the volumetric efficiency, whatever the discharge pressure.
+        ''' </summary>
+        Public Property Displacement As Double = 0.0005
+
+        ''' <summary>
+        ''' Gets or sets the volumetric efficiency of a positive displacement machine (%), the
+        ''' share of the swept volume that leaves through the discharge rather than slipping
+        ''' back past the clearances.
+        ''' </summary>
+        Public Property VolumetricEfficiency As Double = 95.0
+
+        ''' <summary>
+        ''' Gets or sets the setting of the relief valve of a positive displacement machine
+        ''' (Pa). A displacement pump against a closed discharge has nothing to limit its
+        ''' pressure, so the relief is part of the machine. Zero leaves it unlimited.
+        ''' </summary>
+        Public Property ReliefPressure As Double = 0.0
+
+        ''' <summary>Gets the volumetric flow the machine displaced on the last run (m3/s).</summary>
+        Public Property DeliveredVolumetricFlow As Double = 0.0
+
+        ''' <summary>Gets the mass flow the machine displaced on the last run (kg/s).</summary>
+        Public Property DeliveredMassFlow As Double = 0.0
+
+        ''' <summary>
+        ''' Gets or sets the supply frequency (Hz) that drives the pump at the speed its reference
+        ''' curves were measured at. The editors label each curve set with the frequency an inverter
+        ''' would have to deliver for it, which is how a variable-frequency dataset is published.
+        ''' </summary>
+        Public Property NominalFrequency As Double = 60.0
+
+        ''' <summary>
         ''' Gets or sets the rotational speed the pump is running at (RPM), used to scale the performance
         ''' curves through the affinity laws when the Curves calculation mode is active. The curves
         ''' themselves are taken to have been measured at <see cref="PumpOps.CurveSet.ImpellerSpeed"/>.
@@ -343,6 +391,32 @@ Namespace UnitOperations
                 Return PumpCurveSet.ImpellerSpeed
             End Get
         End Property
+
+        ''' <summary>
+        ''' Returns every measured curve set, the reference one included, ordered by the speed it was
+        ''' measured at. A set in <see cref="CurveSets"/> at the reference speed replaces the
+        ''' reference set, so the same speed is never listed twice.
+        ''' </summary>
+        Public Function MeasuredCurveSets() As List(Of KeyValuePair(Of Double, PumpOps.CurveSet))
+
+            Dim sets As New Dictionary(Of Double, PumpOps.CurveSet)
+
+            If PumpCurveSet IsNot Nothing AndAlso PumpCurveSet.ImpellerSpeed > 0.0 Then
+                sets(PumpCurveSet.ImpellerSpeed) = PumpCurveSet
+            End If
+
+            If CurveSets IsNot Nothing Then
+                For Each kvp In CurveSets
+                    If kvp.Value Is Nothing OrElse kvp.Key <= 0 Then Continue For
+                    sets(CDbl(kvp.Key)) = kvp.Value
+                Next
+            End If
+
+            If sets.Count = 0 AndAlso PumpCurveSet IsNot Nothing Then sets(PumpCurveSet.ImpellerSpeed) = PumpCurveSet
+
+            Return sets.OrderBy(Function(kvp) kvp.Key).ToList()
+
+        End Function
 
         'proxy properties
 
@@ -460,6 +534,26 @@ Namespace UnitOperations
                 PumpCurveSet.ImpellerDiameterUnit = xidu.Value
             End If
 
+            'the curve sets of a variable-speed pump, each one keyed by the speed it was measured at.
+            'Absent from a file saved by an older version, which simply leaves the dictionary empty.
+            CurveSets = New Dictionary(Of Integer, PumpOps.CurveSet)
+
+            Dim xcs = data.Where(Function(d) d.Name = "CurveSets").FirstOrDefault()
+            If xcs IsNot Nothing Then
+                For Each xel As XElement In xcs.Elements.ToList
+                    Dim speed As Integer
+                    If xel.Attribute("RotationSpeed") Is Nothing OrElse
+                       Not Integer.TryParse(xel.Attribute("RotationSpeed").Value, Globalization.NumberStyles.Integer, Globalization.CultureInfo.InvariantCulture, speed) Then
+                        FlowSheet?.ShowMessage(String.Format("{0}: a performance curve set was stored without a valid speed and was not loaded.", GraphicObject?.Tag),
+                                               IFlowsheet.MessageType.Warning)
+                        Continue For
+                    End If
+                    Dim cset As New PumpOps.CurveSet()
+                    cset.LoadData(xel.Elements.ToList)
+                    CurveSets(speed) = cset
+                Next
+            End If
+
             Return True
 
         End Function
@@ -470,6 +564,17 @@ Namespace UnitOperations
 
             Dim elements As System.Collections.Generic.List(Of System.Xml.Linq.XElement) = MyBase.SaveData()
             Dim ci As Globalization.CultureInfo = Globalization.CultureInfo.InvariantCulture
+
+            'the reflection serializer handles PumpCurveSet on its own, but not a dictionary of them,
+            'so the sets of a variable-speed pump are written here, keyed by their measured speed.
+            If CurveSets IsNot Nothing AndAlso CurveSets.Count > 0 Then
+                Dim xcs As New XElement("CurveSets")
+                For Each kvp In CurveSets
+                    If kvp.Value Is Nothing Then Continue For
+                    xcs.Add(New XElement("CurveSet", New XAttribute("RotationSpeed", kvp.Key.ToString(ci)), kvp.Value.SaveData().ToArray()))
+                Next
+                elements.Add(xcs)
+            End If
 
             Return elements
 
@@ -693,6 +798,134 @@ Namespace UnitOperations
 
         Private prevM, currentM As Double
 
+        ''' <summary>
+        ''' The pump as a pressure-flow element: the flow through it is whatever the network is
+        ''' passing, and the outlet takes the inlet pressure plus the head the machine makes at
+        ''' that flow and at the speed it is turning at. In Performance Curves mode the head comes
+        ''' from the measured map, and otherwise from the conductance of the casing scaled by the
+        ''' square of the speed ratio, as the capacity model did.
+        ''' </summary>
+        Private Sub RunDynamicModelAsPressureFlowElement(currentSpeed As Double)
+
+            Dim ims As MaterialStream = Me.GetInletMaterialStream(0)
+            Dim oms As MaterialStream = Me.GetOutletMaterialStream(0)
+
+            If ims Is Nothing OrElse oms Is Nothing Then Exit Sub
+
+            If CalcMode = CalculationMode.PositiveDisplacement Then
+                RunDynamicModelAsFlowSource(ims, oms, currentSpeed)
+                Exit Sub
+            End If
+
+            Dim Wi = ims.GetMassFlow()
+            Dim Pi = ims.GetPressure()
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+
+            Dim head As Double = Double.NaN
+            Dim eff As Double = Me.Eficiencia.GetValueOrDefault / 100
+
+            If CalcMode = CalculationMode.Curves AndAlso rho > 0.0 AndAlso Wi > 0.0 Then
+                Try
+                    Dim reading = ReadOperatingPoint(Wi / rho, currentSpeed)
+                    head = reading.Head
+                    CurveHead = reading.Head
+                    CurveSysHead = reading.Head
+                    CurveNPSHr = reading.NPSHr
+                    CurveFlow = Wi / rho
+                    If Not Double.IsNaN(reading.Efficiency) AndAlso reading.Efficiency > 0.0 Then
+                        eff = reading.Efficiency
+                        CurveEff = reading.Efficiency * 100
+                    End If
+                Catch ex As Exception
+                    'off the map: the conductance below keeps the run going
+                    head = Double.NaN
+                End Try
+            End If
+
+            Dim DeltaPdyn As Double
+
+            If Double.IsNaN(head) Then
+                Dim Kr As Double = GetDynamicProperty("Flow Conductance")
+                DeltaPdyn = (Wi / Kr) ^ 2
+                Dim ratedSpeed As Double = GetDynamicProperty("Rated Speed")
+                If ratedSpeed > 0.0 Then DeltaPdyn *= (currentSpeed / ratedSpeed) ^ 2
+                If rho > 0.0 Then head = DeltaPdyn / 9.81 / rho
+            Else
+                DeltaPdyn = head * 9.81 * rho
+            End If
+
+            If eff <= 0.0 Then eff = 0.75
+
+            Me.DeltaP = DeltaPdyn
+            Me.Head = head
+            Me.Pout = Pi + DeltaPdyn
+            Me.DeltaQ = If(Wi > 0.0, Wi * 9.81 * head / eff / 1000.0, 0.0)
+
+            'the fluid takes the useful part of the shaft power, as the steady state has it
+            Dim H2 = ims.GetMassEnthalpy() + If(Wi > 0.0, Me.DeltaQ.GetValueOrDefault * eff / Wi, 0.0)
+
+            oms.AssignFromPhase(PhaseLabel.Mixture, ims, False)
+            oms.SetTemperature(ims.GetTemperature())
+            oms.SetMassEnthalpy(H2)
+            oms.SetMassFlow(Wi)
+            oms.SetPressure(Pi + DeltaPdyn)
+
+            Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
+            If esin IsNot Nothing Then
+                esin.EnergyFlow = Me.DeltaQ.GetValueOrDefault
+                esin.GraphicObject.Calculated = True
+            End If
+
+        End Sub
+        ''' <summary>
+        ''' The positive displacement machine in dynamics: it is the element that sets the flow
+        ''' of the line, the volume it displaces at the speed it is turning, and the pressure is
+        ''' whatever the line imposes, up to the setting of its relief valve. This is the
+        ''' opposite causality of a centrifugal machine, and the reason a displacement pump
+        ''' against a closed discharge needs a relief while a centrifugal one does not.
+        ''' </summary>
+        Private Sub RunDynamicModelAsFlowSource(ims As MaterialStream, oms As MaterialStream, currentSpeed As Double)
+
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+            Dim Pi = ims.GetPressure()
+
+            Dim qd = Displacement * (currentSpeed / 60.0) * (VolumetricEfficiency / 100.0)
+            Dim Wd = qd * rho
+
+            DeliveredVolumetricFlow = qd
+            DeliveredMassFlow = Wd
+
+            'the discharge pressure is the one the line downstream is holding, and the relief
+            'is what caps it
+            Dim P2 = Math.Max(oms.GetPressure(), Pi)
+            If ReliefPressure > 0.0 AndAlso P2 > ReliefPressure Then P2 = ReliefPressure
+
+            Dim eff = Me.Eficiencia.GetValueOrDefault / 100
+            If eff <= 0.0 Then eff = 0.9
+
+            Me.DeltaP = P2 - Pi
+            Me.Pout = P2
+            Me.DeltaQ = qd * (P2 - Pi) / 1000.0 / eff
+            If rho > 0.0 Then Me.Head = (P2 - Pi) / 9.81 / rho
+
+            Dim H2 = ims.GetMassEnthalpy() + If(Wd > 0.0, Me.DeltaQ.GetValueOrDefault * eff / Wd, 0.0)
+
+            ims.SetMassFlow(Wd)
+
+            oms.AssignFromPhase(PhaseLabel.Mixture, ims, False)
+            oms.SetTemperature(ims.GetTemperature())
+            oms.SetMassEnthalpy(H2)
+            oms.SetMassFlow(Wd)
+            oms.SetPressure(P2)
+
+            Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
+            If esin IsNot Nothing Then
+                esin.EnergyFlow = Me.DeltaQ.GetValueOrDefault
+                esin.GraphicObject.Calculated = True
+            End If
+
+        End Sub
+
         Public Overrides Sub RunDynamicModel()
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -718,6 +951,19 @@ Namespace UnitOperations
             Else
                 currentSpeed = targetSpeed
                 SetDynamicProperty("Current Speed", currentSpeed)
+            End If
+
+            'The casing of a pump is a small volume full of liquid. Integrating it against a rigid
+            'volume makes the machine a capacity, and with a liquid inside, any mismatch between the
+            'flow in and the flow out moves the pressure by hundreds of bar within one step: the
+            'model is too stiff for any step a user would choose. A pump in a pressure-flow network
+            'is not a capacity at all; it is the element that adds head to the line. So by default it
+            'passes the flow through and hands its outlet the inlet pressure plus the head it makes,
+            'and the capacity of the system sits where it physically is, in the vessels around it.
+            'The casing inventory remains available for whoever wants it.
+            If Not CBool(GetDynamicProperty("Integrate Casing Holdup")) Then
+                RunDynamicModelAsPressureFlowElement(currentSpeed)
+                Exit Sub
             End If
 
             Dim Vol As Double = GetDynamicProperty("Volume")
@@ -782,13 +1028,48 @@ Namespace UnitOperations
             AccumulationStream.SetPressure(Pressure)
 
             Dim Wi = ims.GetMassFlow()
-            Dim DeltaP = (Wi / Kr) ^ 2
+            Dim DeltaP As Double
 
-            'affinity law: the pressure rise falls with the square of the speed ratio, so a tripped
-            'pump stops boosting the pressure as it coasts down. Flowsheets saved before this
-            'property existed read the default, which reproduces the speed-independent result.
-            Dim ratedSpeed As Double = GetDynamicProperty("Rated Speed")
-            If ratedSpeed > 0.0 Then DeltaP *= (currentSpeed / ratedSpeed) ^ 2
+            Dim rho = AccumulationStream.Phases(0).Properties.density.GetValueOrDefault
+            Dim curvehead As Double = Double.NaN
+
+            If CalcMode = CalculationMode.Curves AndAlso rho > 0.0 AndAlso Wi > 0.0 Then
+
+                'a pump described by its curves keeps using them while it runs: the head is read at
+                'the flow it is passing and at the speed it is turning at on this step, which is what
+                'the drive of a variable-speed pump moves. Between measured speeds the sets are
+                'blended, as in the steady state.
+                Try
+                    Dim reading = ReadOperatingPoint(Wi / rho, currentSpeed)
+                    curvehead = reading.Head
+                    CurveHead = reading.Head
+                    CurveSysHead = reading.Head
+                    CurveNPSHr = reading.NPSHr
+                    CurveFlow = Wi / rho
+                    If Not Double.IsNaN(reading.Efficiency) Then CurveEff = reading.Efficiency * 100
+                Catch ex As Exception
+                    'off the map (a flow the curves do not cover, or no curve at this speed): the
+                    'resistance model below keeps the integration going instead of stopping it
+                    curvehead = Double.NaN
+                End Try
+
+            End If
+
+            If Double.IsNaN(curvehead) Then
+
+                DeltaP = (Wi / Kr) ^ 2
+
+                'affinity law: the pressure rise falls with the square of the speed ratio, so a tripped
+                'pump stops boosting the pressure as it coasts down. Flowsheets saved before this
+                'property existed read the default, which reproduces the speed-independent result.
+                Dim ratedSpeed As Double = GetDynamicProperty("Rated Speed")
+                If ratedSpeed > 0.0 Then DeltaP *= (currentSpeed / ratedSpeed) ^ 2
+
+            Else
+
+                DeltaP = curvehead * 9.81 * rho
+
+            End If
 
             ims.SetPressure(Pressure)
             oms.AssignFromPhase(PhaseLabel.Mixture, AccumulationStream, False)
@@ -846,6 +1127,181 @@ Namespace UnitOperations
             ratinterpolation.buildfloaterhormannrationalinterpolant(xs, xs.Length, 1, w)
 
             Return polinterpolation.barycentricinterpolation(xs, ys, w, xs.Length, qli / sratio)
+
+        End Function
+
+        ''' <summary>
+        ''' The operating point read off the performance curves, in SI units. Efficiency and power
+        ''' are NaN when their curve is not enabled and the caller has to fall back to the pump's
+        ''' fixed efficiency and to the hydraulic power.
+        ''' </summary>
+        Private Structure CurveReading
+            Public Head As Double
+            Public NPSHr As Double
+            Public Efficiency As Double
+            Public Power As Double
+        End Structure
+
+        ''' <summary>
+        ''' Reads one measured curve set at the flow rate the pump is passing, scaling it from the
+        ''' speed it was measured at with the affinity laws: the operating point sits at
+        ''' <c>qli/sratio</c> on the measured curves, head and NPSHr scale with <c>sratio^2</c>,
+        ''' power with <c>sratio^3</c>, and efficiency is invariant along the affinity parabola.
+        ''' </summary>
+        Private Function ReadCurveSet(cset As PumpOps.CurveSet, qli As Double, sratio As Double) As CurveReading
+
+            Dim chead = cset.CurveHead
+            Dim cnpsh = cset.CurveNPSHr
+            Dim ceff = cset.CurveEfficiency
+            Dim cpower = cset.CurvePower
+
+            Dim xhead, yhead, xnpsh, ynpsh, xeff, yeff, xpower, ypower As New List(Of Double)
+
+            Dim i As Integer
+
+            For i = 0 To Math.Min(chead.x.Count, chead.y.Count) - 1
+                xhead.Add(SystemsOfUnits.Converter.ConvertToSI(chead.xunit, chead.x(i)))
+                yhead.Add(SystemsOfUnits.Converter.ConvertToSI(chead.yunit, chead.y(i)))
+            Next
+            For i = 0 To Math.Min(cnpsh.x.Count, cnpsh.y.Count) - 1
+                xnpsh.Add(SystemsOfUnits.Converter.ConvertToSI(cnpsh.xunit, cnpsh.x(i)))
+                ynpsh.Add(SystemsOfUnits.Converter.ConvertToSI(cnpsh.yunit, cnpsh.y(i)))
+            Next
+            For i = 0 To Math.Min(ceff.x.Count, ceff.y.Count) - 1
+                xeff.Add(SystemsOfUnits.Converter.ConvertToSI(ceff.xunit, ceff.x(i)))
+                If ceff.yunit = "%" Then
+                    yeff.Add(ceff.y(i) / 100)
+                Else
+                    yeff.Add(ceff.y(i))
+                End If
+            Next
+            For i = 0 To Math.Min(cpower.x.Count, cpower.y.Count) - 1
+                xpower.Add(SystemsOfUnits.Converter.ConvertToSI(cpower.xunit, cpower.x(i)))
+                ypower.Add(SystemsOfUnits.Converter.ConvertToSI(cpower.yunit, cpower.y(i)))
+            Next
+
+            If Not chead.Enabled Then
+                Throw New ArgumentException("The head curve must be enabled to run the pump in Curves mode.")
+            End If
+
+            Dim reading As New CurveReading
+
+            reading.Head = InterpolateCurve(xhead, yhead, qli, "head", sratio) * sratio ^ 2
+
+            If cnpsh.Enabled Then
+                reading.NPSHr = InterpolateCurve(xnpsh, ynpsh, qli, "NPSHr", sratio) * sratio ^ 2
+            Else
+                reading.NPSHr = 0.0
+            End If
+
+            If ceff.Enabled Then
+                reading.Efficiency = InterpolateCurve(xeff, yeff, qli, "efficiency", sratio)
+            Else
+                reading.Efficiency = Double.NaN
+            End If
+
+            If cpower.Enabled Then
+                reading.Power = InterpolateCurve(xpower, ypower, qli, "power", sratio) * sratio ^ 3
+            Else
+                reading.Power = Double.NaN
+            End If
+
+            Return reading
+
+        End Function
+
+        ''' <summary>
+        ''' Reads the operating point at the speed the pump runs at. With a single measured curve set
+        ''' the speed is covered by the affinity laws, which is what a pump with one published curve
+        ''' allows. With a dataset measured at several speeds, the point is read off the two sets that
+        ''' bracket the operating speed and interpolated linearly between them, which follows the
+        ''' measured efficiency instead of assuming it constant. Above the highest measured speed or
+        ''' below the lowest, the nearest set is scaled by the affinity laws and the flowsheet log
+        ''' says so.
+        ''' </summary>
+        Private Function ReadOperatingPoint(qli As Double) As CurveReading
+
+            Return ReadOperatingPoint(qli, EffectiveSpeed)
+
+        End Function
+
+        ''' <summary>
+        ''' The operating point at a given speed, which the dynamic model uses with the speed the
+        ''' pump is turning at on this step rather than the steady-state operating speed.
+        ''' </summary>
+        Private Function ReadOperatingPoint(qli As Double, speed As Double) As CurveReading
+
+            Dim sets = MeasuredCurveSets()
+
+            If sets.Count <= 1 Then
+
+                Dim sratio As Double = 1.0
+
+                If speed > 0.0 AndAlso speed <> PumpCurveSet.ImpellerSpeed Then
+                    If PumpCurveSet.ImpellerSpeed <= 0.0 Then
+                        Throw New ArgumentException("The pump has an operating speed but the speed its curves were measured at (Impeller Speed) is not defined, so the curves cannot be scaled.")
+                    End If
+                    sratio = speed / PumpCurveSet.ImpellerSpeed
+                End If
+
+                If DebugMode Then AppendDebugLine(String.Format("Speed ratio: {0} ({1} RPM over the {2} RPM the curves were measured at)", sratio, speed, PumpCurveSet.ImpellerSpeed))
+
+                Return ReadCurveSet(PumpCurveSet, qli, sratio)
+
+            End If
+
+            Dim lowest = sets.First()
+            Dim highest = sets.Last()
+
+            If speed <= lowest.Key OrElse speed >= highest.Key Then
+
+                Dim nearest = If(speed <= lowest.Key, lowest, highest)
+                Dim sratio = speed / nearest.Key
+
+                If sratio <> 1.0 Then
+                    FlowSheet?.ShowMessage(String.Format("{0}: {1} RPM is outside the measured curve sets ({2} to {3} RPM). The set at {4} RPM was scaled with the affinity laws.",
+                                                         GraphicObject?.Tag, speed, lowest.Key, highest.Key, nearest.Key),
+                                           IFlowsheet.MessageType.Warning)
+                End If
+
+                If DebugMode Then AppendDebugLine(String.Format("Speed {0} RPM outside the measured sets; scaling the {1} RPM set by {2}", speed, nearest.Key, sratio))
+
+                Return ReadCurveSet(nearest.Value, qli, sratio)
+
+            End If
+
+            Dim lower = sets.Last(Function(kvp) kvp.Key <= speed)
+            Dim upper = sets.First(Function(kvp) kvp.Key >= speed)
+
+            If lower.Key = upper.Key Then Return ReadCurveSet(lower.Value, qli, 1.0)
+
+            Dim w = (speed - lower.Key) / (upper.Key - lower.Key)
+
+            If DebugMode Then AppendDebugLine(String.Format("Speed {0} RPM read between the {1} and {2} RPM sets (weight {3})", speed, lower.Key, upper.Key, w))
+
+            Dim a = ReadCurveSet(lower.Value, qli, 1.0)
+            Dim b = ReadCurveSet(upper.Value, qli, 1.0)
+
+            Dim blended As New CurveReading
+
+            blended.Head = Blend(a.Head, b.Head, w)
+            blended.NPSHr = Blend(a.NPSHr, b.NPSHr, w)
+            blended.Efficiency = Blend(a.Efficiency, b.Efficiency, w)
+            blended.Power = Blend(a.Power, b.Power, w)
+
+            Return blended
+
+        End Function
+
+        ''' <summary>
+        ''' Linear blend of the same quantity read off two curve sets. A quantity missing from either
+        ''' set stays missing, so the caller falls back for it rather than using half of one set.
+        ''' </summary>
+        Private Shared Function Blend(a As Double, b As Double, w As Double) As Double
+
+            If Double.IsNaN(a) OrElse Double.IsNaN(b) Then Return Double.NaN
+
+            Return a + (b - a) * w
 
         End Function
 
@@ -1008,86 +1464,29 @@ Namespace UnitOperations
 
                 Case CalculationMode.Curves
 
-                    Dim cnpsh, chead, ceff, cpower As PumpOps.Curve
-
-                    cnpsh = Me.PumpCurveSet.CurveNPSHr
-                    chead = Me.PumpCurveSet.CurveHead
-                    ceff = Me.PumpCurveSet.CurveEfficiency
-                    cpower = Me.PumpCurveSet.CurvePower
-
-                    Dim xhead, yhead, xnpsh, ynpsh, xeff, yeff, xpower, ypower As New List(Of Double)
-
-                    Dim i As Integer
-
-                    For i = 0 To Math.Min(chead.x.Count, chead.y.Count) - 1
-                        xhead.Add(SystemsOfUnits.Converter.ConvertToSI(chead.xunit, chead.x(i)))
-                        yhead.Add(SystemsOfUnits.Converter.ConvertToSI(chead.yunit, chead.y(i)))
-                    Next
-                    For i = 0 To Math.Min(cnpsh.x.Count, cnpsh.y.Count) - 1
-                        xnpsh.Add(SystemsOfUnits.Converter.ConvertToSI(cnpsh.xunit, cnpsh.x(i)))
-                        ynpsh.Add(SystemsOfUnits.Converter.ConvertToSI(cnpsh.yunit, cnpsh.y(i)))
-                    Next
-                    For i = 0 To Math.Min(ceff.x.Count, ceff.y.Count) - 1
-                        xeff.Add(SystemsOfUnits.Converter.ConvertToSI(ceff.xunit, ceff.x(i)))
-                        If ceff.yunit = "%" Then
-                            yeff.Add(ceff.y(i) / 100)
-                        Else
-                            yeff.Add(ceff.y(i))
-                        End If
-                    Next
-                    For i = 0 To Math.Min(cpower.x.Count, cpower.y.Count) - 1
-                        xpower.Add(SystemsOfUnits.Converter.ConvertToSI(cpower.xunit, cpower.x(i)))
-                        ypower.Add(SystemsOfUnits.Converter.ConvertToSI(cpower.yunit, cpower.y(i)))
-                    Next
-
                     If DebugMode Then AppendDebugLine(String.Format("Getting operating point..."))
 
                     'get operating points
                     Dim head, npshr, eff, power As Double
 
-                    'the curves were measured at PumpCurveSet.ImpellerSpeed. Running at another speed,
-                    'the affinity laws put this operating point at qli/sratio on the measured curves,
-                    'and scale what is read there by sratio^2 for head and NPSHr and sratio^3 for power.
-                    'Efficiency is invariant along the affinity parabola.
-                    Dim sratio As Double = 1.0
+                    Dim reading As CurveReading = ReadOperatingPoint(qli)
 
-                    If OperatingSpeed > 0.0 Then
-                        If PumpCurveSet.ImpellerSpeed <= 0.0 Then
-                            Throw New ArgumentException("The pump has an operating speed but the speed its curves were measured at (Impeller Speed) is not defined, so the curves cannot be scaled.")
-                        End If
-                        sratio = OperatingSpeed / PumpCurveSet.ImpellerSpeed
-                    End If
-
-                    If DebugMode Then AppendDebugLine(String.Format("Speed ratio: {0} ({1} RPM over the {2} RPM the curves were measured at)", sratio, EffectiveSpeed, PumpCurveSet.ImpellerSpeed))
-
-                    'head
-                    If Not chead.Enabled Then
-                        Throw New ArgumentException("The head curve must be enabled to run the pump in Curves mode.")
-                    End If
-
-                    head = InterpolateCurve(xhead, yhead, qli, "head", sratio) * sratio ^ 2
+                    head = reading.Head
+                    npshr = reading.NPSHr
 
                     If DebugMode Then AppendDebugLine(String.Format("Head: {0} m", head))
+                    If DebugMode Then AppendDebugLine(String.Format("NPSHr: {0} m", npshr))
 
                     Me.CurveHead = head
                     Me.CurveSysHead = head
 
-                    'npshr
-                    If cnpsh.Enabled Then
-                        npshr = InterpolateCurve(xnpsh, ynpsh, qli, "NPSHr", sratio) * sratio ^ 2
-                    Else
-                        npshr = 0
-                    End If
-
-                    If DebugMode Then AppendDebugLine(String.Format("NPSHr: {0} m", npshr))
-
                     Me.CurveNPSHr = npshr
 
                     'efficiency
-                    If ceff.Enabled Then
-                        eff = InterpolateCurve(xeff, yeff, qli, "efficiency", sratio)
-                    Else
+                    If Double.IsNaN(reading.Efficiency) Then
                         eff = Me.Eficiencia.GetValueOrDefault / 100
+                    Else
+                        eff = reading.Efficiency
                     End If
 
                     If eff <= 0.0 Then
@@ -1112,10 +1511,10 @@ Namespace UnitOperations
                     Dim tmp As IFlashCalculationResult
 
                     'power
-                    If cpower.Enabled Then
-                        power = InterpolateCurve(xpower, ypower, qli, "power", sratio) * sratio ^ 3
-                    Else
+                    If Double.IsNaN(reading.Power) Then
                         power = Wi * 9.81 * head / eff / 1000
+                    Else
+                        power = reading.Power
                     End If
 
                     H2 = Hi + power * eff / Wi
@@ -1264,6 +1663,64 @@ Namespace UnitOperations
                         Me.NPSH = Double.PositiveInfinity
                     End Try
 
+                Case CalculationMode.PositiveDisplacement
+
+                    'a positive displacement machine is a flow source: it delivers the volume its
+                    'displacement and its speed give, whatever the discharge pressure, and the
+                    'system decides that pressure. The relief valve is what stops it at the top.
+                    Me.PropertyPackage.CurrentMaterialStream = msin
+
+                    If OperatingSpeed <= 0.0 Then
+                        Throw New ArgumentException("A positive displacement pump needs its operating speed: the flow it delivers is the displacement times the speed.")
+                    End If
+
+                    If Displacement <= 0.0 Then
+                        Throw New ArgumentException("A positive displacement pump needs the volume it displaces per revolution.")
+                    End If
+
+                    Dim qd = Displacement * (OperatingSpeed / 60.0) * (VolumetricEfficiency / 100.0)
+
+                    DeliveredVolumetricFlow = qd
+                    DeliveredMassFlow = qd * rho_li
+
+                    P2 = If(Pout > 0.0, Pout, Pi + Me.DeltaP.GetValueOrDefault)
+
+                    If ReliefPressure > 0.0 AndAlso P2 > ReliefPressure Then
+                        FlowSheet?.ShowMessage(String.Format("{0}: the system asks for {1:F0} Pa at the discharge, above the relief setting of {2:F0} Pa. The relief holds the discharge at its setting.", GraphicObject?.Tag, P2, ReliefPressure), IFlowsheet.MessageType.Warning)
+                        P2 = ReliefPressure
+                    End If
+
+                    CheckSpec(P2, True, "outlet pressure")
+
+                    Pout = P2
+                    Me.DeltaP = P2 - Pi
+
+                    'the shaft power of a displacement machine is the volume it moves against the
+                    'pressure difference it moves it against, over the mechanical efficiency
+                    Me.DeltaQ = qd * (P2 - Pi) / 1000.0 / (Me.Eficiencia.GetValueOrDefault / 100)
+
+                    H2 = Hi + Me.DeltaQ.GetValueOrDefault / Math.Max(DeliveredMassFlow, 0.000000001)
+                    CheckSpec(H2, False, "outlet enthalpy")
+
+                    IObj?.SetCurrent()
+                    Dim tmppd = Me.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.PressureEnthalpy, P2, H2, Ti)
+                    T2 = tmppd.CalculatedTemperature.GetValueOrDefault
+                    CheckSpec(T2, True, "outlet temperature")
+
+                    Me.DeltaT = T2 - Ti
+
+                    If Wi > 0.0 AndAlso Math.Abs(DeliveredMassFlow - Wi) > 0.001 * Wi Then
+                        FlowSheet?.ShowMessage(String.Format("{0}: the machine displaces {1:G4} kg/s at {2:G4} rpm while the stream feeding it carries {3:G4} kg/s. The outlet takes the displaced flow, so the balance only closes once the feed is set to it, or a recycle or an adjust makes it match.", GraphicObject?.Tag, DeliveredMassFlow, OperatingSpeed, Wi), IFlowsheet.MessageType.Warning)
+                    End If
+
+                    Try
+                        IObj?.SetCurrent()
+                        Dim Pbubpd = Me.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.TemperatureVaporFraction, Ti, 0.0#, Pi).CalculatedPressure
+                        Me.NPSH = (Pi - Pbubpd) / (rho_li * 9.81)
+                    Catch ex As Exception
+                        Me.NPSH = Double.PositiveInfinity
+                    End Try
+
                 Case CalculationMode.Delta_P
 
                     Me.PropertyPackage.CurrentMaterialStream = msin
@@ -1398,7 +1855,13 @@ Namespace UnitOperations
                         comp.MassFraction = msin.Phases(0).Compounds(comp.Name).MassFraction
                         i += 1
                     Next
-                    .Phases(0).Properties.massflow = msin.Phases(0).Properties.massflow.GetValueOrDefault
+                    'a positive displacement machine sets the flow of the line it feeds; every
+                    'other mode passes on the flow it is given
+                    If CalcMode = CalculationMode.PositiveDisplacement Then
+                        .Phases(0).Properties.massflow = DeliveredMassFlow
+                    Else
+                        .Phases(0).Properties.massflow = msin.Phases(0).Properties.massflow.GetValueOrDefault
+                    End If
                     .DefinedFlow = FlowSpec.Mass
                     .SpecType = Interfaces.Enums.StreamSpec.Pressure_and_Enthalpy
                 End With
@@ -1492,6 +1955,18 @@ Namespace UnitOperations
                     Case 8
                         'PROP_PU_8 (Operating Speed)
                         value = EffectiveSpeed
+                    Case 9
+                        'PROP_PU_9 (Displacement per revolution)
+                        value = Displacement.ConvertFromSI(su.volume)
+                    Case 10
+                        'PROP_PU_10 (Volumetric Efficiency)
+                        value = VolumetricEfficiency
+                    Case 11
+                        'PROP_PU_11 (Relief Pressure)
+                        value = ReliefPressure.ConvertFromSI(su.pressure)
+                    Case 12
+                        'PROP_PU_12 (Delivered Volumetric Flow)
+                        value = DeliveredVolumetricFlow.ConvertFromSI(su.volumetricFlow)
                 End Select
 
                 Return value
@@ -1530,10 +2005,14 @@ Namespace UnitOperations
                     'efficiency curve to read it from.
                     If Not PumpCurveSet.CurveEfficiency.Enabled Then writable.Add(1)
                     writable.Add(8)
+                Case CalculationMode.PositiveDisplacement
+                    'the flow comes from the displacement and the speed, and the system gives
+                    'the discharge pressure; the delivered flow is a result, not a spec
+                    writable.AddRange(New Integer() {1, 5, 8, 9, 10, 11})
             End Select
             Select Case proptype
                 Case PropertyType.RO
-                    For i = 0 To 8
+                    For i = 0 To 12
                         If Not writable.Contains(i) Then proplist.Add("PROP_PU_" + CStr(i))
                     Next
                 Case PropertyType.RW, PropertyType.WR
@@ -1541,7 +2020,7 @@ Namespace UnitOperations
                         proplist.Add("PROP_PU_" + CStr(i))
                     Next
                 Case PropertyType.ALL
-                    For i = 0 To 8
+                    For i = 0 To 12
                         proplist.Add("PROP_PU_" + CStr(i))
                     Next
             End Select
@@ -1689,6 +2168,14 @@ Namespace UnitOperations
                     str.AppendLine("    Outlet pressure: " & SystemsOfUnits.Converter.ConvertFromSI(su.pressure, Me.Pout).ToString(numberformat, ci) & " " & su.pressure)
                 Case CalculationMode.Power
                     str.AppendLine("    Power: " & SystemsOfUnits.Converter.ConvertFromSI(su.heatflow, Me.DeltaQ).ToString(numberformat, ci) & " " & su.heatflow)
+                Case CalculationMode.Curves
+                    str.AppendLine("    Operating speed: " & EffectiveSpeed.ToString(numberformat, ci) & " rpm")
+                    Dim measured = MeasuredCurveSets()
+                    If measured.Count = 1 Then
+                        str.AppendLine("    Curves measured at: " & measured(0).Key.ToString(numberformat, ci) & " rpm")
+                    Else
+                        str.AppendLine("    Curves measured at: " & String.Join(", ", measured.Select(Function(kvp) kvp.Key.ToString(numberformat, ci))) & " rpm")
+                    End If
             End Select
             str.AppendLine("    Efficiency: " & Me.Eficiencia.GetValueOrDefault.ToString(numberformat, ci))
             str.AppendLine()
@@ -1704,6 +2191,10 @@ Namespace UnitOperations
                 Case CalculationMode.Power
                     str.AppendLine("    Outlet pressure: " & SystemsOfUnits.Converter.ConvertFromSI(su.pressure, Me.Pout).ToString(numberformat, ci) & " " & su.pressure)
                     str.AppendLine("    Pressure increase: " & SystemsOfUnits.Converter.ConvertFromSI(su.deltaP, Me.DeltaP).ToString(numberformat, ci) & " " & su.deltaP)
+                Case CalculationMode.Curves
+                    str.AppendLine("    Outlet pressure: " & SystemsOfUnits.Converter.ConvertFromSI(su.pressure, Me.Pout).ToString(numberformat, ci) & " " & su.pressure)
+                    str.AppendLine("    Power: " & SystemsOfUnits.Converter.ConvertFromSI(su.heatflow, Me.DeltaQ).ToString(numberformat, ci) & " " & su.heatflow)
+                    str.AppendLine("    Required NPSH: " & SystemsOfUnits.Converter.ConvertFromSI(su.distance, Me.CurveNPSHr).ToString(numberformat, ci) & " " & su.distance)
             End Select
             str.AppendLine("    Temperature increase: " & SystemsOfUnits.Converter.ConvertFromSI(su.deltaT, Me.DeltaT).ToString(numberformat, ci) & " " & su.deltaT)
             str.AppendLine("    Available NPSH: " & SystemsOfUnits.Converter.ConvertFromSI(su.distance, Me.NPSH).ToString(numberformat, ci) & " " & su.distance)

@@ -6386,6 +6386,7 @@ redirect2:                  IObj?.SetCurrent()
                 Dim scope As ScriptScope
 
                 engine = IronPython.Hosting.Python.CreateEngine()
+                SharedClasses.Scripting.IronPythonHost.Prepare(engine)
                 engine.Runtime.LoadAssembly(GetType(System.String).Assembly)
                 engine.Runtime.LoadAssembly(GetType(BaseClasses.ConstantProperties).Assembly)
                 scope = engine.CreateScope()

@@ -4,6 +4,7 @@
     <RootNamespace>DWSIM.Engine.SmokeTests</RootNamespace>
     <AssemblyName>DWSIM.Engine.SmokeTests</AssemblyName>
     <IsPackable>false</IsPackable>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)../tests.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,6 +28,10 @@
     <Reference Include="CapeOpen">
       <HintPath>..\..\lib\CapeOpen.dll</HintPath>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\TestTiming.cs" Link="TestTiming.cs" />
   </ItemGroup>
 
 </Project>
