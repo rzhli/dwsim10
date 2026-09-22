@@ -31,7 +31,7 @@ Namespace GraphicObjects
                      ObjectType.OT_EnergyRecycle, ObjectType.Switch
                     Return 0.56
                 Case ObjectType.NodeIn, ObjectType.NodeOut, ObjectType.Mixer, ObjectType.Splitter, ObjectType.EnergyMixer
-                    Return 0.72
+                    Return 0.56
                 Case ObjectType.HeatExchanger
                     'Allow for the shorter visible height of the heat exchanger artwork.
                     Return 1.4
@@ -40,7 +40,7 @@ Namespace GraphicObjects
                     Return 1.2
                 Case ObjectType.ShortcutColumn, ObjectType.DistillationColumn, ObjectType.AbsorptionColumn,
                      ObjectType.RefluxedAbsorber, ObjectType.ReboiledAbsorber
-                    Return 1.4
+                    Return 1.6
             End Select
 
             'External unit operations share a graphic type; their class supplies the size tier.
@@ -52,11 +52,13 @@ Namespace GraphicObjects
                 Case SimulationObjectClass.Logical, SimulationObjectClass.Switches
                     Return 0.56
                 Case SimulationObjectClass.MixersSplitters
-                    Return 0.72
+                    Return 0.56
                 Case SimulationObjectClass.Reactors
                     Return 1.2
                 Case SimulationObjectClass.Columns
-                    Return 1.4
+                    Return 1.6
+                Case SimulationObjectClass.Separators
+                    Return 1.2
                 Case Else
                     Return 1.0
             End Select

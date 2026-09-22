@@ -2684,15 +2684,40 @@ public partial class FlowsheetView : UserControl
 
             // Rotate/flip straight from the menu, without opening the Appearance window. These act on
             // the graphic object directly, so they work for pure-graphic items too (simObj may be null).
-            var rotate = new MenuItem { Header = "Rotate...", Icon = IconHelper.MIcon("\U0001F504") }; // arrows
-            rotate.Click += async (_, _) =>
+            // Rotation is edited inline: a spinner sits in the submenu so the angle is typed right
+            // there (any 0-360 value) instead of opening a separate dialog. Apply on every change.
+            var rotSpin = new NumericUpDown
             {
-                var input = await ShowInputDialogAsync("Rotate", "Rotation (deg):", obj.Rotation.ToString());
-                if (int.TryParse(input, out var deg))
+                Minimum = 0,
+                Maximum = 360,
+                Increment = 15,
+                FormatString = "0",
+                Value = obj.Rotation,
+                MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(90),
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            rotSpin.ValueChanged += (_, _) =>
+            {
+                var deg = (int)(rotSpin.Value ?? 0);
+                obj.Rotation = ((deg % 360) + 360) % 360;
+                Canvas.Refresh();
+            };
+            // keep the menu open while the spinner is being used
+            rotSpin.PointerPressed += (_, e) => e.Handled = true;
+            var rotate = new MenuItem
+            {
+                Icon = IconHelper.MIcon("\U0001F504"), // arrows
+                Header = new StackPanel
                 {
-                    obj.Rotation = ((deg % 360) + 360) % 360;
-                    Canvas.Refresh();
-                }
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children =
+                    {
+                        new TextBlock { Text = "Rotate (deg)", VerticalAlignment = VerticalAlignment.Center },
+                        rotSpin
+                    }
+                },
+                StaysOpenOnClick = true
             };
             var flipH = new MenuItem { Header = "Flip Horizontal" };
             flipH.Click += (_, _) => { obj.FlippedH = !obj.FlippedH; Canvas.Refresh(); };
