@@ -2682,6 +2682,20 @@ public partial class FlowsheetView : UserControl
             appearance.Click += (_, _) => { if (simObj != null) ShowAppearanceEditor(simObj); };
             ctx.Items.Add(appearance);
 
+            // Rotate/flip straight from the menu, without opening the Appearance window. These act on
+            // the graphic object directly, so they work for pure-graphic items too (simObj may be null).
+            var rotate = new MenuItem { Header = "Rotate 90°", Icon = IconHelper.MIcon("\U0001F504") }; // arrows
+            rotate.Click += (_, _) => { obj.Rotation = (obj.Rotation + 90) % 360; Canvas.Refresh(); };
+            var flipH = new MenuItem { Header = "Flip Horizontal" };
+            flipH.Click += (_, _) => { obj.FlippedH = !obj.FlippedH; Canvas.Refresh(); };
+            var flipV = new MenuItem { Header = "Flip Vertical" };
+            flipV.Click += (_, _) => { obj.FlippedV = !obj.FlippedV; Canvas.Refresh(); };
+            var transform = new MenuItem { Header = "Transform", Icon = IconHelper.MIcon("\U0001F503") }; // clockwise arrows
+            transform.Items.Add(rotate);
+            transform.Items.Add(flipH);
+            transform.Items.Add(flipV);
+            ctx.Items.Add(transform);
+
             var sizeSymbols = new MenuItem { Header = "Size Selected Symbols by Equipment Type", Icon = IconHelper.MIcon("📐") };
             sizeSymbols.Click += (_, _) => SizeSymbolsByType(
                 _surface?.SelectedObjects.Count > 0 ? _surface.SelectedObjects.Values : new[] { obj });
@@ -3493,7 +3507,11 @@ public partial class FlowsheetView : UserControl
         {
             Title = "Appearance - " + (simobj.GraphicObject?.Tag ?? simobj.Name),
             Width = 460,
-            Height = 560,
+            // Height follows the content (capped so it never runs off screen) instead of a fixed
+            // 560 px that clipped the bottom Close button once the UI was scaled up. The body
+            // already scrolls inside its ScrollViewer, and the window stays resizable.
+            SizeToContent = SizeToContent.Height,
+            MaxHeight = 800,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = root
         };

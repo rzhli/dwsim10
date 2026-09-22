@@ -468,9 +468,9 @@ Public Class GraphicsSurface
 
                     If dobj.FlippedH Or dobj.FlippedV Or dobj.Rotation <> 0 Then
 
-                        Dim currmat = DrawingCanvas.TotalMatrix
-
-                        DrawingCanvas.Save()
+                        ' matched Save/Restore so only the override body is transformed (see the
+                        ' normal path below); the label is drawn afterwards and stays upright.
+                        Dim savecount = DrawingCanvas.Save()
 
                         If dobj.FlippedV And Not dobj.FlippedH Then
                             DrawingCanvas.Scale(1, -1, (dobj.X + dobj.Width / 2), (dobj.Y + dobj.Height / 2))
@@ -486,7 +486,7 @@ Public Class GraphicsSurface
 
                         GlobalDrawOverride.Invoke(dobj, DrawingCanvas)
 
-                        DrawingCanvas.SetMatrix(currmat)
+                        DrawingCanvas.RestoreToCount(savecount)
 
                     Else
 
@@ -505,9 +505,10 @@ Public Class GraphicsSurface
                         If dobj.FlippedH Or dobj.FlippedV Or dobj.Rotation <> 0 Or
                         Math.Abs(Flowsheet.FlowsheetOptions.CurrentFlowsheetObjectZoomLevel - 1.0) > 0.000001 Then
 
-                            Dim currmat = DrawingCanvas.TotalMatrix
-
-                            DrawingCanvas.Save()
+                            ' Save/Restore as a matched pair so the flip/rotation applies only to the
+                            ' object body below. The label (DrawTag, further down) is drawn after the
+                            ' restore and so stays upright instead of flipping/rotating with the icon.
+                            Dim savecount = DrawingCanvas.Save()
 
                             If dobj.FlippedV And Not dobj.FlippedH Then
                                 DrawingCanvas.Scale(1, -1, (dobj.X + dobj.Width / 2), (dobj.Y + dobj.Height / 2))
@@ -527,7 +528,7 @@ Public Class GraphicsSurface
 
                             dobj.Draw(DrawingCanvas)
 
-                            DrawingCanvas.SetMatrix(currmat)
+                            DrawingCanvas.RestoreToCount(savecount)
 
                         Else
 
