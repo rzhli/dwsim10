@@ -570,17 +570,8 @@ namespace DWSIM.UI.Desktop.Editors
             BindIntProperty(panel, t, gobj, "Width",  v => gobj.Width  = v, "Width (px)",  10, 2000);
             BindIntProperty(panel, t, gobj, "Height", v => gobj.Height = v, "Height (px)", 10, 2000);
 
-            // Transform ----------------------------------------------------
-            var rotationProp = t.GetProperty("Rotation");
-            if (rotationProp != null && rotationProp.CanWrite)
-            {
-                panel.CreateAndAddLabelRow2("Transform");
-                int rot = Convert.ToInt32(rotationProp.GetValue(gobj));
-                panel.CreateAndAddNumericEditorRow("Rotation (deg)", rot, 0, 360, 0,
-                    (sp, e) => rotationProp.SetValue(gobj, (int)sp.Value.GetValueOrDefault()));
-            }
-            BindBoolProperty(panel, t, gobj, "FlippedH", "Flip Horizontally");
-            BindBoolProperty(panel, t, gobj, "FlippedV", "Flip Vertically");
+            // Transform (rotation/flip) lives in the canvas right-click menu now, so it is not
+            // duplicated here.
 
             // Font ---------------------------------------------------------
             var fontSizeProp = t.GetProperty("FontSize");

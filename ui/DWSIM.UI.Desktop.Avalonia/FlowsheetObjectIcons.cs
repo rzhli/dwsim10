@@ -243,10 +243,24 @@ internal static class FlowsheetObjectIcons
     {
         surface.GlobalDrawOverride = (gobj, canvas) =>
         {
+            // Flip/rotate only the object body, then restore before the label: the tag and the
+            // T/P/flow annotations must read upright regardless of how the icon is oriented.
+            int sc = canvas.Save();
+            if (gobj.FlippedH || gobj.FlippedV || gobj.Rotation != 0)
+            {
+                float cx = gobj.X + gobj.Width / 2f, cy = gobj.Y + gobj.Height / 2f;
+                if (gobj.FlippedV && !gobj.FlippedH) canvas.Scale(1, -1, cx, cy);
+                else if (gobj.FlippedH && !gobj.FlippedV) canvas.Scale(-1, 1, cx, cy);
+                else if (gobj.FlippedH && gobj.FlippedV) canvas.Scale(-1, -1, cx, cy);
+                if (gobj.Rotation != 0) canvas.RotateDegrees(gobj.Rotation, cx, cy);
+            }
+
             if (!TryDrawCanvasIcon(gobj, canvas))
             {
                 try { gobj.Draw(canvas); } catch { }
             }
+
+            canvas.RestoreToCount(sc);
 
             DrawTag(gobj, canvas);
             DrawSelectionGizmo(gobj, canvas);

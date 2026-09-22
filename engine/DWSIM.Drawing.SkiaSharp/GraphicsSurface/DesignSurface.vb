@@ -466,33 +466,10 @@ Public Class GraphicsSurface
 
                 If GlobalDrawOverride IsNot Nothing Then
 
-                    If dobj.FlippedH Or dobj.FlippedV Or dobj.Rotation <> 0 Then
-
-                        ' matched Save/Restore so only the override body is transformed (see the
-                        ' normal path below); the label is drawn afterwards and stays upright.
-                        Dim savecount = DrawingCanvas.Save()
-
-                        If dobj.FlippedV And Not dobj.FlippedH Then
-                            DrawingCanvas.Scale(1, -1, (dobj.X + dobj.Width / 2), (dobj.Y + dobj.Height / 2))
-                        ElseIf dobj.FlippedH And Not dobj.FlippedV Then
-                            DrawingCanvas.Scale(-1, 1, (dobj.X + dobj.Width / 2), (dobj.Y + dobj.Height / 2))
-                        ElseIf dobj.FlippedH And dobj.FlippedV Then
-                            DrawingCanvas.Scale(-1, -1, (dobj.X + dobj.Width / 2), (dobj.Y + dobj.Height / 2))
-                        End If
-
-                        If dobj.Rotation <> 0.0 Then
-                            DrawingCanvas.RotateDegrees(dobj.Rotation, dobj.X + dobj.Width / 2, dobj.Y + dobj.Height / 2)
-                        End If
-
-                        GlobalDrawOverride.Invoke(dobj, DrawingCanvas)
-
-                        DrawingCanvas.RestoreToCount(savecount)
-
-                    Else
-
-                        GlobalDrawOverride.Invoke(dobj, DrawingCanvas)
-
-                    End If
+                    ' The override applies the flip/rotation itself, around the object body only, so
+                    ' the label it draws afterwards stays upright. Do not transform here or the label
+                    ' would rotate/flip with the icon.
+                    GlobalDrawOverride.Invoke(dobj, DrawingCanvas)
 
                 Else
 
