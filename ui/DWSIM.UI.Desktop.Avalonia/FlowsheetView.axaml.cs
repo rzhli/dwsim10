@@ -2684,8 +2684,16 @@ public partial class FlowsheetView : UserControl
 
             // Rotate/flip straight from the menu, without opening the Appearance window. These act on
             // the graphic object directly, so they work for pure-graphic items too (simObj may be null).
-            var rotate = new MenuItem { Header = "Rotate 90°", Icon = IconHelper.MIcon("\U0001F504") }; // arrows
-            rotate.Click += (_, _) => { obj.Rotation = (obj.Rotation + 90) % 360; Canvas.Refresh(); };
+            var rotate = new MenuItem { Header = "Rotate...", Icon = IconHelper.MIcon("\U0001F504") }; // arrows
+            rotate.Click += async (_, _) =>
+            {
+                var input = await ShowInputDialogAsync("Rotate", "Rotation (deg):", obj.Rotation.ToString());
+                if (int.TryParse(input, out var deg))
+                {
+                    obj.Rotation = ((deg % 360) + 360) % 360;
+                    Canvas.Refresh();
+                }
+            };
             var flipH = new MenuItem { Header = "Flip Horizontal" };
             flipH.Click += (_, _) => { obj.FlippedH = !obj.FlippedH; Canvas.Refresh(); };
             var flipV = new MenuItem { Header = "Flip Vertical" };
