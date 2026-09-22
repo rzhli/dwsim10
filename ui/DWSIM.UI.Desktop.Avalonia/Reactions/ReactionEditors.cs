@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using DWSIM.ExtensionMethods;
@@ -68,8 +69,9 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Icon = IconHelper.GetWindowIcon();
 
-            // a DataGrid needs a bounded height, or it renders no rows inside a vertical StackPanel
-            Stoich = new StoichiometryGrid(ShowOrders) { Height = 240 };
+            // the grid fills the top part of the Components box and is resized by the splitter below
+            // it; a MinHeight keeps a few rows visible when dragged all the way down
+            Stoich = new StoichiometryGrid(ShowOrders) { MinHeight = 100 };
             Stoich.Populate(Fs, _existing);
             Stoich.Edited += Recompute;
 
@@ -78,18 +80,28 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             _tbBalance = ReadBox();
             var btnBalance = PanelButton("Balance", Balance);
 
-            var stoichBody = new StackPanel { Spacing = 6 };
-            stoichBody.Children.Add(Stoich);
-            stoichBody.Children.Add(LabelRow("Equation", _tbEquation));
-            stoichBody.Children.Add(LabelRow("Reaction Heat (kJ/kmol, base reactant, 25 °C)", _tbHeat));
+            // the equation / heat / balance block below the grid, sized to its content
+            var stoichLower = new StackPanel { Spacing = 6 };
+            stoichLower.Children.Add(LabelRow("Equation", _tbEquation));
+            stoichLower.Children.Add(LabelRow("Reaction Heat (kJ/kmol, base reactant, 25 °C)", _tbHeat));
             var balRow = LabelRow("Mass Balance", _tbBalance);
-            stoichBody.Children.Add(balRow);
-            stoichBody.Children.Add(new StackPanel
+            stoichLower.Children.Add(balRow);
+            stoichLower.Children.Add(new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 Children = { btnBalance }
             });
+
+            // draggable divider (line 1) between the stoichiometry grid and the equation block
+            var stoichBody = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto") };
+            var innerSplit = RowSplitter();
+            Grid.SetRow(Stoich, 0);
+            Grid.SetRow(innerSplit, 1);
+            Grid.SetRow(stoichLower, 2);
+            stoichBody.Children.Add(Stoich);
+            stoichBody.Children.Add(innerSplit);
+            stoichBody.Children.Add(stoichLower);
 
             var paramsPanel = new StackPanel { Spacing = 6 };
             _baseCompText = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
@@ -101,11 +113,21 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             idBody.Children.Add(LabelRow("Name", _tbName));
             idBody.Children.Add(LabelRow("Description", _tbDesc));
 
-            // single column, stacked top to bottom: Identification, Components & Stoichiometry, Parameters
-            var content = new StackPanel { Spacing = 10, Margin = new Thickness(12) };
-            content.Children.Add(GroupBox("Identification", idBody));
-            content.Children.Add(GroupBox("Components and Stoichiometry", stoichBody));
-            content.Children.Add(GroupBox("Parameters", paramsPanel));
+            // single column top to bottom: Identification (fixed), Components & Stoichiometry (fills
+            // and resizes), a draggable divider (line 2), then Parameters (resizes, scrolls if tall)
+            var content = new Grid { Margin = new Thickness(12), RowDefinitions = new RowDefinitions("Auto,*,Auto,0.6*") };
+            var idBox = GroupBox("Identification", idBody);
+            var compBox = GroupBoxFill("Components and Stoichiometry", stoichBody);
+            var outerSplit = RowSplitter();
+            var paramBox = GroupBoxFill("Parameters", new ScrollViewer { Content = paramsPanel });
+            Grid.SetRow(idBox, 0);
+            Grid.SetRow(compBox, 1);
+            Grid.SetRow(outerSplit, 2);
+            Grid.SetRow(paramBox, 3);
+            content.Children.Add(idBox);
+            content.Children.Add(compBox);
+            content.Children.Add(outerSplit);
+            content.Children.Add(paramBox);
 
             var ok = new Button { Content = "OK", MinWidth = 90, IsDefault = true };
             ok.Classes.Add("dialog");
@@ -122,10 +144,12 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
                 Children = { cancel, ok }
             };
 
+            // the content Grid fills the window directly (not wrapped in a ScrollViewer): its star
+            // rows need a bounded height for the splitters to work, and Parameters scrolls on its own
             var body = new DockPanel();
             DockPanel.SetDock(buttons, global::Avalonia.Controls.Dock.Bottom);
             body.Children.Add(buttons);
-            body.Children.Add(new ScrollViewer { Content = content });
+            body.Children.Add(content);
             Content = body;
 
             Recompute();
@@ -317,6 +341,31 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
             var border = new Border { Child = stack, Padding = new Thickness(8), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 0, 0, 4) };
             return border;
         }
+
+        /// <summary>Like GroupBox, but the content fills the box's height (header on top, content
+        /// stretching below) so the box can be resized by a GridSplitter and its content grows with it.</summary>
+        protected static Control GroupBoxFill(string header, Control content)
+        {
+            var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+            var title = new TextBlock { Text = header, FontWeight = FontWeight.SemiBold, Margin = new Thickness(2, 2, 0, 6) };
+            Grid.SetRow(title, 0);
+            Grid.SetRow(content, 1);
+            grid.Children.Add(title);
+            grid.Children.Add(content);
+            return new Border { Child = grid, Padding = new Thickness(8), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 0, 0, 4) };
+        }
+
+        /// <summary>A draggable horizontal divider that resizes the grid rows above and below it.</summary>
+        protected static GridSplitter RowSplitter() => new()
+        {
+            Background = new SolidColorBrush(Color.FromArgb(70, 128, 128, 128)),
+            ResizeDirection = GridResizeDirection.Rows,
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+            Height = 6,
+            Cursor = new Cursor(StandardCursorType.SizeNorthSouth)
+        };
 
         protected static ComboBox Combo(IEnumerable<string> items, int selected)
         {
