@@ -365,13 +365,19 @@ Namespace UnitOperations
 
                 Case CalculationMode.EnergyStream
 
-                    Qsource = GetInletEnergyStream(1).EnergyFlow
+                    Dim esin = GetInletEnergyStream(1)
+                    If esin Is Nothing Then Throw New Exception(FlowSheet.GetTranslatedString("SecondaryEnergyStreamRequired"))
+                    Qsource = esin.EnergyFlow.GetValueOrDefault
 
-                Case CalculationMode.HeatAdded
+                Case CalculationMode.HeatAdded, CalculationMode.HeatAddedRemoved
 
                     Qsource = DeltaQ.GetValueOrDefault
 
             End Select
+
+            ' The efficiency scales the duty that reaches the fluid, as it does at steady state.
+
+            Qsource *= Eficiencia.GetValueOrDefault / 100.0
 
             Dim Tambient As Double = GetDynamicProperty("Ambient Temperature")
             Dim UA As Double = GetDynamicProperty("Ambient UA Product")
