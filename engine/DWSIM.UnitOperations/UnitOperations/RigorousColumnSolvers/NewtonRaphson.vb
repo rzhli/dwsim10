@@ -188,13 +188,13 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
         Public Overrides ReadOnly Property Name As String
             Get
-                Return "Napthali-Sandholm"
+                Return "Naphtali-Sandholm"
             End Get
         End Property
 
         Public Overrides ReadOnly Property Description As String
             Get
-                Return "Napthali-Sandholm Simultaneous Correction (SC) Solver"
+                Return "Naphtali-Sandholm Simultaneous Correction (SC) Solver"
             End Get
         End Property
 
@@ -1797,8 +1797,6 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         Catch ex As Exception
                             traceEx("Newton", ex)
                         End Try
-                    Else
-                        Console.WriteLine("[GPU-Column] Force-Newton: skipping Broyden")
                     End If
                     If haderror Then
                         Dim nsolv As New NewtonSolver()
@@ -2138,7 +2136,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Case ColumnSpec.SpecType.Product_Molar_Flow_Rate
                     col.Specs("C").CalculatedValue = LSS(0)
                 Case ColumnSpec.SpecType.Heat_Duty
-                    col.Specs("C").CalculatedValue = Q(0)
+                    col.Specs("C").CalculatedValue = Math.Abs(Q(0)) * If(col.Specs("C").SpecValue < 0.0, -1.0, 1.0)
             End Select
 
             Select Case col.Specs("R").SType
@@ -2167,7 +2165,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Case ColumnSpec.SpecType.Product_Molar_Flow_Rate
                     col.Specs("R").CalculatedValue = L(ns)
                 Case ColumnSpec.SpecType.Heat_Duty
-                    col.Specs("R").CalculatedValue = Q(ns)
+                    col.Specs("R").CalculatedValue = Math.Abs(Q(ns)) * If(col.Specs("R").SpecValue < 0.0, -1.0, 1.0) 'the solvers keep their own sign for Q; report it as the spec was given
             End Select
 
             With output

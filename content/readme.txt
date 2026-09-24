@@ -53,6 +53,10 @@ Version 10.2.10
 - [CHG] Heater and cooler in dynamic mode: the efficiency scales the duty that reaches the fluid, as it does at steady state (nothing changes at the default 100 %)
 - [CHG] Tutorial Fluent API example scripts run under pythonnet as published (bootstrap, Q.* quantities, Plus tools from DWSIM_PATRON_KEY), and the pages that quote them were resynced
 - [CHG] Flowsheet Check: PUMP_VAPOR_INLET (a pump fed with no liquid stops; a partly vapour feed is a warning) and PROPERTY_PACKAGE_CHANGED (results computed with a property package that was since replaced)
+- [CHG] Pipe Network: hovering a node of the diagram opens its floating panel with pressure, temperature, flows, balance residuals and the errors of the node and of the pipes attached to it; the nodal solvers now write flow and temperature into every node
+- [CHG] Distillation column: feed connected by stage name ("Stage10") from scripts and the Fluent API, readable names for the specification and efficiency properties, Naphtali-Sandholm spelling (old files open with the same solver)
+- [CHG] Equilibrium and Gibbs reactors: the outlet temperature typed in the adiabatic mode is the starting estimate of the next solve (the box is no longer disabled)
+- [CHG] Fluent API: Plus unit operations are created and solved without a key, as in the application; saving still needs the subscription level (the property editor and the restriction orifice keep the key check)
 - [FIX] Gibbs reactor in adiabatic mode: the phase split inside the Gibbs minimization was computed at the starting temperature and never refreshed, so a reactor solved for the first time settled on a composition that is not an equilibrium (water-gas shift at 600 K and 10 atm: 910 K and 79 % CO conversion against 827 K and 56 % from the equilibrium reactor); the loop now follows the trial temperature, starts from the inlet temperature and stops with a message after 100 passes
 - [FIX] Gibbs reactor: the first solve of a new reactor stopped on "invalid initial estimates" and only the second attempt ran; the feed is the starting point when there is no stored solution
 - [FIX] Equilibrium reactor in adiabatic mode: a fresh reactor with no outlet temperature estimate evaluated the equilibrium constant at 0 K and stopped on "evaluated to infinity"; the inlet temperature is the starting point
@@ -87,6 +91,18 @@ Version 10.2.10
 - [FIX] Python scripts importing site failed on Linux and macOS (sys.executable unset); the shipped standard library on the path of every hosted engine (issue 85)
 - [FIX] Recycle on Global Convergence (Broyden) stopped the substitution recycles beside it from converging; NaN in the Broyden update when the variables stop moving (issue 83)
 - [FIX] Cross-platform editors: the Browse buttons of the sub-flowsheet and of the Reaktoro external database open the file dialog (issue 81)
+- [FIX] Conversion, equilibrium and Gibbs reactors: an outlet with no phase to carry leaves with zero flow and the product composition instead of stopping the solve
+- [FIX] Reactors switched to adiabatic after an isothermal solve stayed at the inlet temperature (the duty they had written was read back as heat added)
+- [FIX] Reactors: setting "Calculation Mode" through the property interface crashed; the mode is taken by name or number
+- [FIX] Distillation column: a component fraction specification with no unit is a mole fraction (it was solved as a mass fraction)
+- [FIX] Heat exchanger: co-current flow failed on the first solve; the temperature-heat profile of the UA and efficiency modes was drawn as co-current; the area mode returned a negative area for an outlet that reverses the heat flow
+- [FIX] Simultaneous adjust solver reports when it stops without meeting its targets
+- [FIX] Flowsheet Check: ENERGY_STREAM_HALF_CONNECTED removed (every duty or power stream is attached at one end)
+- [FIX] Distillation column: the calculated value of a heat duty specification is reported with the sign it was given (a 6,000 kW reboiler duty read -6,000)
+- [FIX] Classic interface: menu item and window title "Sensitivity Analysis" (read "Sensitivity Study")
+- [FIX] Liquid Phase Viscosity Override Script sample: 1.5 in pipe, so the case solves instead of stopping on a negative pressure
+- [FIX] Distillation column: purity specifications on both products converge from the initial estimate (lever rule for the product split, end compositions at the specified fractions); Naphtali-Sandholm ran without end with the feed on some stages
+- [FIX] Distillation column: the Internal 3 (Robust) initial estimates provider no longer stops on a late-bound Select
 
 Version 10.2.9
 
