@@ -870,6 +870,10 @@ Namespace UnitOperations
             oms.SetMassEnthalpy(H2)
             oms.SetMassFlow(Wi)
             oms.SetPressure(Pi + DeltaPdyn)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
             Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
             If esin IsNot Nothing Then
@@ -918,6 +922,10 @@ Namespace UnitOperations
             oms.SetMassEnthalpy(H2)
             oms.SetMassFlow(Wd)
             oms.SetPressure(P2)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
             Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
             If esin IsNot Nothing Then
@@ -1077,6 +1085,10 @@ Namespace UnitOperations
             oms.SetTemperature(AccumulationStream.GetTemperature)
             oms.SetMassEnthalpy(AccumulationStream.GetMassEnthalpy)
             oms.SetPressure(Pressure + DeltaP)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
         End Sub
 
@@ -1394,6 +1406,13 @@ Namespace UnitOperations
 
             If msin.Phases(2).Properties.molarfraction.GetValueOrDefault() > 0.001 Then
                 FlowSheet.ShowMessage(GraphicObject.Tag + ": " + FlowSheet.GetTranslatedString("Vapor phase detected in pump inlet"), IFlowsheet.MessageType.Warning)
+            End If
+
+            'The head and the power come from the liquid part of the feed. With no liquid at all the
+            'pump would report zero power and a meaningless outlet, so it stops here instead.
+            If msin.Phases(0).Properties.massflow.GetValueOrDefault() > 0.0 AndAlso
+                msin.Phases(1).Properties.massflow.GetValueOrDefault() <= 0.0 Then
+                Throw New ArgumentException("The inlet stream carries no liquid, so there is nothing for a pump to move. Cool or pressurise the feed until it condenses, or use a compressor if it is a gas.")
             End If
 
             Me.PropertyPackage.CurrentMaterialStream = msin
@@ -2316,6 +2335,112 @@ Namespace UnitOperations
             Else
                 Return p
             End If
+        End Function
+
+
+        ''' <summary>Chart names the PFD chart object can embed: the performance curves of every measured speed with the operating point.</summary>
+        Public Overrides Function GetChartModelNames() As List(Of String)
+            If CalcMode <> CalculationMode.Curves Then Return New List(Of String)()
+            Return New List(Of String)({"Head Curve", "Efficiency Curve", "Power Curve", "NPSHr Curve"})
+        End Function
+
+        ''' <summary>Builds an OxyPlot model of one curve kind, one series per measured speed, in the flowsheet's units, with the operating point marked.</summary>
+        Public Overrides Function GetChartModel(name As String) As Object
+
+            Dim sets = MeasuredCurveSets()
+            If sets Is Nothing OrElse sets.Count = 0 Then Return Nothing
+
+            Dim su = FlowSheet.FlowsheetOptions.SelectedUnitSystem
+            Dim flowunit As String = su.volumetricFlow
+            Dim yunitDisplay As String
+            Dim yLabel As String
+            Dim opY As Double
+            Select Case name
+                Case "Head Curve"
+                    yunitDisplay = su.distance : yLabel = "Head" : opY = CurveHead
+                Case "Efficiency Curve"
+                    yunitDisplay = "%" : yLabel = "Efficiency" : opY = CurveEff
+                Case "Power Curve"
+                    yunitDisplay = su.heatflow : yLabel = "Power" : opY = CurvePower
+                Case "NPSHr Curve"
+                    yunitDisplay = su.distance : yLabel = "NPSHr" : opY = CurveNPSHr
+                Case Else
+                    Return Nothing
+            End Select
+
+            Dim model = New OxyPlot.PlotModel() With {.Subtitle = name, .Title = GraphicObject.Tag}
+            model.TitleFontSize = 11
+            model.SubtitleFontSize = 10
+            model.LegendFontSize = 9
+            model.LegendPlacement = OxyPlot.LegendPlacement.Outside
+            model.LegendOrientation = OxyPlot.LegendOrientation.Horizontal
+            model.LegendPosition = OxyPlot.LegendPosition.BottomCenter
+            model.TitleHorizontalAlignment = OxyPlot.TitleHorizontalAlignment.CenteredWithinView
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Bottom,
+                .FontSize = 10,
+                .Title = "Flow (" + flowunit + ")"
+            })
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Left,
+                .FontSize = 10,
+                .Title = yLabel + " (" + yunitDisplay + ")"
+            })
+
+            Dim colors = {OxyPlot.OxyColors.Red, OxyPlot.OxyColors.Blue, OxyPlot.OxyColors.Green, OxyPlot.OxyColors.Orange, OxyPlot.OxyColors.Purple, OxyPlot.OxyColors.Brown}
+            Dim added As Integer = 0
+            For s = 0 To sets.Count - 1
+                Dim cset = sets(s).Value
+                Dim curve As PumpOps.Curve
+                Select Case name
+                    Case "Head Curve" : curve = cset.CurveHead
+                    Case "Efficiency Curve" : curve = cset.CurveEfficiency
+                    Case "Power Curve" : curve = cset.CurvePower
+                    Case Else : curve = cset.CurveNPSHr
+                End Select
+                If curve Is Nothing OrElse Not curve.Enabled OrElse curve.X Is Nothing OrElse curve.X.Count = 0 Then Continue For
+                Dim ls As New OxyPlot.Series.LineSeries() With {
+                    .Title = sets(s).Key.ToString("F0") + " rpm",
+                    .StrokeThickness = 1.5,
+                    .Color = colors(added Mod colors.Length),
+                    .MarkerType = OxyPlot.MarkerType.Circle,
+                    .MarkerSize = 3,
+                    .MarkerFill = colors(added Mod colors.Length)
+                }
+                For i = 0 To Math.Min(curve.X.Count, curve.Y.Count) - 1
+                    Dim xv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(flowunit, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(curve.xunit, curve.X(i)))
+                    Dim yv As Double
+                    If name = "Efficiency Curve" Then
+                        yv = If(curve.yunit = "%", curve.Y(i), curve.Y(i) * 100.0)
+                    Else
+                        yv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitDisplay, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(curve.yunit, curve.Y(i)))
+                    End If
+                    If Not Double.IsNaN(xv) AndAlso Not Double.IsNaN(yv) Then ls.Points.Add(New OxyPlot.DataPoint(xv, yv))
+                Next
+                model.Series.Add(ls)
+                added += 1
+            Next
+            If added = 0 Then Return Nothing
+
+            If CurveFlow > 0.0 AndAlso Not Double.IsNaN(opY) Then
+                Dim op As New OxyPlot.Series.ScatterSeries() With {
+                    .Title = "Operating point",
+                    .MarkerType = OxyPlot.MarkerType.Diamond,
+                    .MarkerSize = 6,
+                    .MarkerFill = OxyPlot.OxyColors.Black
+                }
+                Dim opX = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(flowunit, CurveFlow)
+                Dim opYd = If(name = "Efficiency Curve", opY, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitDisplay, opY))
+                op.Points.Add(New OxyPlot.Series.ScatterPoint(opX, opYd))
+                model.Series.Add(op)
+            End If
+
+            Return model
+
         End Function
 
     End Class

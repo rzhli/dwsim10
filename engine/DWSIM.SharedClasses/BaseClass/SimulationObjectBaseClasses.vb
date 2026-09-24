@@ -233,9 +233,42 @@ Namespace UnitOperations
 
             Dim col1 = DirectCast(ExtraProperties, IDictionary(Of String, Object))
 
-            col1(id) = value
+            col1(id) = NormalizeDynamicPropertyValue(value)
 
             Return True
+
+        End Function
+
+        ''' <summary>
+        ''' Stores numbers as Double and booleans and strings as their plain .NET types, so the value survives
+        ''' SaveData/LoadData (a stored flowsheet state) whatever the caller passed: an Int32 from C#, or a
+        ''' wrapper such as pythonnet's PyInt for a python int, whose type name cannot be resolved on load.
+        ''' Enums, dates and other types are kept as they are.
+        ''' </summary>
+        Private Shared Function NormalizeDynamicPropertyValue(value As Object) As Object
+
+            If value Is Nothing OrElse TypeOf value Is Double OrElse TypeOf value Is Boolean OrElse
+                TypeOf value Is String OrElse TypeOf value Is [Enum] Then Return value
+
+            Dim conv = TryCast(value, IConvertible)
+            If conv Is Nothing Then Return value
+
+            Dim ci = Globalization.CultureInfo.InvariantCulture
+            Try
+                Select Case conv.GetTypeCode()
+                    Case TypeCode.SByte, TypeCode.Byte, TypeCode.Int16, TypeCode.UInt16, TypeCode.Int32, TypeCode.UInt32,
+                         TypeCode.Int64, TypeCode.UInt64, TypeCode.Single, TypeCode.Double, TypeCode.Decimal
+                        Return conv.ToDouble(ci)
+                    Case TypeCode.Boolean
+                        Return conv.ToBoolean(ci)
+                    Case TypeCode.String
+                        Return conv.ToString(ci)
+                    Case Else
+                        Return value
+                End Select
+            Catch ex As Exception
+                Return value
+            End Try
 
         End Function
 
@@ -335,7 +368,38 @@ Namespace UnitOperations
 
         Public Property PreferredFlashAlgorithmTag As String = "" Implements ISimulationObject.PreferredFlashAlgorithmTag
 
-        Public Property Calculated As Boolean = False Implements Interfaces.ISimulationObject.Calculated
+        ''' <summary>
+        ''' UniqueID of the property package in place when Calculated was last set, or an empty string
+        ''' when the object was never solved. Declared before Calculated so that a saved value is read
+        ''' back before the Calculated setter runs on load.
+        ''' </summary>
+        Public Property LastSolvedPropertyPackageID As String = "" Implements Interfaces.ISimulationObject.LastSolvedPropertyPackageID
+
+        Private _calculated As Boolean = False
+
+        Public Property Calculated As Boolean Implements Interfaces.ISimulationObject.Calculated
+            Get
+                Return _calculated
+            End Get
+            Set(value As Boolean)
+                _calculated = value
+                'On load the package is assigned after the object's data, so a missing package
+                'leaves the value that came from the file.
+                If value Then
+                    Dim id = CurrentPropertyPackageID()
+                    If id <> "" Then LastSolvedPropertyPackageID = id
+                End If
+            End Set
+        End Property
+
+        ''' <summary>
+        ''' UniqueID of the package the object calculates with, or an empty string. A material
+        ''' stream resolves its package by ID and overrides this.
+        ''' </summary>
+        Protected Overridable Function CurrentPropertyPackageID() As String
+            If PropertyPackage Is Nothing Then Return ""
+            Return PropertyPackage.UniqueID
+        End Function
 
         Public Property DebugMode As Boolean = False Implements Interfaces.ISimulationObject.DebugMode
 
@@ -1049,9 +1113,17 @@ Namespace UnitOperations
                         Dim propname = xel.Element("Name").Value
                         Dim proptype = xel.Element("PropertyType").Value
                         Dim ptype As Type = Type.GetType(proptype)
-                        Dim propval = Newtonsoft.Json.JsonConvert.DeserializeObject(xel.Element("Data").Value, ptype)
-                        DirectCast(ExtraProperties, IDictionary(Of String, Object))(propname) = propval
+                        Dim pdata = xel.Element("Data").Value
+                        Dim propval As Object
+                        Try
+                            propval = Newtonsoft.Json.JsonConvert.DeserializeObject(pdata, ptype)
+                        Catch ex As Exception
+                            'the data does not fit the stored type: take the plain JSON value
+                            propval = Newtonsoft.Json.JsonConvert.DeserializeObject(pdata)
+                        End Try
+                        DirectCast(ExtraProperties, IDictionary(Of String, Object))(propname) = NormalizeDynamicPropertyValue(propval)
                     Catch ex As Exception
+                        'unreadable: CreateDynamicProperties below puts the object's default back
                     End Try
                 Next
             End If
@@ -1140,9 +1212,10 @@ Namespace UnitOperations
                 Dim extraprops = DirectCast(ExtraProperties, IDictionary(Of String, Object))
                 For Each item In extraprops
                     Try
+                        Dim pvalue = NormalizeDynamicPropertyValue(item.Value)
                         .Item(.Count - 1).Add(New XElement("Property", {New XElement("Name", item.Key),
-                                                                               New XElement("PropertyType", item.Value.GetType.ToString),
-                                                                               New XElement("Data", Newtonsoft.Json.JsonConvert.SerializeObject(item.Value))}))
+                                                                               New XElement("PropertyType", pvalue.GetType.ToString),
+                                                                               New XElement("Data", Newtonsoft.Json.JsonConvert.SerializeObject(pvalue))}))
                     Catch ex As Exception
                     End Try
                 Next
