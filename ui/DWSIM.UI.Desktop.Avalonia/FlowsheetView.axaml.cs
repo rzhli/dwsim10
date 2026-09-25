@@ -2703,17 +2703,27 @@ public partial class FlowsheetView : UserControl
                 obj.Rotation = ((deg % 360) + 360) % 360;
                 Canvas.Refresh();
             };
-            // Keep the submenu open while the spinner is in use, and route the click into the
-            // spinner's inner text box. The spinner lives inside a MenuItem, so the menu keeps
-            // keyboard focus for its own navigation and typed digits never reach the field —
-            // only the up/down buttons work. Focusing the inner TextBox here lets the angle be
-            // typed directly; swallowing the press stops the menu item from closing.
-            rotSpin.PointerPressed += (_, e) =>
+            // The spinner lives inside a MenuItem, and Avalonia's menu keeps keyboard focus on
+            // whichever item the pointer is over for its own navigation. So clicking the field
+            // never lets typed digits reach it — the menu grabs focus back and its key handler
+            // eats the keystrokes; only the up/down buttons work. Fix it on three fronts:
+            //  1) the host MenuItem is made non-focusable so the menu can't pull keyboard focus
+            //     back onto it once the inner text box has it;
+            //  2) every pointer press routes focus into the inner TextBox (selecting its text)
+            //     and is swallowed so the menu item doesn't close;
+            //  3) key and text input are marked handled at the spinner (after the text box has
+            //     already processed them) so they never bubble to the menu's key handler.
+            void FocusRotBox()
             {
-                if (rotSpin.FindDescendantOfType<TextBox>() is { } tb && !tb.IsFocused)
-                    tb.Focus();
-                e.Handled = true;
-            };
+                if (rotSpin.FindDescendantOfType<TextBox>() is { } tb)
+                {
+                    if (!tb.IsFocused) tb.Focus();
+                    tb.SelectAll();
+                }
+            }
+            rotSpin.PointerPressed += (_, e) => { FocusRotBox(); e.Handled = true; };
+            rotSpin.AddHandler(InputElement.KeyDownEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble);
+            rotSpin.AddHandler(InputElement.TextInputEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble);
             var rotate = new MenuItem
             {
                 Icon = IconHelper.MIcon("\U0001F504"), // arrows
@@ -2727,7 +2737,8 @@ public partial class FlowsheetView : UserControl
                         rotSpin
                     }
                 },
-                StaysOpenOnClick = true
+                StaysOpenOnClick = true,
+                Focusable = false
             };
             var flipH = new MenuItem { Header = "Flip Horizontal" };
             flipH.Click += (_, _) => { obj.FlippedH = !obj.FlippedH; Canvas.Refresh(); };
