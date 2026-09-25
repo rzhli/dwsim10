@@ -16,6 +16,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Dock.Avalonia.Controls;
 using Dock.Model.Avalonia;
 using DWSIM.Drawing.SkiaSharp;
@@ -2702,8 +2703,17 @@ public partial class FlowsheetView : UserControl
                 obj.Rotation = ((deg % 360) + 360) % 360;
                 Canvas.Refresh();
             };
-            // keep the menu open while the spinner is being used
-            rotSpin.PointerPressed += (_, e) => e.Handled = true;
+            // Keep the submenu open while the spinner is in use, and route the click into the
+            // spinner's inner text box. The spinner lives inside a MenuItem, so the menu keeps
+            // keyboard focus for its own navigation and typed digits never reach the field —
+            // only the up/down buttons work. Focusing the inner TextBox here lets the angle be
+            // typed directly; swallowing the press stops the menu item from closing.
+            rotSpin.PointerPressed += (_, e) =>
+            {
+                if (rotSpin.FindDescendantOfType<TextBox>() is { } tb && !tb.IsFocused)
+                    tb.Focus();
+                e.Handled = true;
+            };
             var rotate = new MenuItem
             {
                 Icon = IconHelper.MIcon("\U0001F504"), // arrows
