@@ -700,7 +700,7 @@ Namespace Reactors
             AddDynamicProperty("Height", "Available Height for Liquid", 2, UnitOfMeasure.distance, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum Dynamic Pressure for this Unit Operation.", 101325, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the Reactor's available space with information from the inlet stream, if the vessel content is null.", 0, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Contents", "Empties the Reactor's space on the next run.", 0, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Contents", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", 0, UnitOfMeasure.none, True.GetType())
             RemoveDynamicProperty("Reset Content")
 
         End Sub
@@ -971,9 +971,7 @@ Namespace Reactors
             Qin = 0.0
 
             'energy stream
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                Qin = GetInletEnergyStream(1).EnergyFlow.GetValueOrDefault()
-            End If
+            Qin = InletHeatInput()
 
             Dim DRW = GetDebugWriter()
 
@@ -1144,10 +1142,15 @@ Namespace Reactors
 
             Select Case Me.ReactorOperationMode
                 Case OperationMode.Adiabatic
-                    If Tab.HasValue Then
-                        T = Tab.Value
-                    Else
+                    If OutletTemperatureIsEstimate AndAlso OutletTemperature > 0.0 Then
                         T = OutletTemperature
+                        OutletTemperatureIsEstimate = False
+                    ElseIf Tab.HasValue Then
+                        T = Tab.Value
+                    ElseIf OutletTemperature > 0.0 Then
+                        T = OutletTemperature
+                    Else
+                        T = T0
                     End If
                 Case OperationMode.Isothermic
                     T = T0
@@ -1717,6 +1720,9 @@ Namespace Reactors
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
             Vy = tmp.GetVaporPhaseMoleFractions
+            'an absent phase leaves its outlet empty, with the overall composition of the product
+            If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()
+            If xv = 0.0# OrElse Vy.Sum() <= 0.0# Then Vy = ims.GetOverallComposition()
 
             Dim ids = ims.PropertyPackage.RET_VNAMES().ToList
 
@@ -1820,7 +1826,7 @@ Namespace Reactors
                         comp.MoleFraction = Vx(ids.IndexOf(comp.Name))
                         comp.MassFraction = Vwx(ids.IndexOf(comp.Name))
                     Next
-                    .Phases(0).Properties.enthalpy = (H - Hv * wv) / (1 - wv)
+                    .Phases(0).Properties.enthalpy = If(wv < 1.0#, (H - Hv * wv) / (1 - wv), H)
                     .Phases(0).Properties.massflow = W * (1 - wv)
                 End With
 
@@ -1830,8 +1836,8 @@ Namespace Reactors
 
             End If
 
-            'energy stream - update energy flow value (kW)
-            If GetInletEnergyStream(1) IsNot Nothing Then
+            'energy stream - update energy flow value (kW); in the adiabatic mode it is a heat input and stays
+            If ReactorOperationMode <> OperationMode.Adiabatic AndAlso GetInletEnergyStream(1) IsNot Nothing Then
                 With GetInletEnergyStream(1)
                     .EnergyFlow = Me.DeltaQ.GetValueOrDefault
                     .GraphicObject.Calculated = True
@@ -1839,6 +1845,7 @@ Namespace Reactors
                     DRW?.AppendLine(String.Format("Energy Stream: {0} kW", .EnergyFlow))
                     DRW?.AppendLine()
                 End With
+                WrittenEnergyFlow = Me.DeltaQ.GetValueOrDefault
             End If
 
             StoreDebugReport(DRW)
@@ -1857,9 +1864,7 @@ Namespace Reactors
             Qin = 0.0
 
             'energy stream
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                Qin = GetInletEnergyStream(1).EnergyFlow.GetValueOrDefault()
-            End If
+            Qin = InletHeatInput()
 
             Dim DRW = GetDebugWriter()
 
@@ -2030,10 +2035,15 @@ Namespace Reactors
 
             Select Case Me.ReactorOperationMode
                 Case OperationMode.Adiabatic
-                    If Tab.HasValue Then
-                        T = Tab.Value
-                    Else
+                    If OutletTemperatureIsEstimate AndAlso OutletTemperature > 0.0 Then
                         T = OutletTemperature
+                        OutletTemperatureIsEstimate = False
+                    ElseIf Tab.HasValue Then
+                        T = Tab.Value
+                    ElseIf OutletTemperature > 0.0 Then
+                        T = OutletTemperature
+                    Else
+                        T = T0
                     End If
                 Case OperationMode.Isothermic
                     T = T0
@@ -2523,6 +2533,9 @@ Namespace Reactors
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
             Vy = tmp.GetVaporPhaseMoleFractions
+            'an absent phase leaves its outlet empty, with the overall composition of the product
+            If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()
+            If xv = 0.0# OrElse Vy.Sum() <= 0.0# Then Vy = ims.GetOverallComposition()
 
             Dim ids = ims.PropertyPackage.RET_VNAMES().ToList
 
@@ -2592,7 +2605,7 @@ Namespace Reactors
                         comp.MoleFraction = Vx(ids.IndexOf(comp.Name))
                         comp.MassFraction = Vwx(ids.IndexOf(comp.Name))
                     Next
-                    .Phases(0).Properties.enthalpy = (H - Hv * wv) / (1 - wv)
+                    .Phases(0).Properties.enthalpy = If(wv < 1.0#, (H - Hv * wv) / (1 - wv), H)
                     .Phases(0).Properties.massflow = W * (1 - wv)
                 End With
 
@@ -2612,6 +2625,7 @@ Namespace Reactors
                         DRW?.AppendLine(String.Format("Energy Stream: {0} kW", .EnergyFlow))
                         DRW?.AppendLine()
                     End With
+                    WrittenEnergyFlow = Me.DeltaQ.GetValueOrDefault
                 End If
             End If
 
@@ -2632,9 +2646,7 @@ Namespace Reactors
             Dim Qin As Double = 0.0
 
             'energy stream
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                Qin = GetInletEnergyStream(1).EnergyFlow.GetValueOrDefault()
-            End If
+            Qin = InletHeatInput()
 
             Dim DRW = GetDebugWriter()
 
@@ -2810,7 +2822,7 @@ Namespace Reactors
                 Select Case Me.ReactorOperationMode
                     Case OperationMode.Adiabatic
                         T = OutletTemperature
-                        If Math.Abs(T - T0) > 100.0 Then T = T0
+                        If T <= 0.0 OrElse Math.Abs(T - T0) > 100.0 Then T = T0
                     Case OperationMode.Isothermic
                         T = T0
                     Case OperationMode.OutletTemperature
@@ -3302,6 +3314,9 @@ Namespace Reactors
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
             Vy = tmp.GetVaporPhaseMoleFractions
+            'an absent phase leaves its outlet empty, with the overall composition of the product
+            If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()
+            If xv = 0.0# OrElse Vy.Sum() <= 0.0# Then Vy = ims.GetOverallComposition()
 
             Dim ids = ims.PropertyPackage.RET_VNAMES().ToList
 
@@ -3371,7 +3386,7 @@ Namespace Reactors
                         comp.MoleFraction = Vx(ids.IndexOf(comp.Name))
                         comp.MassFraction = Vwx(ids.IndexOf(comp.Name))
                     Next
-                    .Phases(0).Properties.enthalpy = (H - Hv * wv) / (1 - wv)
+                    .Phases(0).Properties.enthalpy = If(wv < 1.0#, (H - Hv * wv) / (1 - wv), H)
                     .Phases(0).Properties.massflow = W * (1 - wv)
                 End With
 
@@ -3391,6 +3406,7 @@ Namespace Reactors
                         DRW?.AppendLine(String.Format("Energy Stream: {0} kW", .EnergyFlow))
                         DRW?.AppendLine()
                     End With
+                    WrittenEnergyFlow = Me.DeltaQ.GetValueOrDefault
                 End If
             End If
 
@@ -3560,6 +3576,7 @@ Namespace Reactors
         Public Overrides Function SetPropertyValue(ByVal prop As String, ByVal propval As Object, Optional ByVal su As Interfaces.IUnitsOfMeasure = Nothing) As Boolean
 
             If MyBase.SetPropertyValue(prop, propval, su) Then Return True
+            If Not prop.StartsWith("PROP_") Then Return SetNamedPropertyValue(prop, propval)
 
             If su Is Nothing Then su = New SystemsOfUnits.SI
             Dim cv As New SystemsOfUnits.Converter

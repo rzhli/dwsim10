@@ -298,10 +298,11 @@ namespace DWSIM.Automation.DynamicRunner
 
             // A resumed run picks up the clock, the recorded history and the controllers' state
             // exactly as the paused one left them; only a fresh run starts any of that over.
+            bool restored = false;
             if (!options.Resume)
             {
-                if (options.RestoreInitialState && !options.RealTime && !schedule.UseCurrentStateAsInitial)
-                    RestoreState(flowsheet, schedule.InitialFlowsheetStateID);
+                if (options.RestoreInitialState && !schedule.UseCurrentStateAsInitial)
+                    restored = RestoreState(flowsheet, schedule.InitialFlowsheetStateID);
 
                 integrator.MonitoredVariableValues.Clear();
             }
@@ -315,7 +316,9 @@ namespace DWSIM.Automation.DynamicRunner
 
             if (!options.Resume)
             {
-                foreach (var c in controllers) c.Reset();
+                // From a stored state every loop starts from the valve opening the state carries; a plain
+                // reset sent it back to its offset on the first step.
+                foreach (var c in controllers) { if (restored) c.StartFromManipulatedVariable(); else c.Reset(); }
                 foreach (var m in mpcControllers) m.Reset();
                 foreach (var c in pyControllers) c.ResetRequested = true;
 
@@ -354,6 +357,11 @@ namespace DWSIM.Automation.DynamicRunner
 
             // Simulated time already covered, which a resumed run carries on from.
             double i = options.Resume ? (integrator.CurrentTime - new DateTime()).TotalSeconds : 0;
+
+            // Events stamped at the start of the run (a span, a setpoint or a mode at 00:00:00) act
+            // before the first step: the loop applies each step's events after the controllers.
+            if (!options.Resume && schedule.UsesEventList)
+                ApplyStartEvents(flowsheet, schedule.CurrentEventList, integrator.CurrentTime);
 
             var runClock = Stopwatch.StartNew();
 
@@ -461,13 +469,12 @@ namespace DWSIM.Automation.DynamicRunner
 
                     sw.Stop();
 
-                    if (!options.RealTime)
-                    {
-                        if (schedule.UsesEventList)
-                            ProcessEvents(flowsheet, schedule.CurrentEventList, integrator.CurrentTime, integrator.IntegrationStep);
-                        if (schedule.UsesCauseAndEffectMatrix)
-                            ProcessCEMatrix(flowsheet, schedule.CurrentCauseAndEffectMatrix);
-                    }
+                    // Events and the cause-and-effect matrix act in real time too, over the real-time step:
+                    // the matrix is the plant's interlock, and real time is when an operator drives the plant.
+                    if (schedule.UsesEventList)
+                        ProcessEvents(flowsheet, schedule.CurrentEventList, integrator.CurrentTime, TimeSpan.FromSeconds(interval));
+                    if (schedule.UsesCauseAndEffectMatrix)
+                        ProcessCEMatrix(flowsheet, schedule.CurrentCauseAndEffectMatrix);
 
                     i += interval;
                 }
@@ -556,12 +563,13 @@ namespace DWSIM.Automation.DynamicRunner
         }
 
         /// <summary>Reloads a stored flowsheet state (the schedule's starting point).</summary>
-        public static void RestoreState(IFlowsheet flowsheet, string stateID)
+        public static bool RestoreState(IFlowsheet flowsheet, string stateID)
         {
-            if (string.IsNullOrEmpty(stateID)) return;
-            if (!flowsheet.StoredSolutions.ContainsKey(stateID)) return;
+            if (string.IsNullOrEmpty(stateID)) return false;
+            if (!flowsheet.StoredSolutions.ContainsKey(stateID)) return false;
             flowsheet.LoadProcessData(flowsheet.StoredSolutions[stateID]);
             flowsheet.UpdateInterface();
+            return true;
         }
 
         /// <summary>
@@ -657,6 +665,22 @@ namespace DWSIM.Automation.DynamicRunner
             }
         }
 
+        private static void ApplyStartEvents(IFlowsheet flowsheet, string eventsetID, DateTime start)
+        {
+            if (!flowsheet.DynamicsManager.EventSetList.ContainsKey(eventsetID)) return;
+            foreach (var ev in flowsheet.DynamicsManager.EventSetList[eventsetID].Events.Values)
+            {
+                if (!ev.Enabled || ev.TimeStamp > start) continue;
+                if (ev.EventType != Dynamics.DynamicsEventType.ChangeProperty) continue;
+                if (!flowsheet.SimulationObjects.ContainsKey(ev.SimulationObjectID)) continue;
+                var target = flowsheet.SimulationObjects[ev.SimulationObjectID];
+                var value = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertForPropertyWrite(
+                    target, ev.SimulationObjectProperty, ev.SimulationObjectPropertyUnits,
+                    ev.SimulationObjectPropertyValue.ToDoubleFromInvariant());
+                target.SetPropertyValue(ev.SimulationObjectProperty, value);
+            }
+        }
+
         private void ProcessEvents(IFlowsheet flowsheet, string eventsetID, DateTime currentposition, TimeSpan interval)
         {
             if (!flowsheet.DynamicsManager.EventSetList.ContainsKey(eventsetID)) return;
@@ -701,6 +725,11 @@ namespace DWSIM.Automation.DynamicRunner
                 if (!item.Enabled) continue;
                 if (!flowsheet.SimulationObjects.ContainsKey(item.AssociatedIndicator)) continue;
                 var indicator = (IIndicator)flowsheet.SimulationObjects[item.AssociatedIndicator];
+
+                // A gauge works out its alarms in Calculate, which only the drawing called: a run with the
+                // gauge off screen, or with no interface at all, never fired the matrix.
+                try { flowsheet.SimulationObjects[item.AssociatedIndicator].Calculate(); }
+                catch { }
 
                 bool fire;
                 switch (item.AssociatedIndicatorAlarm)

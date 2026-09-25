@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -14,6 +14,7 @@ using DWSIM.Interfaces.Enums.GraphicObjects;
 using DWSIM.Thermodynamics.BaseClasses;
 using DWSIM.Thermodynamics.Streams;
 using DWSIM.UI.Shared.Avalonia;
+using LightEndsMix = DWSIM.SharedClasses.Utilities.PetroleumCharacterization.Assay.LightEnds;
 
 namespace DWSIM.UI.Desktop.Avalonia;
 
@@ -28,8 +29,11 @@ public sealed class DistillationCurveWindow : Window
     private readonly DWSIM.UI.Desktop.Editors.DistCurveCharacterizer _c = new();
 
     private ComboBox _curveType = null!, _curveBasis = null!, _decSep1 = null!, _decSep2 = null!, _pseudoMode = null!;
+    private ComboBox _lightEndsBasis = null!;
     private CheckBox _chkMW = null!, _chkSG = null!, _chkV100 = null!, _chkV210 = null!;
+    private CheckBox _chkLightEndsInCurve = null!;
     private TextBox _curveData = null!, _pseudoData = null!;
+    private CompoundFractionList _lightEnds = null!;
 
     private readonly TextBlock _status = new() { FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(11), Opacity = 0.85, TextWrapping = TextWrapping.Wrap };
     private Button _btnRun = null!;
@@ -117,6 +121,17 @@ public sealed class DistillationCurveWindow : Window
         p.CreateAndAddTextBoxRow(nf, "Naphthenes (wt %)", _c.pnaNaphthenes, (tb, e) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _c.pnaNaphthenes = v; });
         p.CreateAndAddTextBoxRow(nf, "Aromatics (wt %)", _c.pnaAromatics, (tb, e) => { if (UtilityHelpers.TryVal(tb.Text, out var v)) _c.pnaAromatics = v; });
 
+        p.CreateAndAddLabelRow("Light Ends");
+        p.CreateAndAddDescriptionRow("The compounds an assay reports apart from the curve: methane through the pentanes, each with its fraction of the whole crude. They are a few per cent and they set the front end of the flash. Add one row per compound, with its percentage beside it; a compound that is not in the simulation yet is added when the characterization runs. Leave the list empty if the assay has none.");
+        _lightEndsBasis = p.CreateAndAddDropDownRow("Light Ends Basis",
+            new List<string> { "Molar (%)", "Mass (%)", "Liquid Volume (%)" }, 0, null);
+        p.CreateAndAddDescriptionRow("The volume basis counts each light end with its liquid density at 15.6 C, which for the lightest of them is the pseudo-liquid density the assay itself is written with.");
+        _chkLightEndsInCurve = p.CreateAndAddCheckBoxRow("The distillation curve already includes the light ends", false, null);
+        p.CreateAndAddDescriptionRow("Leave this off for an ordinary assay, where the curve is run on what is left after the light ends are stripped off. Turning it on cuts the pseudocomponents above the light ends instead of over the whole curve, and then both have to be given on the same basis.");
+        _lightEnds = new CompoundFractionList(
+            () => LightEndsMix.Candidates(_flowsheet.AvailableCompounds.Values));
+        p.Children.Add(_lightEnds);
+
         p.CreateAndAddLabelRow("Curve Data");
         p.CreateAndAddDescriptionRow("Enter curve data in the field below, separating the column values with spaces. Values should be input without thousands separator. First column is the curve basis data, following columns should contain the data according to the curve selection above.");
         p.CreateAndAddDescriptionRow("Current Temperature units: " + su.temperature);
@@ -153,7 +168,8 @@ public sealed class DistillationCurveWindow : Window
         DockPanel.SetDock(bottom, global::Avalonia.Controls.Dock.Bottom);
         dock.Children.Add(bottom);
         dock.Children.Add(_btnRun);
-        dock.Children.Add(new ScrollViewer { Content = p, Padding = new Thickness(8) });
+        // room under the last row, so it does not end up behind the button docked at the bottom
+        dock.Children.Add(new ScrollViewer { Content = p, Padding = new Thickness(8, 8, 8, 28) });
         return dock;
     }
 
@@ -172,6 +188,16 @@ public sealed class DistillationCurveWindow : Window
         _c.hasvisc210c = _chkV210.IsChecked.GetValueOrDefault();
         _c.decsep = _decSep1.SelectedIndex == 1 ? "," : ".";
         var decsep2 = _decSep2.SelectedIndex == 1 ? "," : ".";
+
+        try
+        {
+            ParseLightEnds();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Error reading the light ends: " + ex.Message;
+            return;
+        }
 
         try
         {
@@ -232,6 +258,7 @@ public sealed class DistillationCurveWindow : Window
             }
 
             AddToFlowsheet(comps);
+            StoreAssay();
             _flowsheet.UpdateInterface();
             _status.Text = $"Material stream '{_c.assayname}' added with {comps.Count} generated compound(s).";
             _flowsheet.ShowMessage(_status.Text, IFlowsheet.MessageType.Information);
@@ -325,6 +352,61 @@ public sealed class DistillationCurveWindow : Window
         return await dlg.ShowDialog<bool>(this);
     }
 
+    /// <summary>
+    /// Reads the light ends the way an assay reports them, one per line: a compound name, a comma
+    /// and a percentage of the whole crude.
+    /// </summary>
+    private void ParseLightEnds()
+    {
+        _c.lightEndsCompounds.Clear();
+        _c.lightEndsFractions.Clear();
+        _c.lightEndsBasis = _lightEndsBasis.SelectedIndex switch
+        {
+            1 => LightEndsMix.MassBasis,
+            2 => LightEndsMix.VolumeBasis,
+            _ => LightEndsMix.MoleBasis,
+        };
+        _c.lightEndsIncludedInCurve = _chkLightEndsInCurve.IsChecked.GetValueOrDefault();
+
+        foreach (var row in _lightEnds.Rows)
+        {
+            _c.lightEndsCompounds.Add(row.Compound);
+            _c.lightEndsFractions.Add(row.Percent / 100.0);
+        }
+
+        // said here rather than deep inside the characterization, so a name that cannot be a light
+        // end is heard before the fitting runs
+        var issues = _c.ValidateLightEnds();
+        var warnings = issues.Where(i => !i.Blocking).Select(i => i.Message).ToList();
+        if (warnings.Count > 0) _status.Text = string.Join(" ", warnings);
+    }
+
+    /// <summary>
+    /// Keeps the assay with the simulation, so the curve, the contaminants and the light ends that
+    /// were typed here survive the save and can be read again in the assay manager. The Windows
+    /// interface has a button for this; here it follows the characterization, which is the only
+    /// moment the assay is complete.
+    /// </summary>
+    private void StoreAssay()
+    {
+        try
+        {
+            // the list lives on the concrete options class, not on the interface
+            var options = (global::DWSIM.SharedClasses.DWSIM.Flowsheet.FlowsheetVariables)_flowsheet.FlowsheetOptions;
+            if (options.PetroleumAssays == null)
+                options.PetroleumAssays = new Dictionary<string, DWSIM.SharedClasses.Utilities.PetroleumCharacterization.Assay.Assay>();
+
+            var assay = _c.BuildAssay();
+            assay.Name = _c.assayname;
+            options.PetroleumAssays[assay.Name] = assay;
+        }
+        catch (Exception ex)
+        {
+            _flowsheet.ShowMessage("The assay could not be stored with the simulation: " + ex.Message,
+                IFlowsheet.MessageType.Warning);
+        }
+    }
+
     private void AddToFlowsheet(Dictionary<string, Compound> comps)
     {
         foreach (var comp in comps.Values)
@@ -346,10 +428,31 @@ public sealed class DistillationCurveWindow : Window
             }
         }
 
+        // the light ends are real compounds: they only have to be selected into the simulation, and
+        // they carry the mole fractions the characterization gave them
+        foreach (var name in _c.LightEndsMoleFractions.Keys)
+        {
+            if (!_flowsheet.SelectedCompounds.ContainsKey(name))
+                _flowsheet.SelectedCompounds.Add(name, _flowsheet.AvailableCompounds[name]);
+
+            foreach (MaterialStream obj in _flowsheet.SimulationObjects.Values
+                         .Where(x => x.GraphicObject != null && x.GraphicObject.ObjectType == ObjectType.MaterialStream))
+            {
+                foreach (var phase in obj.Phases.Values)
+                {
+                    if (phase.Compounds.ContainsKey(name)) continue;
+                    phase.Compounds.Add(name, new Compound(name, ""));
+                    phase.Compounds[name].ConstantProperties = _flowsheet.SelectedCompounds[name];
+                }
+            }
+        }
+
         var ms = (MaterialStream)_flowsheet.AddObject(ObjectType.MaterialStream, 100, 100, _c.assayname);
 
         double wtotal = comps.Values
             .Select(x => x.MoleFraction.GetValueOrDefault() * x.ConstantProperties.Molar_Weight).Sum();
+        wtotal += _c.LightEndsMoleFractions
+            .Select(x => x.Value * _flowsheet.SelectedCompounds[x.Key].Molar_Weight).Sum();
 
         foreach (var c in ms.Phases[0].Compounds.Values) { c.MassFraction = 0.0; c.MoleFraction = 0.0; }
         foreach (var c in comps.Values)
@@ -359,6 +462,12 @@ public sealed class DistillationCurveWindow : Window
                 : 0.0;
             ms.Phases[0].Compounds[c.Name].MassFraction = c.MassFraction.GetValueOrDefault();
             ms.Phases[0].Compounds[c.Name].MoleFraction = c.MoleFraction.GetValueOrDefault();
+        }
+        foreach (var le in _c.LightEndsMoleFractions)
+        {
+            var mw = _flowsheet.SelectedCompounds[le.Key].Molar_Weight;
+            ms.Phases[0].Compounds[le.Key].MoleFraction = le.Value;
+            ms.Phases[0].Compounds[le.Key].MassFraction = wtotal > 0 ? le.Value * mw / wtotal : 0.0;
         }
     }
 

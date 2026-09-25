@@ -852,7 +852,7 @@ Namespace Reactors
             AddDynamicProperty("Height", "Available Height for Liquid", 2, UnitOfMeasure.distance, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum Dynamic Pressure for this Unit Operation.", 101325, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the Reactor's available space with information from the inlet stream, if the vessel content is null.", False, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Contents", "Empties the Reactor's space on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Contents", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             RemoveDynamicProperty("Reset Content")
 
         End Sub
@@ -1072,9 +1072,7 @@ Namespace Reactors
             Qin = 0.0
 
             'energy stream
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                Qin = GetInletEnergyStream(1).EnergyFlow.GetValueOrDefault()
-            End If
+            Qin = InletHeatInput()
 
             Dim IObj As InspectorItem = Host.GetNewInspectorItem()
 
@@ -1184,12 +1182,24 @@ Namespace Reactors
 
             T0 = ims.Phases(0).Properties.temperature.GetValueOrDefault
 
+            'the previous solution is reused only when it exists and has one value per reacting compound.
+
+            Dim usePrevious As Boolean = InitializeFromPreviousSolution AndAlso
+                InitialEstimates.Count = Me.ComponentIDs.Count AndAlso
+                InitialEstimates.All(Function(v) Not Double.IsNaN(v) AndAlso Not Double.IsInfinity(v))
+
             Select Case Me.ReactorOperationMode
                 Case OperationMode.Adiabatic
-                    If Tab.HasValue Then
-                        T = Tab.Value
-                    Else
+                    'initial value only, the outlet temperature is found by the energy balance loop below.
+                    If OutletTemperatureIsEstimate AndAlso OutletTemperature > 0.0 Then
                         T = OutletTemperature
+                        OutletTemperatureIsEstimate = False
+                    ElseIf Tab.HasValue Then
+                        T = Tab.Value
+                    ElseIf usePrevious AndAlso OutletTemperature > 0.0 Then
+                        T = OutletTemperature
+                    Else
+                        T = T0
                     End If
                 Case OperationMode.Isothermic
                     T = T0
@@ -1275,13 +1285,8 @@ Namespace Reactors
             For i = 0 To N.Count - 1
                 lbo(i) = 0.0000000001
                 ubo(i) = W0tot / CProps(i).Molar_Weight * 1000 * 10.0
-                If InitializeFromPreviousSolution Then
-                    Try
-                        ival(i) = InitialEstimates(i)
-                    Catch ex As Exception
-                        InitializeFromPreviousSolution = False
-                        Throw New Exception("invalid initial estimates.")
-                    End Try
+                If usePrevious Then
+                    ival(i) = InitialEstimates(i)
                 Else
                     ival(i) = N0(Me.ComponentIDs(i))
                 End If
@@ -1355,6 +1360,9 @@ Namespace Reactors
             Dim gfunc = Function(Tx)
 
                             T = Tx
+
+                            'the flash inside the objective function runs on tms, so it must be at the current temperature.
+                            tms.SetTemperature(T)
 
                             If cnt > 0 Then
                                 For i = 0 To N.Count - 1
@@ -1486,7 +1494,6 @@ Namespace Reactors
                             For i = 0 To N.Count - 1
                                 N(keys(i)) = NFv(i)
                                 DN(keys(i)) = N(keys(i)) - N0(keys(i))
-                                i += 1
                             Next
 
                             ElementBalance = ebal
@@ -1599,8 +1606,13 @@ Namespace Reactors
 
             If ReactorOperationMode = OperationMode.Adiabatic Then
                 Dim adberror As Double
+                Dim adbcount As Integer = 0
                 Do
                     adberror = gfunc.Invoke(T)
+                    adbcount += 1
+                    If adbcount >= 100 Then
+                        Throw New Exception(String.Format("The adiabatic outlet temperature loop did not converge after {0} iterations (last temperature change: {1:F2} K).", adbcount, Math.Sqrt(adberror)))
+                    End If
                 Loop Until adberror <= 0.1
             Else
                 gfunc.Invoke(T)
@@ -1695,14 +1707,10 @@ Namespace Reactors
                     .Phases(0).Properties.pressure = P
                     Dim comp As BaseClasses.Compound
                     For Each comp In .Phases(0).Compounds.Values
-                        If xv = 0.0# Then
-                            comp.MoleFraction = 0.0#
-                            comp.MassFraction = 0.0#
-                        Else
-                            comp.MoleFraction = Vy(ids2.IndexOf(comp.Name))
-                            comp.MassFraction = Vwy(ids2.IndexOf(comp.Name))
-                        End If
+                        comp.MoleFraction = Vy(ids2.IndexOf(comp.Name))
+                        comp.MassFraction = Vwy(ids2.IndexOf(comp.Name))
                     Next
+                    If xv <= 0.0# OrElse Vy.Sum() <= 0.0# Then SetProductComposition(ms, ims.GetOverallComposition(), ids2)
                     .PropertyPackage.CurrentMaterialStream = ms
                     Hv = .PropertyPackage.DW_CalcEnthalpy(ms.GetOverallComposition(), T, P, PropertyPackages.State.Vapor)
                     .Phases(0).Properties.enthalpy = Hv
@@ -1720,16 +1728,15 @@ Namespace Reactors
                     .Phases(0).Properties.pressure = P
                     If wv < 1.0# Then .Phases(0).Properties.enthalpy = H / (1 - wv) Else .Phases(0).Properties.enthalpy = 0.0#
                     Dim comp As BaseClasses.Compound
-                    For Each comp In .Phases(0).Compounds.Values
-                        If (1 - xv) = 0.0# Then
-                            comp.MoleFraction = 0.0#
-                            comp.MassFraction = 0.0#
-                        Else
+                    If xl + xs <= 0.0# Then
+                        SetProductComposition(ms, ims.GetOverallComposition(), ids2)
+                    Else
+                        For Each comp In .Phases(0).Compounds.Values
                             comp.MoleFraction = (Vx(ids2.IndexOf(comp.Name)) * xl + Vs(ids2.IndexOf(comp.Name)) * xs) / (1 - xv)
                             comp.MassFraction = (Vwx(ids2.IndexOf(comp.Name)) * wl + Vws(ids2.IndexOf(comp.Name)) * ws) / (1 - wv)
-                        End If
-                    Next
-                    .Phases(0).Properties.enthalpy = (H - Hv * wv) / (1 - wv)
+                        Next
+                    End If
+                    .Phases(0).Properties.enthalpy = If(wv < 1.0#, (H - Hv * wv) / (1 - wv), H)
                     .Phases(0).Properties.massflow = W * (1 - wv)
                     .DefinedFlow = FlowSpec.Mass
                 End With
@@ -1741,6 +1748,7 @@ Namespace Reactors
                     .EnergyFlow = Me.DeltaQ.GetValueOrDefault
                     .GraphicObject.Calculated = True
                 End With
+                WrittenEnergyFlow = Me.DeltaQ.GetValueOrDefault
             End If
 
         End Sub
@@ -2583,14 +2591,10 @@ Namespace Reactors
                     .Phases(0).Properties.enthalpy = H / wv
                     Dim comp As BaseClasses.Compound
                     For Each comp In .Phases(0).Compounds.Values
-                        If xv = 0.0# Then
-                            comp.MoleFraction = 0.0#
-                            comp.MassFraction = 0.0#
-                        Else
-                            comp.MoleFraction = Vy(ids2.IndexOf(comp.Name))
-                            comp.MassFraction = Vwy(ids2.IndexOf(comp.Name))
-                        End If
+                        comp.MoleFraction = Vy(ids2.IndexOf(comp.Name))
+                        comp.MassFraction = Vwy(ids2.IndexOf(comp.Name))
                     Next
+                    If xv <= 0.0# OrElse Vy.Sum() <= 0.0# Then SetProductComposition(ms, ims.GetOverallComposition(), ids2)
                     .Phases(0).Properties.massflow = W * wv
                 End With
             End If
@@ -2605,15 +2609,14 @@ Namespace Reactors
                     .Phases(0).Properties.pressure = P
                     If wv < 1.0# Then .Phases(0).Properties.enthalpy = H / (1 - wv) Else .Phases(0).Properties.enthalpy = 0.0#
                     Dim comp As BaseClasses.Compound
-                    For Each comp In .Phases(0).Compounds.Values
-                        If (1 - xv) = 0.0# Then
-                            comp.MoleFraction = 0.0#
-                            comp.MassFraction = 0.0#
-                        Else
+                    If xl + xs <= 0.0# Then
+                        SetProductComposition(ms, ims.GetOverallComposition(), ids2)
+                    Else
+                        For Each comp In .Phases(0).Compounds.Values
                             comp.MoleFraction = (Vx(ids2.IndexOf(comp.Name)) * xl + Vs(ids2.IndexOf(comp.Name)) * xs) / (1 - xv)
                             comp.MassFraction = (Vwx(ids2.IndexOf(comp.Name)) * wl + Vws(ids2.IndexOf(comp.Name)) * ws) / (1 - wv)
-                        End If
-                    Next
+                        Next
+                    End If
                     .Phases(0).Properties.massflow = W * (1 - wv)
                 End With
             End If
@@ -2779,6 +2782,7 @@ Namespace Reactors
         Public Overrides Function SetPropertyValue(ByVal prop As String, ByVal propval As Object, Optional ByVal su As Interfaces.IUnitsOfMeasure = Nothing) As Boolean
 
             If MyBase.SetPropertyValue(prop, propval, su) Then Return True
+            If Not prop.StartsWith("PROP_") Then Return SetNamedPropertyValue(prop, propval)
 
             If su Is Nothing Then su = New SystemsOfUnits.SI
             Dim cv As New SystemsOfUnits.Converter

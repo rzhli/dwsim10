@@ -2740,7 +2740,11 @@ Imports DWSIM.ExtensionMethods
                 AvailableSystemsOfUnits.Add(Options.SelectedUnitSystem1)
             End If
 
-            If sver < New Version("6.3.0.0") Then
+            'Files older than 6.3 predate the option and keep the behaviour they were saved with.
+            'A file whose settings carry the option keeps its own value whatever its version says:
+            'a headless save used to write no build version at all.
+            If sver < New Version("6.3.0.0") AndAlso
+                Not data.Any(Function(x) x.Name = "SkipEquilibriumCalculationOnDefinedStreams") Then
                 Options.SkipEquilibriumCalculationOnDefinedStreams = False
             End If
 
@@ -2990,6 +2994,29 @@ Imports DWSIM.ExtensionMethods
 
         End If
 
+        If xdoc.Element("DWSIM_Simulation_Data").Element("PetroleumAssays") IsNot Nothing Then
+
+            If FlowsheetOptions.PetroleumAssays Is Nothing Then
+                FlowsheetOptions.PetroleumAssays = New Dictionary(Of String, SharedClasses.Utilities.PetroleumCharacterization.Assay.Assay)
+            End If
+            FlowsheetOptions.PetroleumAssays.Clear()
+
+            data = xdoc.Element("DWSIM_Simulation_Data").Element("PetroleumAssays").Elements.ToList
+
+            For Each xel As XElement In data
+                Try
+                    Dim obj As New SharedClasses.Utilities.PetroleumCharacterization.Assay.Assay()
+                    obj.LoadData(xel.Elements.ToList)
+                    If Not FlowsheetOptions.PetroleumAssays.ContainsKey(obj.Name) Then
+                        FlowsheetOptions.PetroleumAssays.Add(obj.Name, obj)
+                    End If
+                Catch ex As Exception
+                    excs.Add(New Exception("Error Loading Petroleum Assay Information", ex))
+                End Try
+            Next
+
+        End If
+
         Scripts = New Dictionary(Of String, Interfaces.IScript)
 
         If xdoc.Element("DWSIM_Simulation_Data").Element("ScriptItems") IsNot Nothing Then
@@ -3114,9 +3141,11 @@ Imports DWSIM.ExtensionMethods
         xdoc.Element("DWSIM_Simulation_Data").Add(New XElement("GeneralInfo"))
         xel = xdoc.Element("DWSIM_Simulation_Data").Element("GeneralInfo")
 
+        'The loader reads the build version to decide which defaults a file predates, so a
+        'headless save writes it too; without an entry assembly it is this assembly's version.
+        Dim appver = If(Assembly.GetEntryAssembly()?.GetName().Version, GetType(FlowsheetBase).Assembly.GetName().Version)
+        xel.Add(New XElement("BuildVersion", appver.ToString))
         If Not DWSIM.GlobalSettings.Settings.AutomationMode Then
-            Dim appver = Assembly.GetEntryAssembly().GetName().Version
-            xel.Add(New XElement("BuildVersion", appver.ToString))
             xel.Add(New XElement("BuildDate", CType("01/01/2000", DateTime).AddDays(appver.Build).AddSeconds(appver.Revision * 2)))
             If GlobalSettings.Settings.RunningPlatform() = GlobalSettings.Settings.Platform.Mac Then
                 xel.Add(New XElement("OSInfo", "macOS " + Environment.OSVersion.ToString()))
@@ -3238,6 +3267,20 @@ Imports DWSIM.ExtensionMethods
 
         For Each pp As Optimization.SensitivityAnalysisCase In SensAnalysisCollection
             xel.Add(New XElement("SensitivityAnalysisCase", {pp.SaveData().ToArray()}))
+        Next
+
+        ' The petroleum assays of the simulation. They were written by the Windows interface and by
+        ' nothing else, so a crude characterized in the cross-platform one lost its assay, and with it
+        ' the curve, the contaminants and the light ends, on the first save.
+        xdoc.Element("DWSIM_Simulation_Data").Add(New XElement("PetroleumAssays"))
+        xel = xdoc.Element("DWSIM_Simulation_Data").Element("PetroleumAssays")
+
+        If FlowsheetOptions.PetroleumAssays Is Nothing Then
+            FlowsheetOptions.PetroleumAssays = New Dictionary(Of String, SharedClasses.Utilities.PetroleumCharacterization.Assay.Assay)
+        End If
+
+        For Each pa In FlowsheetOptions.PetroleumAssays
+            xel.Add(New XElement("Assay", pa.Value.SaveData().ToArray()))
         Next
 
         xdoc.Element("DWSIM_Simulation_Data").Add(New XElement("ScriptItems"))

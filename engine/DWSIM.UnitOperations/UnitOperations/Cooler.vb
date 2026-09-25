@@ -262,7 +262,7 @@ Namespace UnitOperations
             AddDynamicProperty("Volume", "Cooler Volume", 1, UnitOfMeasure.volume, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum Dynamic Pressure for this Unit Operation.", 101325, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the volume content with information from the inlet stream, if the content is null.", True, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Content", "Empties the volume content on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Content", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Ambient Temperature", "Ambient temperature for heat gain calculation (K).", 298.15, UnitOfMeasure.temperature, 1.0.GetType())
             AddDynamicProperty("Ambient UA Product", "Overall heat transfer coefficient times area for ambient heat exchange (W/K). Set to 0 to disable.", 0.0, UnitOfMeasure.heat_transf_coeff, 1.0.GetType())
             AddDynamicProperty("Wall Thermal Mass", "Product of wall mass and specific heat capacity (J/K). Set to 0 to disable wall dynamics.", 0.0, UnitOfMeasure.none, 1.0.GetType())
@@ -344,7 +344,27 @@ Namespace UnitOperations
             Ha = AccumulationStream.GetMassEnthalpy
             Wa = AccumulationStream.GetMassFlow
 
-            Dim Qsource As Double = DeltaQ.GetValueOrDefault
+            ' DeltaQ is the heat removed, positive when the cooler cools, so it leaves the holdup here.
+            ' In Energy Stream mode the inlet energy stream carries heat added, as in the heater.
+
+            Dim Qsource As Double = 0.0
+
+            Select Case CalcMode
+
+                Case CalculationMode.EnergyStream
+
+                    Dim esin = GetInletEnergyStream(1)
+                    If esin IsNot Nothing Then Qsource = esin.EnergyFlow.GetValueOrDefault
+
+                Case CalculationMode.HeatRemoved
+
+                    Qsource = -DeltaQ.GetValueOrDefault
+
+            End Select
+
+            ' The efficiency scales the duty that reaches the fluid, as it does at steady state.
+
+            Qsource *= Eficiencia.GetValueOrDefault / 100.0
 
             Dim Tambient As Double = GetDynamicProperty("Ambient Temperature")
             Dim UA As Double = GetDynamicProperty("Ambient UA Product")

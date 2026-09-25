@@ -598,19 +598,13 @@ Namespace UnitOperations
                     Wi = oms.GetMassFlow
                     If Double.IsNaN(Wi) Or Double.IsInfinity(Wi) Or Wi < 0.0 Then Wi = 1.0E-20
 
-                    If ims.MaximumAllowableDynamicMassFlowRate.HasValue Then
-                        Dim WiMax = ims.MaximumAllowableDynamicMassFlowRate.Value
-                        If Wi > WiMax Then
-                            ims.SetMassFlow(WiMax)
-                            oms.SetMassFlow(WiMax)
-                        Else
-                            ims.SetMassFlow(Wi)
-                            oms.SetMassFlow(Wi)
-                        End If
-                    Else
-                        ims.SetMassFlow(Wi)
-                        oms.SetMassFlow(Wi)
+                    'the inlet may carry a limit set by the holdup upstream (a drum or sump that is nearly empty): the
+                    'flow written below, and the compositions after the Select, must carry the capped value
+                    If ims.MaximumAllowableDynamicMassFlowRate.HasValue AndAlso Wi > ims.MaximumAllowableDynamicMassFlowRate.Value Then
+                        Wi = ims.MaximumAllowableDynamicMassFlowRate.Value
                     End If
+                    ims.SetMassFlow(Wi)
+                    oms.SetMassFlow(Wi)
 
                     ims.SetMassFlow(Wi)
 
@@ -635,19 +629,13 @@ Namespace UnitOperations
 
                         Wi = CalculateDynamicMassFlow(P1, P2)
 
-                        If ims.MaximumAllowableDynamicMassFlowRate.HasValue Then
-                            Dim WiMax = ims.MaximumAllowableDynamicMassFlowRate.Value
-                            If Wi > WiMax Then
-                                ims.SetMassFlow(WiMax)
-                                oms.SetMassFlow(WiMax)
-                            Else
-                                ims.SetMassFlow(Wi)
-                                oms.SetMassFlow(Wi)
-                            End If
-                        Else
-                            ims.SetMassFlow(Wi)
-                            oms.SetMassFlow(Wi)
+                        'the inlet may carry a limit set by the holdup upstream (a drum or sump that is nearly empty): the
+                        'flow written below, and the compositions after the Select, must carry the capped value
+                        If ims.MaximumAllowableDynamicMassFlowRate.HasValue AndAlso Wi > ims.MaximumAllowableDynamicMassFlowRate.Value Then
+                            Wi = ims.MaximumAllowableDynamicMassFlowRate.Value
                         End If
+                        ims.SetMassFlow(Wi)
+                        oms.SetMassFlow(Wi)
 
                     ElseIf ims.DynamicsSpec = Dynamics.DynamicsSpecType.Flow And
                                 oms.DynamicsSpec = Dynamics.DynamicsSpecType.Pressure Then
@@ -660,8 +648,15 @@ Namespace UnitOperations
 
                         P2 = oms.GetPressure()
 
+                        If Kvc <= 0.0 AndAlso Wi > 0.0 Then
+                            Throw New Exception(String.Format("The valve is closed (Kv = 0), but its inlet stream {0} has a specified flow ({1:G4} kg/s) that a closed valve cannot pass. " +
+                                                              "Give {0} a Pressure dynamic specification, or take its flow to zero together with the valve.", ims.GraphicObject.Tag, Wi))
+                        End If
+
                         If CalcMode = CalculationMode.Kv_General Or CalcMode = CalculationMode.Kv_Gas Or CalcMode = CalculationMode.Kv_Liquid Then
-                            If ims.Phases(1).Properties.molarfraction = 1 Or CalcMode = CalculationMode.Kv_Liquid Then
+                            If Wi <= 0.0 Then
+                                P1 = P2 / 100000.0
+                            ElseIf ims.Phases(1).Properties.molarfraction = 1 Or CalcMode = CalculationMode.Kv_Liquid Then
                                 P1 = P2 / 100000.0 + 1 / (1000.0 * rho) * (Wi * 3600 / Kvc) ^ 2
                             ElseIf ims.Phases(2).Properties.molarfraction = 1 Or CalcMode = CalculationMode.Kv_Gas Then
                                 ims.PropertyPackage.CurrentMaterialStream = ims

@@ -14,7 +14,6 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
         public const string NoPropertyPackage = "NO_PROPERTY_PACKAGE";
         public const string DuplicateTag = "DUPLICATE_TAG";
         public const string StreamDangling = "STREAM_DANGLING";
-        public const string EnergyStreamHalfConnected = "ENERGY_STREAM_HALF_CONNECTED";
         public const string UnitUnconnected = "UNIT_UNCONNECTED";
         public const string UnitNoFeed = "UNIT_NO_FEED";
         public const string UnitNoProduct = "UNIT_NO_PRODUCT";
@@ -37,6 +36,9 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
         public const string RecycleNoEstimate = "RECYCLE_NO_ESTIMATE";
         public const string LogicalTargetMissing = "LOGICAL_TARGET_MISSING";
 
+        // Stale results
+        public const string PropertyPackageChanged = "PROPERTY_PACKAGE_CHANGED";
+
         // After solving
         public const string SolverException = "SOLVER_EXCEPTION";
         public const string InfiniteLoop = "INFINITE_LOOP";
@@ -55,6 +57,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
         public const string TemperatureBelowFreezing = "TEMPERATURE_BELOW_FREEZING";
         public const string ColumnRefluxBelowMinimum = "COLUMN_REFLUX_BELOW_MINIMUM";
         public const string MixerPressureMismatch = "MIXER_PRESSURE_MISMATCH";
+        public const string PumpVaporInlet = "PUMP_VAPOR_INLET";
 
         /// <summary>Every code, mapped to a one-line explanation.</summary>
         public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
@@ -64,7 +67,6 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             { NoPropertyPackage, "The flowsheet has no property package, so nothing can be flashed." },
             { DuplicateTag, "Two or more objects share a tag, so addressing one by tag is ambiguous." },
             { StreamDangling, "A stream is connected to nothing at either end." },
-            { EnergyStreamHalfConnected, "An energy stream is attached at one end only." },
             { UnitUnconnected, "A unit operation has nothing connected to it." },
             { UnitNoFeed, "A unit operation has no feed, so it has nothing to process." },
             { UnitNoProduct, "A unit operation has no product, so its result has nowhere to go." },
@@ -94,7 +96,9 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             { HeatExchangerHeatFlowReversed, "A heat exchanger moved heat from the cold side to the hot side." },
             { TemperatureBelowFreezing, "A liquid stream is below the melting point of its main compound." },
             { ColumnRefluxBelowMinimum, "A shortcut column runs below its minimum reflux ratio." },
-            { MixerPressureMismatch, "The inlets of a mixer arrive at different pressures." }
+            { MixerPressureMismatch, "The inlets of a mixer arrive at different pressures." },
+            { PumpVaporInlet, "The stream feeding a pump carries vapour." },
+            { PropertyPackageChanged, "The results of an object were computed with a property package it no longer uses." }
         };
     }
 }

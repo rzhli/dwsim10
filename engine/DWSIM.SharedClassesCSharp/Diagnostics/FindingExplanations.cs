@@ -215,15 +215,6 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                     "outlet only; a product at its inlet only.",
                     "beginner/02-mixer-basics.html"),
 
-                Entry(FlowsheetCodes.EnergyStreamHalfConnected, "Energy stream with a loose end",
-                    "An energy stream is attached to a unit at one end only.",
-                    "An energy stream carries a duty: heat into a heater, work into a pump, heat out of a cooler. A unit " +
-                    "in Energy Stream mode reads its duty from the stream, so the stream needs a value from somewhere. " +
-                    "One loose end means the duty comes from nowhere, or goes nowhere.",
-                    "Connect the other end, set the duty on the stream by hand if it is a boundary energy input, or delete " +
-                    "the stream if the unit computes its own duty from a temperature specification.",
-                    "beginner/03-heater-cooler.html"),
-
                 Entry(FlowsheetCodes.UnitUnconnected, "Unconnected unit operation",
                     "A unit operation has no stream attached to any of its ports.",
                     "The solver walks from the feeds through the units in flow order. A unit with no connections is " +
@@ -483,7 +474,23 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                     "no valve to account for it.",
                     "Put a valve on the high-pressure inlet, or a pump on the low-pressure one, so the mixing pressure " +
                     "is a decision. If the drop is intended, the finding can be ignored.",
-                    "beginner/02-mixer-basics.html")
+                    "beginner/02-mixer-basics.html"),
+
+                Entry(FlowsheetCodes.PumpVaporInlet, "Vapour in the pump feed",
+                    "The stream feeding a pump carries vapour: part of it, or all of it, in which case the pump cannot be solved.",
+                    "A pump moves liquid. Its head and power come from the liquid volumetric flow and density, so any " +
+                    "vapour in the feed is left out of the calculation, and in a real pump it cavitates or vapour-locks " +
+                    "the impeller. A feed that is all vapour leaves nothing to pump, and the solver stops.",
+                    "Cool or pressurise the feed until it is liquid, connect the pump to the liquid product of the " +
+                    "separator, or use a compressor if the stream really is a gas.",
+                    "beginner/04-simple-flash-drum.html"),
+
+                Entry(FlowsheetCodes.PropertyPackageChanged, "Results from a replaced property package",
+                    "The object still shows results computed with a property package it no longer uses.",
+                    "Replacing a property package clears nothing: every object keeps its numbers and its solved status " +
+                    "until the flowsheet is solved again, so the table in front of you was computed with the old model.",
+                    "Solve the flowsheet again before reading or comparing results.",
+                    "fundamentals/04-choosing-a-thermodynamic-model.html")
             };
 
             var map = new Dictionary<string, FindingExplanation>(StringComparer.Ordinal);

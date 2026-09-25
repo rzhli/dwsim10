@@ -335,6 +335,7 @@ Namespace UnitOperations
                 For Each xel In aelh.Elements
                     Dim as1 As New Thermodynamics.Streams.MaterialStream()
                     as1.LoadData(xel.Elements.ToList)
+                    BindLoadedContents(as1)
                     AccumulationStreamsHot.Add(as1)
                 Next
             End If
@@ -343,6 +344,7 @@ Namespace UnitOperations
                 For Each xel In aelc.Elements
                     Dim as1 As New Thermodynamics.Streams.MaterialStream()
                     as1.LoadData(xel.Elements.ToList)
+                    BindLoadedContents(as1)
                     AccumulationStreamsCold.Add(as1)
                 Next
             End If
@@ -579,7 +581,7 @@ Namespace UnitOperations
             AddDynamicProperty("Hot Side Pressure", "Dynamic Pressure for the Hot Fluid side.", 101325, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum Dynamic Pressure for this Unit Operation.", 101325, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Streams", "Initializes the volume contents with information from the inlet streams, if the content is null.", False, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Contents", "Empties the volume contents on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Contents", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Fouling Rate", "Linear fouling growth rate in m2.K/kW per second. Set to 0 to disable.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Current Fouling Resistance", "Current total fouling resistance (m2.K/kW).", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Wall Thermal Mass", "Product of wall mass and specific heat (J/K). Set to 0 for instantaneous heat transfer.", 0.0, UnitOfMeasure.none, 1.0.GetType())
@@ -1815,6 +1817,8 @@ Namespace UnitOperations
 
             Else
 
+                ' Co-current: the outlets meet at one temperature. The counter-current bound brackets that
+                ' duty from above; the value left by the previous solve did not, and was zero on a first solve.
                 MaxHeatExchange = MathNet.Numerics.RootFinding.Brent.FindRoot(
                     Function(q)
 
@@ -1844,7 +1848,7 @@ Namespace UnitOperations
 
                         Return Thx - Tcx
 
-                    End Function, 0.0, MaxHeatExchange)
+                    End Function, 0.0, Min(DeltaHc, DeltaHh))
 
             End If
 
@@ -2335,6 +2339,9 @@ Namespace UnitOperations
                             Dim tmp = StInCold.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.PressureTemperature, Pc2, Tc2, 0)
                             Hc2 = OverriddenEnthalpy(StInCold, Pc2, Tc2, tmp.CalculatedEnthalpy)
                             Q = Wc * (Hc2 - Hc1)
+                            If Q <= 0.0 Then
+                                Throw New ArgumentException(String.Format("The cold fluid outlet temperature ({0:F2} K) is not above the cold fluid inlet ({1:F2} K), so the exchanger would cool the cold fluid. Enter a cold outlet temperature between the cold inlet and the hot inlet ({2:F2} K), or specify the hot fluid outlet.", Tc2, Tc1, Th1))
+                            End If
                             DeltaHh = -(Q + HeatLoss) / Wh
                             Hh2 = Hh1 + DeltaHh
                             StInHot.PropertyPackage.CurrentMaterialStream = StInHot
@@ -2354,6 +2361,9 @@ Namespace UnitOperations
                             Dim tmp = StInHot.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.PressureTemperature, Ph2, Th2, 0)
                             Hh2 = OverriddenEnthalpy(StInHot, Ph2, Th2, tmp.CalculatedEnthalpy)
                             Q = -Wh * (Hh2 - Hh1)
+                            If Q <= 0.0 Then
+                                Throw New ArgumentException(String.Format("The hot fluid outlet temperature ({0:F2} K) is not below the hot fluid inlet ({1:F2} K), so the exchanger would heat the hot fluid. Enter a hot outlet temperature between the cold inlet ({2:F2} K) and the hot inlet, or specify the cold fluid outlet.", Th2, Th1, Tc1))
+                            End If
                             DeltaHc = (Q - HeatLoss) / Wc
                             Hc2 = Hc1 + DeltaHc
                             StInCold.PropertyPackage.CurrentMaterialStream = StInCold
@@ -3249,13 +3259,15 @@ Namespace UnitOperations
 
                 Next
 
-                Me.HeatProfile = qprof.ToArray
-                Me.TemperatureProfileCold = tcprof.ToArray
-                Me.TemperatureProfileHot = thprof.ToArray
-
                 If Not PinchPointAtOutlets And FlowDir = FlowDirection.CounterCurrent Then
                     thprof.Reverse()
                 End If
+
+                ' Stored after the reversal, as the pinch point mode does: in counter-current the hot
+                ' fluid at a point of the heat axis is the one facing the cold fluid there.
+                Me.HeatProfile = qprof.ToArray
+                Me.TemperatureProfileCold = tcprof.ToArray
+                Me.TemperatureProfileHot = thprof.ToArray
 
                 ' Signed on purpose: where the hot stream runs colder than the cold stream the
                 ' approach is negative and the arrangement is infeasible. Taking the absolute value
@@ -4170,6 +4182,64 @@ Namespace UnitOperations
                 Return p
             End If
         End Function
+
+        ''' <summary>Chart names the PFD chart object can embed: the heat exchange (T-Q) profile of the last calculation.</summary>
+        Public Overrides Function GetChartModelNames() As List(Of String)
+            Return New List(Of String)({"Heat Exchange Profile"})
+        End Function
+
+        ''' <summary>Builds an OxyPlot model of the hot and cold temperature profiles against the heat exchanged, in the flowsheet's units.</summary>
+        Public Overrides Function GetChartModel(name As String) As Object
+
+            If name <> "Heat Exchange Profile" Then Return Nothing
+            If HeatProfile Is Nothing OrElse HeatProfile.Length = 0 Then Return Nothing
+            If TemperatureProfileHot Is Nothing OrElse TemperatureProfileCold Is Nothing Then Return Nothing
+
+            Dim su = FlowSheet.FlowsheetOptions.SelectedUnitSystem
+
+            Dim model = New OxyPlot.PlotModel() With {.Subtitle = name, .Title = GraphicObject.Tag}
+            model.TitleFontSize = 11
+            model.SubtitleFontSize = 10
+            model.LegendFontSize = 9
+            model.LegendPlacement = OxyPlot.LegendPlacement.Outside
+            model.LegendOrientation = OxyPlot.LegendOrientation.Horizontal
+            model.LegendPosition = OxyPlot.LegendPosition.BottomCenter
+            model.TitleHorizontalAlignment = OxyPlot.TitleHorizontalAlignment.CenteredWithinView
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Bottom,
+                .FontSize = 10,
+                .Title = "Heat exchanged (" + su.heatflow + ")"
+            })
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Left,
+                .FontSize = 10,
+                .Title = "Temperature (" + su.temperature + ")"
+            })
+
+            Dim q = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertArrayFromSI(su.heatflow, HeatProfile)
+            Dim th = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertArrayFromSI(su.temperature, TemperatureProfileHot)
+            Dim tc = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertArrayFromSI(su.temperature, TemperatureProfileCold)
+
+            Dim hot As New OxyPlot.Series.LineSeries() With {.Title = "Hot fluid", .StrokeThickness = 1.5, .Color = OxyPlot.OxyColors.Red, .MarkerType = OxyPlot.MarkerType.Circle, .MarkerSize = 3}
+            For j = 0 To Math.Min(q.Length, th.Length) - 1
+                If Not Double.IsNaN(th(j)) Then hot.Points.Add(New OxyPlot.DataPoint(q(j), th(j)))
+            Next
+            model.Series.Add(hot)
+
+            Dim cold As New OxyPlot.Series.LineSeries() With {.Title = "Cold fluid", .StrokeThickness = 1.5, .Color = OxyPlot.OxyColors.Blue, .MarkerType = OxyPlot.MarkerType.Circle, .MarkerSize = 3}
+            For j = 0 To Math.Min(q.Length, tc.Length) - 1
+                If Not Double.IsNaN(tc(j)) Then cold.Points.Add(New OxyPlot.DataPoint(q(j), tc(j)))
+            Next
+            model.Series.Add(cold)
+
+            Return model
+
+        End Function
+
     End Class
 
 End Namespace

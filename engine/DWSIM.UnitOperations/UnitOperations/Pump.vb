@@ -787,12 +787,13 @@ Namespace UnitOperations
             AddDynamicProperty("Volume", "Internal volume of the pump casing.", 0.01, UnitOfMeasure.volume, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum dynamic pressure.", 101325.0, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the volume content from the inlet stream.", True, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Content", "Empties the volume content on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Content", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Rotational Inertia", "Moment of inertia J of the pump+motor assembly (kg.m2). Set to 0 for instantaneous speed changes.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Current Speed", "Current rotational speed (RPM).", 1450.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Target Speed", "Target rotational speed (RPM). Speed ramps towards this value based on inertia.", 1450.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Motor Torque", "Available motor torque (N.m).", 100.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Rated Speed", "Speed (RPM) at which the pump delivers its full pressure rise. The dynamic pressure rise scales with (Current Speed / Rated Speed)^2, so a pump coasting down loses head.", 1450.0, UnitOfMeasure.none, 1.0.GetType())
+            AddDynamicProperty("Integrate Casing Holdup", "Integrates the casing volume as a capacity. When False (default) the pump passes the flow through and adds its head to the inlet pressure.", False, UnitOfMeasure.none, True.GetType())
 
         End Sub
 
@@ -869,6 +870,10 @@ Namespace UnitOperations
             oms.SetMassEnthalpy(H2)
             oms.SetMassFlow(Wi)
             oms.SetPressure(Pi + DeltaPdyn)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
             Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
             If esin IsNot Nothing Then
@@ -917,6 +922,10 @@ Namespace UnitOperations
             oms.SetMassEnthalpy(H2)
             oms.SetMassFlow(Wd)
             oms.SetPressure(P2)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
             Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
             If esin IsNot Nothing Then
@@ -1076,6 +1085,10 @@ Namespace UnitOperations
             oms.SetTemperature(AccumulationStream.GetTemperature)
             oms.SetMassEnthalpy(AccumulationStream.GetMassEnthalpy)
             oms.SetPressure(Pressure + DeltaP)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
         End Sub
 
@@ -1395,6 +1408,13 @@ Namespace UnitOperations
                 FlowSheet.ShowMessage(GraphicObject.Tag + ": " + FlowSheet.GetTranslatedString("Vapor phase detected in pump inlet"), IFlowsheet.MessageType.Warning)
             End If
 
+            'The head and the power come from the liquid part of the feed. With no liquid at all the
+            'pump would report zero power and a meaningless outlet, so it stops here instead.
+            If msin.Phases(0).Properties.massflow.GetValueOrDefault() > 0.0 AndAlso
+                msin.Phases(1).Properties.massflow.GetValueOrDefault() <= 0.0 Then
+                Throw New ArgumentException("The inlet stream carries no liquid, so there is nothing for a pump to move. Cool or pressurise the feed until it condenses, or use a compressor if it is a gas.")
+            End If
+
             Me.PropertyPackage.CurrentMaterialStream = msin
 
             Me.PropertyPackage.CurrentMaterialStream.Validate()
@@ -1695,11 +1715,16 @@ Namespace UnitOperations
                     Pout = P2
                     Me.DeltaP = P2 - Pi
 
+                    'At steady state the machine passes what it is fed, so the balance closes: the flow its
+                    'displacement and speed would deliver is reported, and a mismatch is flagged with the
+                    'speed that would deliver the feed. In dynamics it is a flow source (RunDynamicModel).
+                    Dim qpass = If(Wi > 0.0, Wi / rho_li, qd)
+
                     'the shaft power of a displacement machine is the volume it moves against the
                     'pressure difference it moves it against, over the mechanical efficiency
-                    Me.DeltaQ = qd * (P2 - Pi) / 1000.0 / (Me.Eficiencia.GetValueOrDefault / 100)
+                    Me.DeltaQ = qpass * (P2 - Pi) / 1000.0 / (Me.Eficiencia.GetValueOrDefault / 100)
 
-                    H2 = Hi + Me.DeltaQ.GetValueOrDefault / Math.Max(DeliveredMassFlow, 0.000000001)
+                    H2 = Hi + Me.DeltaQ.GetValueOrDefault / Math.Max(qpass * rho_li, 0.000000001)
                     CheckSpec(H2, False, "outlet enthalpy")
 
                     IObj?.SetCurrent()
@@ -1710,7 +1735,8 @@ Namespace UnitOperations
                     Me.DeltaT = T2 - Ti
 
                     If Wi > 0.0 AndAlso Math.Abs(DeliveredMassFlow - Wi) > 0.001 * Wi Then
-                        FlowSheet?.ShowMessage(String.Format("{0}: the machine displaces {1:G4} kg/s at {2:G4} rpm while the stream feeding it carries {3:G4} kg/s. The outlet takes the displaced flow, so the balance only closes once the feed is set to it, or a recycle or an adjust makes it match.", GraphicObject?.Tag, DeliveredMassFlow, OperatingSpeed, Wi), IFlowsheet.MessageType.Warning)
+                        Dim nfeed = OperatingSpeed * Wi / DeliveredMassFlow
+                        FlowSheet?.ShowMessage(String.Format("{0}: the machine displaces {1:G4} kg/s at {2:G4} rpm while the stream feeding it carries {3:G4} kg/s. The steady state passes the feed flow; {4:G4} rpm would deliver it. In a dynamic run the displaced flow sets the line.", GraphicObject?.Tag, DeliveredMassFlow, OperatingSpeed, Wi, nfeed), IFlowsheet.MessageType.Warning)
                     End If
 
                     Try
@@ -1855,9 +1881,9 @@ Namespace UnitOperations
                         comp.MassFraction = msin.Phases(0).Compounds(comp.Name).MassFraction
                         i += 1
                     Next
-                    'a positive displacement machine sets the flow of the line it feeds; every
-                    'other mode passes on the flow it is given
-                    If CalcMode = CalculationMode.PositiveDisplacement Then
+                    'every mode passes on the flow it is given at steady state; a positive displacement
+                    'machine sets the flow of its line in dynamics only
+                    If CalcMode = CalculationMode.PositiveDisplacement AndAlso msin.Phases(0).Properties.massflow.GetValueOrDefault <= 0.0 Then
                         .Phases(0).Properties.massflow = DeliveredMassFlow
                     Else
                         .Phases(0).Properties.massflow = msin.Phases(0).Properties.massflow.GetValueOrDefault
@@ -2315,6 +2341,112 @@ Namespace UnitOperations
             Else
                 Return p
             End If
+        End Function
+
+
+        ''' <summary>Chart names the PFD chart object can embed: the performance curves of every measured speed with the operating point.</summary>
+        Public Overrides Function GetChartModelNames() As List(Of String)
+            If CalcMode <> CalculationMode.Curves Then Return New List(Of String)()
+            Return New List(Of String)({"Head Curve", "Efficiency Curve", "Power Curve", "NPSHr Curve"})
+        End Function
+
+        ''' <summary>Builds an OxyPlot model of one curve kind, one series per measured speed, in the flowsheet's units, with the operating point marked.</summary>
+        Public Overrides Function GetChartModel(name As String) As Object
+
+            Dim sets = MeasuredCurveSets()
+            If sets Is Nothing OrElse sets.Count = 0 Then Return Nothing
+
+            Dim su = FlowSheet.FlowsheetOptions.SelectedUnitSystem
+            Dim flowunit As String = su.volumetricFlow
+            Dim yunitDisplay As String
+            Dim yLabel As String
+            Dim opY As Double
+            Select Case name
+                Case "Head Curve"
+                    yunitDisplay = su.distance : yLabel = "Head" : opY = CurveHead
+                Case "Efficiency Curve"
+                    yunitDisplay = "%" : yLabel = "Efficiency" : opY = CurveEff
+                Case "Power Curve"
+                    yunitDisplay = su.heatflow : yLabel = "Power" : opY = CurvePower
+                Case "NPSHr Curve"
+                    yunitDisplay = su.distance : yLabel = "NPSHr" : opY = CurveNPSHr
+                Case Else
+                    Return Nothing
+            End Select
+
+            Dim model = New OxyPlot.PlotModel() With {.Subtitle = name, .Title = GraphicObject.Tag}
+            model.TitleFontSize = 11
+            model.SubtitleFontSize = 10
+            model.LegendFontSize = 9
+            model.LegendPlacement = OxyPlot.LegendPlacement.Outside
+            model.LegendOrientation = OxyPlot.LegendOrientation.Horizontal
+            model.LegendPosition = OxyPlot.LegendPosition.BottomCenter
+            model.TitleHorizontalAlignment = OxyPlot.TitleHorizontalAlignment.CenteredWithinView
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Bottom,
+                .FontSize = 10,
+                .Title = "Flow (" + flowunit + ")"
+            })
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Left,
+                .FontSize = 10,
+                .Title = yLabel + " (" + yunitDisplay + ")"
+            })
+
+            Dim colors = {OxyPlot.OxyColors.Red, OxyPlot.OxyColors.Blue, OxyPlot.OxyColors.Green, OxyPlot.OxyColors.Orange, OxyPlot.OxyColors.Purple, OxyPlot.OxyColors.Brown}
+            Dim added As Integer = 0
+            For s = 0 To sets.Count - 1
+                Dim cset = sets(s).Value
+                Dim curve As PumpOps.Curve
+                Select Case name
+                    Case "Head Curve" : curve = cset.CurveHead
+                    Case "Efficiency Curve" : curve = cset.CurveEfficiency
+                    Case "Power Curve" : curve = cset.CurvePower
+                    Case Else : curve = cset.CurveNPSHr
+                End Select
+                If curve Is Nothing OrElse Not curve.Enabled OrElse curve.X Is Nothing OrElse curve.X.Count = 0 Then Continue For
+                Dim ls As New OxyPlot.Series.LineSeries() With {
+                    .Title = sets(s).Key.ToString("F0") + " rpm",
+                    .StrokeThickness = 1.5,
+                    .Color = colors(added Mod colors.Length),
+                    .MarkerType = OxyPlot.MarkerType.Circle,
+                    .MarkerSize = 3,
+                    .MarkerFill = colors(added Mod colors.Length)
+                }
+                For i = 0 To Math.Min(curve.X.Count, curve.Y.Count) - 1
+                    Dim xv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(flowunit, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(curve.xunit, curve.X(i)))
+                    Dim yv As Double
+                    If name = "Efficiency Curve" Then
+                        yv = If(curve.yunit = "%", curve.Y(i), curve.Y(i) * 100.0)
+                    Else
+                        yv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitDisplay, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(curve.yunit, curve.Y(i)))
+                    End If
+                    If Not Double.IsNaN(xv) AndAlso Not Double.IsNaN(yv) Then ls.Points.Add(New OxyPlot.DataPoint(xv, yv))
+                Next
+                model.Series.Add(ls)
+                added += 1
+            Next
+            If added = 0 Then Return Nothing
+
+            If CurveFlow > 0.0 AndAlso Not Double.IsNaN(opY) Then
+                Dim op As New OxyPlot.Series.ScatterSeries() With {
+                    .Title = "Operating point",
+                    .MarkerType = OxyPlot.MarkerType.Diamond,
+                    .MarkerSize = 6,
+                    .MarkerFill = OxyPlot.OxyColors.Black
+                }
+                Dim opX = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(flowunit, CurveFlow)
+                Dim opYd = If(name = "Efficiency Curve", opY, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitDisplay, opY))
+                op.Points.Add(New OxyPlot.Series.ScatterPoint(opX, opYd))
+                model.Series.Add(op)
+            End If
+
+            Return model
+
         End Function
 
     End Class

@@ -233,6 +233,7 @@ Namespace Reactors
                 For Each xel In ael.Elements
                     Dim as1 As New MaterialStream()
                     as1.LoadData(xel.Elements.ToList)
+                    BindLoadedContents(as1)
                     AccumulationStreams.Add(as1)
                 Next
             End If
@@ -594,12 +595,45 @@ Namespace Reactors
         Public Overrides Sub CreateDynamicProperties()
 
             AddDynamicProperty("Max Sections", "Maximum number of sections to divide the PFR length in during dynamic calculations.", 20, UnitOfMeasure.none, 1.GetType())
-            AddDynamicProperty("Reset Contents", "Empties the PFR's content on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Contents", "Discards the section contents at the next run step and builds them again from the inlet stream, as on a first run.", False, UnitOfMeasure.none, True.GetType())
 
         End Sub
 
         ''' <summary>Gets or sets the list of accumulation streams used for dynamic-mode mass balance tracking.</summary>
         Public Property AccumulationStreams As New List(Of MaterialStream)
+
+        <Xml.Serialization.XmlIgnore> Private TransportCarry As Double = 0.0
+
+        ''' <summary>Passes the contents of one section through that section's volume (reaction and heat input).</summary>
+        Private Sub PassThroughSection(sec As MaterialStream, nsec As Integer, es As EnergyStream)
+
+            sec.SetFlowsheet(FlowSheet)
+            sec.SetPropertyPackage(PropertyPackage)
+
+            Dim W = sec.GetMassFlow()
+
+            If W <= 0.0 Then
+                sec.SetMassFlow(0.0)
+                Return
+            End If
+
+            'the non-adiabatic mode adds the energy stream inside the section integration;
+            'the adiabatic mode takes it here, spread over the sections
+            If ReactorOperationMode = OperationMode.Adiabatic AndAlso es IsNot Nothing Then
+                Dim Q = es.EnergyFlow.GetValueOrDefault()
+                If Q <> 0.0 Then
+                    sec.SetMassEnthalpy(sec.GetMassEnthalpy() + Q / nsec / W)
+                    sec.SpecType = StreamSpec.Pressure_and_Enthalpy
+                    sec.PropertyPackage.CurrentMaterialStream = sec
+                    sec.Calculate(True, True)
+                End If
+            End If
+
+            Calculate(sec)
+
+            If sec.GetMassFlow() <= 0.0 Then sec.SetMassFlow(0.0)
+
+        End Sub
 
         ''' <summary>Executes one dynamic simulation time step for the PFR.</summary>
         Public Overrides Sub RunDynamicModel()
@@ -638,103 +672,65 @@ Namespace Reactors
 
             End If
 
-            Dim MaxSections = GetDynamicProperty("Max Sections")
+            Dim MaxSections As Integer = CInt(GetDynamicProperty("Max Sections"))
 
-            Dim NumberOfSections As Integer = ResidenceTime / timestep
-
-            If NumberOfSections > MaxSections Then NumberOfSections = MaxSections
+            'the section count is fixed when the contents are built; the flow sets how fast they move.
+            'a parcel advances one section every ResidenceTime / N seconds and passes through each
+            'section (reaction and heat) once, so the outlet lags the inlet by the residence time
+            'and contents at rest reproduce the steady-state reactor.
 
             Dim Reset As Boolean = GetDynamicProperty("Reset Contents")
 
-            Dim MustReset As Boolean = CDbl(NumberOfSections) / CDbl(AccumulationStreams.Count) - 1.0 > 0.001
+            If Reset OrElse AccumulationStreams.Count = 0 OrElse AccumulationStreams.Count > MaxSections Then
 
-            If Reset Or MustReset Then
+                Dim NumberOfSections As Integer = CInt(Math.Max(1.0, Math.Min(Math.Floor(ResidenceTime / timestep), CDbl(MaxSections))))
+
+                If AccumulationStreams.Count > 0 Then FlowSheet.ShowMessage(GraphicObject.Tag + ": Resetting contents...", IFlowsheet.MessageType.Warning)
+
                 AccumulationStreams = New List(Of MaterialStream)
                 SetDynamicProperty("Reset Contents", 0)
-                FlowSheet.ShowMessage(GraphicObject.Tag + ": Resetting contents...", IFlowsheet.MessageType.Warning)
-            End If
+                TransportCarry = 0.0
 
-            If AccumulationStreams.Count = 0 Then
-
+                'the section integration reads the section volume from the list size, so fill it first
                 For i As Integer = 0 To NumberOfSections - 1
-
                     AccumulationStreams.Add(ims1.CloneXML)
-
+                Next
+                For i As Integer = 0 To NumberOfSections - 1
+                    If i > 0 Then AccumulationStreams(i) = AccumulationStreams(i - 1).CloneXML
+                    PassThroughSection(AccumulationStreams(i), NumberOfSections, es)
                 Next
 
             Else
 
-                AccumulationStreams.Insert(0, ims1.CloneXML)
-
-                AccumulationStreams.Remove(AccumulationStreams.Last)
+                Dim nsec = AccumulationStreams.Count
 
                 For Each astr In AccumulationStreams
-
                     astr.SetFlowsheet(FlowSheet)
-                    astr.PropertyPackage.CurrentMaterialStream = astr
-                    astr.Calculate()
-                    If astr.GetMassFlow <= 0.0 Then astr.SetMassFlow(0.0)
+                    astr.SetPropertyPackage(PropertyPackage)
+                Next
 
+                TransportCarry += timestep * nsec / ResidenceTime
+
+                Dim whole = Math.Floor(TransportCarry + 0.000000001)
+                TransportCarry = Math.Max(0.0, TransportCarry - whole)
+
+                For k As Integer = 1 To CInt(Math.Min(whole, CDbl(nsec)))
+                    AccumulationStreams.RemoveAt(nsec - 1)
+                    AccumulationStreams.Insert(0, ims1.CloneXML)
+                    For Each astr In AccumulationStreams
+                        PassThroughSection(astr, nsec, es)
+                    Next
                 Next
 
             End If
 
-            ' Calculate Temperature
-
-            Dim Qval, Ha, Wa As Double
-
-            If es IsNot Nothing Then Qval = es.EnergyFlow.GetValueOrDefault / NumberOfSections
-
-            For i As Integer = 0 To NumberOfSections - 1
-
-                Dim astr = AccumulationStreams(i)
-
-                astr.SetFlowsheet(FlowSheet)
-
-                Ha = astr.GetMassEnthalpy
-                Wa = astr.GetMassFlow
-
-                If Qval <> 0.0 Then
-
-                    If Wa > 0 Then
-
-                        astr.SetMassEnthalpy(Ha + Qval * timestep / Wa)
-
-                        astr.SpecType = StreamSpec.Pressure_and_Enthalpy
-
-                        astr.PropertyPackage = PropertyPackage
-                        astr.PropertyPackage.CurrentMaterialStream = astr
-
-                        If integrator.ShouldCalculateEquilibrium Then
-
-                            astr.Calculate(True, True)
-
-                        End If
-
-                    End If
-
-                End If
-
-            Next
-
-            For i As Integer = 0 To NumberOfSections - 1
-
-                Calculate(AccumulationStreams(i))
-
-            Next
-
-            For i As Integer = NumberOfSections - 1 To 1 Step -1
-
-                AccumulationStreams(i).AssignFromPhase(PhaseLabel.Mixture, AccumulationStreams(i - 1), True)
-                AccumulationStreams(i).SetFlowsheet(FlowSheet)
-                AccumulationStreams(i).PropertyPackage.CurrentMaterialStream = AccumulationStreams(i)
-                AccumulationStreams(i).Calculate()
-
-            Next
-
             oms1.AssignFromPhase(PhaseLabel.Mixture, AccumulationStreams.Last, False)
 
             AccumulationStream = Nothing
+
+            'the profile and the conversions read the concentrations of the last section integration,
+            'which a step with no shift after loading a file has not run yet
+            If C Is Nothing OrElse N00 Is Nothing Then Exit Sub
 
             'update profile
 
@@ -2281,6 +2277,7 @@ Namespace Reactors
         Public Overrides Function SetPropertyValue(ByVal prop As String, ByVal propval As Object, Optional ByVal su As Interfaces.IUnitsOfMeasure = Nothing) As Boolean
 
             If MyBase.SetPropertyValue(prop, propval, su) Then Return True
+            If Not prop.StartsWith("PROP_") Then Return SetNamedPropertyValue(prop, propval)
 
             If su Is Nothing Then su = New SystemsOfUnits.SI
             Dim cv As New SystemsOfUnits.Converter

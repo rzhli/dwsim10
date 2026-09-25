@@ -536,6 +536,10 @@ Namespace SpecialOps
                         Return OutputMax
                     Case "OutputAbs"
                         Return OutputAbs
+                    Case "Offset"
+                        Return Offset
+                    Case "ManipulatedVariableSpan"
+                        Return ManipulatedVariableSpan
                     Case Else
                         Return Nothing
                 End Select
@@ -591,6 +595,15 @@ Namespace SpecialOps
                     Offset = propval
                 Case "ManipulatedVariableSpan"
                     ManipulatedVariableSpan = propval
+                Case "OutputAbs"
+                    'the output in the manipulated variable's own units: in manual it is what the controller
+                    'holds and writes to the manipulated object at every step
+                    OutputAbs = propval
+                    If ManipulatedObjectData IsNot Nothing Then
+                        MVValue = SystemsOfUnits.Converter.ConvertToSI(ManipulatedObjectData.Units, Convert.ToDouble(propval))
+                    Else
+                        MVValue = Convert.ToDouble(propval)
+                    End If
                 Case Else
                     Return False
             End Select
@@ -627,6 +640,19 @@ Namespace SpecialOps
             End Get
         End Property
 
+        Private InitializeFromMV As Boolean = False
+
+        ''' <summary>
+        ''' Resets the controller and makes its first step start from the manipulated variable as it is now:
+        ''' the output is read back from the valve opening (or whatever the controller moves) and the
+        ''' integral term is set to hold it, the same handover as leaving manual. A run that starts from a
+        ''' stored flowsheet state continues from the opening the state carries, whatever the tuning.
+        ''' </summary>
+        Public Sub StartFromManipulatedVariable()
+            Reset()
+            InitializeFromMV = True
+        End Sub
+
         Public Sub Reset()
 
             PTerm = 0.0
@@ -657,6 +683,8 @@ Namespace SpecialOps
             Dim integrator = FlowSheet.DynamicsManager.IntegratorList(integratorID)
 
             Dim timestep = integrator.IntegrationStep.TotalSeconds
+            'in real time the plant moves with the real-time step, and so must the controller
+            If integrator.RealTime Then timestep = Convert.ToDouble(integrator.RealTimeStepMs) / 1000.0
 
             Dim ControlledObject = GetFlowsheet.SimulationObjects.Values.Where(Function(x) x.Name = ControlledObjectData.ID).SingleOrDefault
 
@@ -784,6 +812,8 @@ Namespace SpecialOps
             Dim integrator = FlowSheet.DynamicsManager.IntegratorList(integratorID)
 
             Dim timestep = integrator.IntegrationStep.TotalSeconds
+            'in real time the plant moves with the real-time step, and so must the controller
+            If integrator.RealTime Then timestep = Convert.ToDouble(integrator.RealTimeStepMs) / 1000.0
 
             If CascadeMasterID <> "" Then
                 Try
@@ -839,6 +869,22 @@ Namespace SpecialOps
                 ITerm = -WindupGuard
             ElseIf ITerm > WindupGuard Then
                 ITerm = WindupGuard
+            End If
+
+            If InitializeFromMV Then
+                InitializeFromMV = False
+                If Not ManualOverride AndAlso ManipulatedObject IsNot Nothing Then
+                    Dim mvNow = SystemsOfUnits.Converter.ConvertFromSI(ManipulatedObjectData.Units,
+                        ManipulatedObject.GetPropertyValue(ManipulatedObjectData.PropertyName))
+                    If ManipulatedVariableSpan > 0.0 Then
+                        Output = If(ReverseActing, (mvNow - Offset) / ManipulatedVariableSpan, (Offset - mvNow) / ManipulatedVariableSpan)
+                    ElseIf ReverseActing Then
+                        Output = mvNow / BaseSP - 1.0
+                    Else
+                        Output = 1.0 - mvNow / BaseSP
+                    End If
+                    WasManualOverride = True
+                End If
             End If
 
             If Not ManualOverride Then

@@ -172,6 +172,12 @@ Namespace UnitOperations
         ''' <summary>Gets or sets the operating rotation speed (RPM) used for curve interpolation.</summary>
         Public Property Speed As Integer = 1500
 
+        ''' <summary>
+        ''' Inlet volumetric flow (m3/s) recorded by the last steady-state calculation. The dynamic
+        ''' surge alarm compares the running inlet flow against a fraction of this value.
+        ''' </summary>
+        Public Property DesignInletVolumetricFlow As Double = 0.0
+
         ''' <summary>Returns the list of available calculation mode names and IDs.</summary>
         ''' <returns>An array of strings describing each mode.</returns>
         Public Overrides Function GetCalculationModes() As String()
@@ -427,17 +433,127 @@ Namespace UnitOperations
             AddDynamicProperty("Volume", "Internal volume of the compressor casing.", 0.01, UnitOfMeasure.volume, 1.0.GetType())
             AddDynamicProperty("Minimum Pressure", "Minimum dynamic pressure.", 101325.0, UnitOfMeasure.pressure, 1.0.GetType())
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the volume content from the inlet stream.", True, UnitOfMeasure.none, True.GetType())
-            AddDynamicProperty("Reset Content", "Empties the volume content on the next run.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Reset Content", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Rotational Inertia", "Moment of inertia J of the compressor+motor assembly (kg.m2). Set to 0 for instantaneous speed changes.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Current Speed", "Current rotational speed (RPM).", 3000.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Target Speed", "Target rotational speed (RPM). Speed ramps towards this value based on inertia.", 3000.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Motor Torque", "Available motor torque (N.m).", 200.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Surge Flow Fraction", "Fraction of design flow below which surge occurs (0-1). Set to 0 to disable.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Surge Alarm", "True when operating below surge flow limit.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Design Inlet Volumetric Flow", "Inlet volumetric flow recorded by the last steady-state calculation. The surge limit is Surge Flow Fraction times this value. Read-only.", 0.0, UnitOfMeasure.volumetricFlow, 1.0.GetType())
+            AddDynamicProperty("Integrate Casing Holdup", "Integrates the casing volume as a capacity. When False (default) the compressor passes the flow through and adds its pressure rise to the inlet pressure.", False, UnitOfMeasure.none, True.GetType())
+            AddDynamicProperty("Rated Speed", "Speed (RPM) at which the compressor delivers its full pressure rise. The dynamic pressure rise scales with (Current Speed / Rated Speed)^2, so a compressor coasting down loses head.", 3000.0, UnitOfMeasure.none, 1.0.GetType())
 
         End Sub
 
         Private prevM_dyn, currentM_dyn As Double
+
+        ''' <summary>
+        ''' The compressor as a pressure-flow element: the flow through it is whatever the network
+        ''' is passing, and the outlet takes the inlet pressure plus the pressure rise the machine
+        ''' makes at that flow and at the speed it is turning at. In Curves mode the head comes from
+        ''' the map, and otherwise from the flow conductance scaled by the square of the speed ratio.
+        ''' </summary>
+        Private Sub RunDynamicModelAsPressureFlowElement(currentSpeed As Double)
+
+            Dim ims As MaterialStream = Me.GetInletMaterialStream(0)
+            Dim oms As MaterialStream = Me.GetOutletMaterialStream(0)
+
+            If ims Is Nothing OrElse oms Is Nothing Then Exit Sub
+
+            Dim Wi = ims.GetMassFlow()
+            Dim Pi = ims.GetPressure()
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+
+            Dim head As Double = Double.NaN
+            Dim eff As Double = AdiabaticEfficiency / 100.0
+
+            If CalcMode = CalculationMode.Curves AndAlso rho > 0.0 AndAlso Wi > 0.0 Then
+                Try
+                    Dim maphead, mappower, mapeff As Double
+                    ReadCurveMap(Wi / rho, ims.GetMolarFlow(), currentSpeed, maphead, mappower, mapeff)
+                    If Not Double.IsNaN(maphead) Then
+                        head = maphead
+                    ElseIf Not Double.IsNaN(mappower) Then
+                        head = mappower * 1000.0 / Wi / 9.8
+                    End If
+                    If Not Double.IsNaN(head) Then
+                        CurveHead = head
+                        CurveFlow = Wi / rho
+                        If Not Double.IsNaN(mapeff) AndAlso mapeff > 0.0 Then
+                            eff = mapeff
+                            CurveEff = mapeff * 100
+                        End If
+                    End If
+                Catch ex As Exception
+                    'off the map: the conductance below keeps the run going
+                    head = Double.NaN
+                End Try
+            End If
+
+            Dim DeltaPdyn As Double
+
+            If Double.IsNaN(head) Then
+                Dim Kr As Double = GetDynamicProperty("Flow Conductance")
+                DeltaPdyn = If(Kr > 0.0, (Wi / Kr) ^ 2, 0.0)
+                Dim ratedSpeed As Double = GetDynamicProperty("Rated Speed")
+                If ratedSpeed > 0.0 Then DeltaPdyn *= (currentSpeed / ratedSpeed) ^ 2
+                head = If(rho > 0.0, DeltaPdyn / 9.81 / rho, 0.0)
+            Else
+                DeltaPdyn = head * 9.81 * rho
+            End If
+
+            If eff <= 0.0 Then eff = 0.75
+
+            Me.DeltaP = DeltaPdyn
+            Me.POut = Pi + DeltaPdyn
+            Me.DeltaQ = If(Wi > 0.0, Wi * 9.81 * head / eff / 1000.0, 0.0)
+
+            'an adiabatic machine puts all of its shaft power into the gas
+            Dim H2 = ims.GetMassEnthalpy() + If(Wi > 0.0, Me.DeltaQ / Wi, 0.0)
+
+            oms.AssignFromPhase(PhaseLabel.Mixture, ims, False)
+            oms.SetTemperature(ims.GetTemperature())
+            oms.SetMassEnthalpy(H2)
+            oms.SetMassFlow(Wi)
+            oms.SetPressure(Pi + DeltaPdyn)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
+
+            Dim esin As Streams.EnergyStream = Me.GetInletEnergyStream(1)
+            If esin IsNot Nothing Then
+                esin.EnergyFlow = Me.DeltaQ
+                esin.GraphicObject.Calculated = True
+            End If
+
+            UpdateSurgeAlarm(ims)
+
+        End Sub
+
+        ''' <summary>
+        ''' Compares the running inlet volumetric flow against the surge limit, a fraction of the
+        ''' design flow recorded by the last steady-state calculation. A flowsheet that enters
+        ''' dynamics without one takes the flow of its first step as the design flow.
+        ''' </summary>
+        Private Sub UpdateSurgeAlarm(ims As MaterialStream)
+
+            Dim Wi = ims.GetMassFlow()
+            Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
+            Dim currentFlow = If(rho > 0.0, Wi / rho, ims.GetVolumetricFlow())
+
+            If DesignInletVolumetricFlow <= 0.0 AndAlso currentFlow > 0.0 Then DesignInletVolumetricFlow = currentFlow
+            SetDynamicProperty("Design Inlet Volumetric Flow", DesignInletVolumetricFlow)
+
+            Dim surgeFraction As Double = GetDynamicProperty("Surge Flow Fraction")
+            If surgeFraction > 0.0 AndAlso DesignInletVolumetricFlow > 0.0 Then
+                SetDynamicProperty("Surge Alarm", currentFlow < surgeFraction * DesignInletVolumetricFlow)
+            Else
+                SetDynamicProperty("Surge Alarm", False)
+            End If
+
+        End Sub
 
         Public Overrides Sub RunDynamicModel()
 
@@ -464,6 +580,18 @@ Namespace UnitOperations
             Else
                 currentSpeed = targetSpeed
                 SetDynamicProperty("Current Speed", currentSpeed)
+            End If
+
+            'The casing of a compressor is a small volume of gas. Integrated as a capacity it holds
+            'a few grams, and its outlet flow is whatever the last steady state left on the outlet
+            'stream, so a feed step empties it within one step and the volume flash loses its
+            'bracket. A compressor in a pressure-flow network is the element that adds head to the
+            'line, as the pump is, so by default it passes the flow through and hands its outlet the
+            'inlet pressure plus the pressure rise it makes at that flow and speed. The casing
+            'inventory remains available for whoever wants it.
+            If Not CBool(GetDynamicProperty("Integrate Casing Holdup")) Then
+                RunDynamicModelAsPressureFlowElement(currentSpeed)
+                Exit Sub
             End If
 
             Dim Vol As Double = GetDynamicProperty("Volume")
@@ -578,15 +706,12 @@ Namespace UnitOperations
             oms.SetTemperature(AccumulationStream.GetTemperature)
             oms.SetMassEnthalpy(AccumulationStream.GetMassEnthalpy)
             oms.SetPressure(Pressure + DeltaP_dyn)
+            'the stream recalculates itself on its own spec: on temperature and pressure it would flash
+            'at the temperature written above and throw the enthalpy away
+            oms.SpecType = StreamSpec.Pressure_and_Enthalpy
+            oms.AtEquilibrium = False
 
-            Dim surgeFraction As Double = GetDynamicProperty("Surge Flow Fraction")
-            If surgeFraction > 0 Then
-                Dim designFlow = ims.GetVolumetricFlow()
-                Dim surgeLimit = surgeFraction * designFlow
-                SetDynamicProperty("Surge Alarm", designFlow > 0 AndAlso designFlow < surgeLimit)
-            Else
-                SetDynamicProperty("Surge Alarm", False)
-            End If
+            UpdateSurgeAlarm(ims)
 
         End Sub
 
@@ -1301,6 +1426,9 @@ Namespace UnitOperations
 
             End Select
 
+            'the inlet flow of the steady state is the design flow the dynamic surge alarm refers to
+            If args Is Nothing Then DesignInletVolumetricFlow = msin.GetVolumetricFlow()
+
             If DebugMode Then AppendDebugLine("Calculation finished successfully.")
 
             IObj?.Close()
@@ -1814,6 +1942,124 @@ Namespace UnitOperations
             Else
                 Return p
             End If
+        End Function
+
+
+        ''' <summary>Chart names the PFD chart object can embed: the performance map, one series per measured speed, with the operating point.</summary>
+        Public Overrides Function GetChartModelNames() As List(Of String)
+            If CalcMode <> CalculationMode.Curves Then Return New List(Of String)()
+            Return New List(Of String)({"Head Map", "Efficiency Map", "Power Map"})
+        End Function
+
+        ''' <summary>Builds an OxyPlot model of one map kind in the units of the first enabled curve, with the operating point marked when the flow axis is an actual volumetric flow.</summary>
+        Public Overrides Function GetChartModel(name As String) As Object
+
+            If Curves Is Nothing OrElse Curves.Count = 0 Then Return Nothing
+
+            Dim key As String, yLabel As String, opY As Double
+            Select Case name
+                Case "Head Map" : key = "HEAD" : yLabel = "Head" : opY = CurveHead
+                Case "Efficiency Map" : key = "EFF" : yLabel = "Efficiency" : opY = CurveEff
+                Case "Power Map" : key = "POWER" : yLabel = "Power" : opY = CurvePower
+                Case Else : Return Nothing
+            End Select
+
+            Dim speeds As New List(Of Integer)(Curves.Keys)
+            speeds.Sort()
+
+            Dim xunitRef As String = "", yunitRef As String = ""
+            For Each sp In speeds
+                Dim d = Curves(sp)
+                If d IsNot Nothing AndAlso d.ContainsKey(key) AndAlso d(key).Enabled AndAlso d(key).X IsNot Nothing AndAlso d(key).X.Count > 0 Then
+                    xunitRef = d(key).xunit : yunitRef = d(key).yunit : Exit For
+                End If
+            Next
+            If xunitRef = "" AndAlso yunitRef = "" Then Return Nothing
+            Dim actualFlowAxis As Boolean = xunitRef.Contains("@ P,T")
+            Dim xunitBase As String = xunitRef.Replace(" @ P,T", "").Replace("@ P,T", "").Trim()
+            Dim yunitDisplay As String = If(key = "EFF", "%", yunitRef)
+
+            Dim model = New OxyPlot.PlotModel() With {.Subtitle = name, .Title = GraphicObject.Tag}
+            model.TitleFontSize = 11
+            model.SubtitleFontSize = 10
+            model.LegendFontSize = 9
+            model.LegendPlacement = OxyPlot.LegendPlacement.Outside
+            model.LegendOrientation = OxyPlot.LegendOrientation.Horizontal
+            model.LegendPosition = OxyPlot.LegendPosition.BottomCenter
+            model.TitleHorizontalAlignment = OxyPlot.TitleHorizontalAlignment.CenteredWithinView
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Bottom,
+                .FontSize = 10,
+                .Title = "Flow (" + xunitRef + ")"
+            })
+            model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
+                .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
+                .Position = OxyPlot.Axes.AxisPosition.Left,
+                .FontSize = 10,
+                .Title = yLabel + " (" + yunitDisplay + ")"
+            })
+
+            Dim colors = {OxyPlot.OxyColors.Red, OxyPlot.OxyColors.Blue, OxyPlot.OxyColors.Green, OxyPlot.OxyColors.Orange, OxyPlot.OxyColors.Purple, OxyPlot.OxyColors.Brown}
+            Dim added As Integer = 0
+            For Each sp In speeds
+                Dim d = Curves(sp)
+                If d Is Nothing OrElse Not d.ContainsKey(key) Then Continue For
+                Dim curve = d(key)
+                If curve Is Nothing OrElse Not curve.Enabled OrElse curve.X Is Nothing OrElse curve.X.Count = 0 Then Continue For
+                Dim cxBase As String = curve.xunit.Replace(" @ P,T", "").Replace("@ P,T", "").Trim()
+                Dim ls As New OxyPlot.Series.LineSeries() With {
+                    .Title = sp.ToString() + " rpm",
+                    .StrokeThickness = 1.5,
+                    .Color = colors(added Mod colors.Length),
+                    .MarkerType = OxyPlot.MarkerType.Circle,
+                    .MarkerSize = 3,
+                    .MarkerFill = colors(added Mod colors.Length)
+                }
+                For i = 0 To Math.Min(curve.X.Count, curve.Y.Count) - 1
+                    Dim xv As Double = curve.X(i)
+                    If cxBase <> xunitBase AndAlso cxBase <> "" AndAlso xunitBase <> "" Then
+                        xv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(xunitBase, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(cxBase, curve.X(i)))
+                    End If
+                    Dim yv As Double
+                    If key = "EFF" Then
+                        yv = If(curve.yunit = "%", curve.Y(i), curve.Y(i) * 100.0)
+                    ElseIf curve.yunit <> yunitRef AndAlso curve.yunit <> "" AndAlso yunitRef <> "" Then
+                        yv = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitRef, DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertToSI(curve.yunit, curve.Y(i)))
+                    Else
+                        yv = curve.Y(i)
+                    End If
+                    If Not Double.IsNaN(xv) AndAlso Not Double.IsNaN(yv) Then ls.Points.Add(New OxyPlot.DataPoint(xv, yv))
+                Next
+                model.Series.Add(ls)
+                added += 1
+            Next
+            If added = 0 Then Return Nothing
+
+            If actualFlowAxis AndAlso CurveFlow > 0.0 AndAlso Not Double.IsNaN(opY) Then
+                Dim op As New OxyPlot.Series.ScatterSeries() With {
+                    .Title = "Operating point (" + Speed.ToString() + " rpm)",
+                    .MarkerType = OxyPlot.MarkerType.Diamond,
+                    .MarkerSize = 6,
+                    .MarkerFill = OxyPlot.OxyColors.Black
+                }
+                Dim opX = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(xunitBase, CurveFlow)
+                Dim opYd As Double
+                If key = "EFF" Then
+                    opYd = opY
+                ElseIf yunitRef <> "" Then
+                    opYd = DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(yunitRef, opY)
+                Else
+                    opYd = opY
+                End If
+                op.Points.Add(New OxyPlot.Series.ScatterPoint(opX, opYd))
+                model.Series.Add(op)
+            End If
+
+            Return model
+
         End Function
 
     End Class

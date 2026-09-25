@@ -241,6 +241,14 @@ Namespace UnitOperations
 
         End Sub
 
+        ''' <summary>Connects a feed to the stage named as the editor shows it, e.g. "Stage10" (Stage1 is the
+        ''' condenser when there is one).</summary>
+        Public Sub ConnectFeed(feed As ISimulationObject, stageName As String)
+            ConnectFeed(feed, StageIndexOf(stageName))
+        End Sub
+
+        ''' <summary>Connects a feed to a stage by its zero-based index: 0 is the top stage (the condenser, which
+        ''' the editor calls Stage1), so the editor's StageN is index N - 1.</summary>
         Public Sub ConnectFeed(feed As ISimulationObject, stagenumber As Integer)
 
             Dim i As Integer = 0
@@ -326,7 +334,7 @@ Namespace UnitOperations
             Dim sp As New ColumnSpec()
             [Enum].TryParse(Of ColumnSpec.SpecType)(spectype, sp.SType)
             sp.SpecValue = value
-            sp.SpecUnit = units
+            sp.SpecUnit = If(sp.SType = ColumnSpec.SpecType.Component_Fraction, FractionBasis(units), units)
             sp.ComponentID = compound
 
             Specs("C") = sp
@@ -342,7 +350,7 @@ Namespace UnitOperations
             Dim sp As New ColumnSpec()
             [Enum].TryParse(Of ColumnSpec.SpecType)(spectype, sp.SType)
             sp.SpecValue = value
-            sp.SpecUnit = units
+            sp.SpecUnit = If(sp.SType = ColumnSpec.SpecType.Component_Fraction, FractionBasis(units), units)
             sp.ComponentID = compound
 
             Specs("R") = sp
@@ -353,6 +361,22 @@ Namespace UnitOperations
         ''' Takes the unit out of a spec type that carries it in parentheses, as the property grid
         ''' writes it: "Product Flow Rate (mol/s)". An explicit unit argument wins.
         ''' </summary>
+        ''' <summary>
+        ''' The basis of a component fraction spec as the solvers read it: "Molar" or "Mass". An empty
+        ''' unit is a mole fraction, the way the editor and the texts quote purities; the solvers read
+        ''' anything but "M" or "Molar" as mass, so an empty unit used to become a mass fraction.
+        ''' </summary>
+        Private Shared Function FractionBasis(units As String) As String
+            Select Case If(units, "").Trim().ToLowerInvariant()
+                Case "mass", "w", "we", "kg/kg", "mass fraction", "wt"
+                    Return "Mass"
+                Case "", "m", "mol", "mole", "molar", "mol/mol", "mole fraction", "molar fraction"
+                    Return "Molar"
+                Case Else
+                    Throw New ArgumentException(String.Format("'{0}' is not a basis for a component fraction spec. Use ""Molar"" or ""Mass"".", units))
+            End Select
+        End Function
+
         Private Shared Sub ParseSpecUnits(ByRef spectype As String, ByRef units As String)
 
             Dim parenStart = spectype.IndexOf("("c)
@@ -888,6 +912,14 @@ Namespace UnitOperations
         Public _opmode As OpMode = OpMode.Absorber
 
 
+        ''' <summary>Connects a feed to the stage named as the editor shows it, e.g. "Stage10" (Stage1 is the
+        ''' condenser when there is one).</summary>
+        Public Sub ConnectFeed(feed As ISimulationObject, stageName As String)
+            ConnectFeed(feed, StageIndexOf(stageName))
+        End Sub
+
+        ''' <summary>Connects a feed to a stage by its zero-based index: 0 is the top stage (the condenser, which
+        ''' the editor calls Stage1), so the editor's StageN is index N - 1.</summary>
         Public Sub ConnectFeed(feed As ISimulationObject, stagenumber As Integer)
 
             Dim i As Integer = 0
@@ -2051,6 +2083,12 @@ Namespace UnitOperations
 
             Dim bottomsIndex As Integer = If(quasiSteadyVapor, Stages.Count - 1, _Streams.Count - 1)
 
+            'what a product may take over the next step: nine tenths of what the phase holds, the cap the draw
+            'applies. Handed to the product stream, it bounds the flow the valve downstream computes from its
+            'pressure difference, so an empty drum or sump gives no flow instead of the valve equation's number.
+            Dim liquidDrawLimit = Function(k As Integer) 0.9 * _Streams(k).OverallLiquid.Properties.massflow.GetValueOrDefault() / fullstep
+            Dim vaporDrawLimit = Function(k As Integer) 0.9 * _Streams(k).Phases(2).Properties.massflow.GetValueOrDefault() / fullstep
+
             For i = 0 To _Streams.Count - 1
                 Dim stageid = _StageIDs(i)
                 Dim feed = _Feeds.Where(Function(f) f.AssociatedStage = stageid).FirstOrDefault()
@@ -2065,8 +2103,10 @@ Namespace UnitOperations
                     Dim sidestream = DirectCast(FlowSheet.SimulationObjects(side.StreamID), MaterialStream)
                     If side.StreamPhase = StreamInformation.Phase.L Then
                         sidestream.AssignFromPhase(PhaseLabel.Liquid1, _Streams(i), False)
+                        sidestream.MaximumAllowableDynamicMassFlowRate = liquidDrawLimit(i)
                     ElseIf side.StreamPhase = StreamInformation.Phase.V Then
                         sidestream.AssignFromPhase(PhaseLabel.Vapor, _Streams(i), False)
+                        sidestream.MaximumAllowableDynamicMassFlowRate = vaporDrawLimit(i)
                     End If
                     sidestream.SetPressure(_Streams(i).GetPressure())
                     sidestream.SpecType = StreamSpec.Pressure_and_Enthalpy
@@ -2076,6 +2116,7 @@ Namespace UnitOperations
                     If _TopProduct IsNot Nothing Then
                         Dim topstream = DirectCast(FlowSheet.SimulationObjects(_TopProduct.StreamID), MaterialStream)
                         topstream.AssignFromPhase(PhaseLabel.Vapor, _Streams(i), False)
+                        topstream.MaximumAllowableDynamicMassFlowRate = vaporDrawLimit(i)
                         topstream.SetPressure(_Streams(i).GetPressure())
                         topstream.SpecType = StreamSpec.Pressure_and_Enthalpy
                         topstream.AtEquilibrium = False
@@ -2084,6 +2125,7 @@ Namespace UnitOperations
                         'Liquid distillate: assign from the condenser holdup liquid phase.
                         Dim diststream = DirectCast(FlowSheet.SimulationObjects(_Distillate.StreamID), MaterialStream)
                         diststream.AssignFromPhase(PhaseLabel.Liquid1, _Streams(i), False)
+                        diststream.MaximumAllowableDynamicMassFlowRate = liquidDrawLimit(i)
                         diststream.SetPressure(_Streams(i).GetPressure())
                         diststream.SpecType = StreamSpec.Pressure_and_Enthalpy
                         diststream.AtEquilibrium = False
@@ -2092,6 +2134,7 @@ Namespace UnitOperations
                     If _BottomsProduct IsNot Nothing Then
                         Dim bottomstream = DirectCast(FlowSheet.SimulationObjects(_BottomsProduct.StreamID), MaterialStream)
                         bottomstream.AssignFromPhase(PhaseLabel.Liquid1, _Streams(i), False)
+                        bottomstream.MaximumAllowableDynamicMassFlowRate = liquidDrawLimit(i)
                         'the liquid head of the sump on the bottoms outlet (the holdup's own liquid density: the
                         'stream's phase properties were just cleared by the assignment)
                         bottomstream.SetPressure(_Streams(i).GetPressure() + _Streams(i).OverallLiquid.Properties.density.GetValueOrDefault() * 9.80665 * BottomLiquidLevel)
@@ -2222,7 +2265,17 @@ Namespace UnitOperations
 
         Public Property TopSpacing As Double = 0.1 'm
 
-        Public Property SolvingMethodName As String = "Wang-Henke (Bubble Point)"
+        Private _solvingMethodName As String = "Wang-Henke (Bubble Point)"
+
+        ''' <summary>The column solver. Names saved with the old spelling "Napthali" are read as "Naphtali".</summary>
+        Public Property SolvingMethodName As String
+            Get
+                Return _solvingMethodName
+            End Get
+            Set(value As String)
+                _solvingMethodName = If(value Is Nothing, Nothing, value.Replace("Napthali", "Naphtali"))
+            End Set
+        End Property
 
         'column type
         Private _type As ColType = Column.ColType.DistillationColumn
@@ -3026,6 +3079,17 @@ Namespace UnitOperations
 
         ''' <summary>The name a stage at this position gets when nobody typed one: Stage1 to StageN counted from the top,
         ''' the condenser being stage 1 and the reboiler stage N, each with its role in parentheses.</summary>
+        ''' <summary>The zero-based index of the stage named as the editor shows it: "Stage10", "Stage1 (Condenser)"
+        ''' or a name the user typed.</summary>
+        Public Function StageIndexOf(stageName As String) As Integer
+            Dim key = If(stageName, "").Trim()
+            For i = 0 To Stages.Count - 1
+                Dim n = If(Stages(i).Name, "")
+                If n.Equals(key, StringComparison.OrdinalIgnoreCase) OrElse n.StartsWith(key & " (", StringComparison.OrdinalIgnoreCase) Then Return i
+            Next
+            Throw New ArgumentException(String.Format("The column has no stage named '{0}'. Its stages are Stage1 to Stage{1}.", stageName, Stages.Count))
+        End Function
+
         Public Function StageNameFor(index As Integer, count As Integer) As String
             Dim n = "Stage" & (index + 1)
             If ColumnType = ColType.DistillationColumn Then
@@ -3292,6 +3356,27 @@ Namespace UnitOperations
 
             Solver = colsolver
 
+        End Sub
+
+        ''' <summary>Sets compound <paramref name="ci"/> of an end composition estimate to <paramref name="x"/> and scales the
+        ''' others to share the rest (by the feed when the estimate held none of them).</summary>
+        Private Shared Sub SetEndFraction(v As Double(), ci As Integer, x As Double, zfeed As Double())
+            Dim others = 0.0
+            For k = 0 To v.Length - 1
+                If k <> ci Then others += v(k)
+            Next
+            If others <= 0.0 Then
+                For k = 0 To v.Length - 1
+                    If k <> ci Then v(k) = zfeed(k) : others += zfeed(k)
+                Next
+            End If
+            For k = 0 To v.Length - 1
+                If k = ci Then
+                    v(k) = x
+                ElseIf others > 0.0 Then
+                    v(k) = v(k) / others * (1.0 - x)
+                End If
+            Next
         End Sub
 
         Public Overridable Function GetSolverInputData(Optional ByVal ignoreuserestimates As Boolean = False) As ColumnSolverInputData
@@ -3783,6 +3868,27 @@ Namespace UnitOperations
                     Next
                     distVx = distVx.NormalizeY()
             End Select
+
+            'Both products specified by the mole fraction of the same compound (the textbook binary case): the
+            'lever rule fixes the product split, and the end compositions start at the specified fractions. The
+            'estimates above read a fraction as a recovery, which started a 0.82 distillate as pure ethanol and
+            'left the Newton solver too far from the solution to reach it on some feed stages.
+            If ColumnType = ColType.DistillationColumn AndAlso CondenserType = condtype.Total_Condenser AndAlso
+                Specs("C").SType = ColumnSpec.SpecType.Component_Fraction AndAlso Specs("R").SType = ColumnSpec.SpecType.Component_Fraction AndAlso
+                Specs("C").ComponentID = Specs("R").ComponentID AndAlso
+                (Specs("C").SpecUnit = "Molar" OrElse Specs("C").SpecUnit = "M") AndAlso (Specs("R").SpecUnit = "Molar" OrElse Specs("R").SpecUnit = "M") AndAlso
+                Not (InitialEstimates.DistillateFlowRate IsNot Nothing AndAlso UseLiquidFlowEstimates AndAlso Not ignoreuserestimates) Then
+                Dim ci = Vn.IndexOf(Specs("C").ComponentID)
+                If ci >= 0 Then
+                    Dim xd = Specs("C").SpecValue, xb = Specs("R").SpecValue
+                    Dim split = If(Math.Abs(xd - xb) > 0.000001, (zm(ci) - xb) / (xd - xb), -1.0)
+                    If split > 0.0 AndAlso split < 1.0 Then
+                        distrate = (sumF - sum0_) * split
+                        SetEndFraction(distVx, ci, xd, zm)
+                        SetEndFraction(rebVx, ci, xb, zm)
+                    End If
+                End If
+            End If
 
             IObj?.Paragraphs.Add(String.Format("Estimated/Specified Distillate Rate: {0} mol/s", distrate))
             IObj?.Paragraphs.Add(String.Format("Estimated/Specified Vapor Overflow Rate: {0} mol/s", vaprate))
@@ -5508,7 +5614,7 @@ Namespace UnitOperations
             Dim Pref As Double = Stages.Select(Function(s) s.P).Average
 
             Dim feedFlash As Object() = pp.FlashBase.Flash_PT(zm, Pref, Tref, pp)
-            Dim Kref = feedFlash(9)
+            Dim Kref As Double() = DirectCast(feedFlash(9), Double())
 
             'â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             ' 6. IMPROVED: reflux ratio from relative volatility (Underwood-simplified)
@@ -6465,7 +6571,7 @@ Namespace UnitOperations
                         SetColumnSolver(New SolvingMethods.WangHenkeMethod())
                         so = Solver.SolveColumn(GetSolverInputData(True))
                     End If
-                ElseIf SolvingMethodName.Contains("Napthali") Then
+                ElseIf SolvingMethodName.Contains("Naphtali") Then
                     Try
                         inputdata.CalculationMode = 0
                         SetColumnSolver(New SolvingMethods.NaphtaliSandholmMethod())
