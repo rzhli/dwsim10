@@ -356,7 +356,13 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 End If
             End If
 
-            If Vp.Max < P And Vp.Min > 0 Then
+            ' the all-liquid and all-vapour tests look at the compounds present only: a compound at zero
+            ' fraction with a tiny or a huge vapour pressure would switch them off
+            Dim vpPresent = Enumerable.Range(0, n + 1).Where(Function(q) Vz(q) <> 0.0#).Select(Function(q) Vp(q)).ToArray()
+            If vpPresent.Length = 0 Then vpPresent = Vp
+            Dim vpMaxP = vpPresent.Max, vpMinP = vpPresent.Min
+
+            If vpMaxP < P And vpMinP > 0 Then
 
                 'all liquid
                 L = 1
@@ -366,7 +372,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 Vy = Vy.ReplaceInvalidsWithZeroes()
                 GoTo out
 
-            ElseIf Vp.Min > P And Vp.Min > 0 Then
+            ElseIf vpMinP > P And vpMinP > 0 Then
 
                 'all vapor
                 L = 0
@@ -382,6 +388,8 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             Vmin = 1.0#
             Vmax = 0.0#
             For i = 0 To n
+                ' an absent compound (z = 0) bounds nothing: its terms -1/(K-1) and 1/(1-K) only widen the bracket
+                If Vz(i) = 0.0# Then Continue For
                 If (Ki(i) * Vz(i) - 1) / (Ki(i) - 1) < Vmin Then Vmin = (Ki(i) * Vz(i) - 1) / (Ki(i) - 1)
                 If (1 - Vz(i)) / (1 - Ki(i)) > Vmax Then Vmax = (1 - Vz(i)) / (1 - Ki(i))
             Next
@@ -473,7 +481,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 Vy = Vz
                 Vx = Vy.DivideY(Ki).NormalizeY
             End If
-            If PP.AUX_CheckTrivial(Ki, 0.1) And L > 0.0 And V > 0.0 Then
+            If PP.AUX_CheckTrivial(Ki, 0.1, Vz) And L > 0.0 And V > 0.0 Then
                 Dim gl = PP.DW_CalcGibbsEnergy(Vx, T, P, "L")
                 Dim gv = PP.DW_CalcGibbsEnergy(Vy, T, P, "V")
                 If Math.Abs(gl / gv - 1.0) < 0.01 Then
@@ -2369,7 +2377,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
         End Function
 
-        Public Function Flash_TV_1(ByVal Vz As Double(), ByVal T As Double, ByVal V As Double, ByVal Pref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
+        Public Function Flash_TV_1(ByVal Vz As Double(), ByVal T As Double, ByVal V As Double, ByVal Pref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing, Optional ByVal IsRestart As Boolean = False) As Object
 
             Dim IObj As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
 
@@ -2409,6 +2417,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Dim dFdP As Double
 
             Dim VTc = PP.RET_VTC()
+            Dim seeded = (Pref = 0.0#)
 
             Vn = PP.RET_VNAMES()
             fi = Vz.Clone
@@ -2451,7 +2460,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) Then
                     For i = 0 To n
                         Vp(i) = PP.AUX_PVAPi(i, T)
                         Ki(i) = PrevKi(i)
@@ -2524,6 +2533,11 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 Else
                     IObj?.Paragraphs.Add("This is a bubble point calculation (V = 0).")
                 End If
+
+                ' the inner-loop test reads one compound: the first one present. One at z = 0 has x = y = 0 on every
+                ' pass, so testing it ended the inner loop on its second pass, unconverged.
+                Dim i0 = Math.Max(0, Array.FindIndex(Vz, Function(zi) zi <> 0.0))
+                Dim P0 = P
 
                 ecount = 0
                 Do
@@ -2600,11 +2614,11 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                         marcador2 = 0
                         If marcador = 1 Then
                             If V = 0 Then
-                                If Math.Abs(Vy(0) - Vy_ant(0)) < itol Then
+                                If Math.Abs(Vy(i0) - Vy_ant(i0)) < itol Then
                                     marcador2 = 1
                                 End If
                             Else
-                                If Math.Abs(Vx(0) - Vx_ant(0)) < itol Then
+                                If Math.Abs(Vx(i0) - Vx_ant(i0)) < itol Then
                                     marcador2 = 1
                                 End If
                             End If
@@ -2662,7 +2676,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
                         deltaP = -fval / dFdP
 
-                        If Abs(deltaP) < etol / 1000 And ecount > 5 Then Exit Do
+                        ' a stalled step ends the loop only when it is small against P (the absolute 1E-7 Pa is no
+                        ' step at all below 1 Pa) and the objective is nearly met
+                        If Abs(deltaP) < etol / 1000 * Math.Min(1.0, P) And Abs(fval) < 10 * etol And ecount > 5 Then Exit Do
 
                         If Abs(deltaP) > 0.1 * P And ecount < 5 Then
                             P = P + Sign(deltaP) * 0.1 * P
@@ -2683,6 +2699,48 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     IObj2?.Close()
 
                 Loop Until Math.Abs(fval) < etol Or Double.IsNaN(P) = True Or ecount > maxit_e
+
+                ' Near the critical point sum(K x) - 1 is flat in P (|dF/d ln P| = |dFdP P| << 1): the stop test
+                ' |fval| < etol and the last Newton step on the fixed-composition derivative leave P up to a few
+                ' percent off the saturation line. Refine with a full Newton in (ln K, ln P); keep the loop's
+                ' result when the refinement fails.
+                ' A bubble point from the seed (Pref = 0) is also refined when its last inner loop did not converge.
+                ' The seed, the largest vapour pressure, is far above the bubble line when a compound is supercritical:
+                ' there the inner loop slides towards K = 1, sum(K x) - 1 goes to zero at any P, and the stop test
+                ' accepted pressures up to 1400 times the bubble pressure. A restart (IsRestart) accepts confirmed
+                ' results only.
+                Dim checked = V = 0.0 AndAlso (seeded OrElse IsRestart)
+                Dim slide = checked AndAlso marcador2 <> 1
+                Dim unconfirmed = False
+                If Not Double.IsNaN(P) AndAlso ecount <= maxit_e AndAlso (Math.Abs(dFdP * P) < 0.1 OrElse slide) AndAlso Not PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then
+                    Dim refined = RefineSaturationPoint(Vz, T, V, P, Ki, PP)
+                    If refined IsNot Nothing Then
+                        P = DirectCast(refined(0), Double)
+                        Ki = DirectCast(refined(1), Double())
+                        Vx = DirectCast(refined(2), Double())
+                        Vy = DirectCast(refined(3), Double())
+                        IObj?.Paragraphs.Add(String.Format("Near-critical refinement (full Newton in ln K, ln P): P = {0} Pa", P))
+                    Else
+                        unconfirmed = slide OrElse (checked AndAlso IsRestart)
+                    End If
+                End If
+
+                ' Unconfirmed, out of iterations or NaN: restart from pressures 15 % apart below the result (or below
+                ' the seed), down to 1/25 of it, and return the first confirmed result.
+                If checked AndAlso Not IsRestart AndAlso (unconfirmed OrElse ecount > maxit_e OrElse Double.IsNaN(P)) Then
+                    Dim Ptry = If(unconfirmed, Math.Min(P, P0), P0)
+                    For k = 1 To 20
+                        Ptry *= 0.85
+                        Try
+                            Dim restarted = Flash_TV_1(Vz, T, V, Ptry, PP, False, Nothing, True)
+                            IObj?.Paragraphs.Add(String.Format("Restarted from P = {0} Pa.", Ptry))
+                            IObj?.Close()
+                            Return restarted
+                        Catch ex As Exception
+                        End Try
+                    Next
+                End If
+                If unconfirmed OrElse (IsRestart AndAlso Double.IsNaN(P)) Then Throw New Exception("TV Flash [NL]: no bubble point found (the result at P = " & P & " Pa is not a saturation point).")
 
             Else
 
@@ -2824,7 +2882,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
                         deltaP = -fval / dFdP
 
-                        If Abs(deltaP) < etol / 1000 And ecount > 5 Then Exit Do
+                        ' a stalled step ends the loop only when it is small against P (the absolute 1E-7 Pa is no
+                        ' step at all below 1 Pa) and the objective is nearly met
+                        If Abs(deltaP) < etol / 1000 * Math.Min(1.0, P) And Abs(fval) < 10 * etol And ecount > 5 Then Exit Do
 
                         If Abs(deltaP) > 0.1 * P And ecount < 5 Then
                             P = P + Sign(deltaP) * 0.1 * P
@@ -2859,7 +2919,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 Throw ex
             End If
 
-            If PP.AUX_CheckTrivial(Ki) Then Throw New Exception("TV Flash [NL]: Invalid result: converged to the trivial solution (P = " & P & " ).")
+            If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then Throw New Exception("TV Flash [NL]: Invalid result: converged to the trivial solution (P = " & P & " ).")
 
             WriteDebugInfo("TV Flash [NL]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms.")
 
@@ -2884,6 +2944,121 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             End If
 
             Return New Object() {L, V, Vx, Vy, P, ecount, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
+
+        End Function
+
+        ''' <summary>
+        ''' Newton refinement of a bubble (V = 0) or dew (V = 1) point at fixed T. Unknowns: ln K of the compounds
+        ''' present and ln P. Equations: ln K_i = ln K_i(x, y, T, P) from the same DW_CalcKvalue the loop uses
+        ''' (bubble: x = z, y = z K / sum; dew: y = z, x = (z / K) / sum) and sum - 1 = 0. Returns {P, K, x, y}, or
+        ''' Nothing when the Newton does not converge in 30 iterations, ends at the trivial solution, moves P by more
+        ''' than 10 % or reverses the K-values (next to the critical point the bubble and dew equations share roots).
+        ''' </summary>
+        Private Function RefineSaturationPoint(Vz As Double(), T As Double, V As Double, P As Double, Ki As Double(),
+                                               PP As PropertyPackages.PropertyPackage) As Object()
+
+            Dim idx = Enumerable.Range(0, Vz.Length).Where(Function(i) Vz(i) > 0.0).ToArray()
+            Dim nc = idx.Length, nx = nc + 1
+            If nc < 2 OrElse Not P > 0.0 OrElse Double.IsInfinity(P) Then Return Nothing
+            If idx.Any(Function(i) Not Ki(i) > 0.0 OrElse Double.IsInfinity(Ki(i))) Then Return Nothing
+
+            Dim zs = idx.Sum(Function(i) Vz(i))
+            Dim zn(Vz.Length - 1) As Double
+            For Each ic In idx
+                zn(ic) = Vz(ic) / zs
+            Next
+
+            Dim u(nx - 1), u0(nc - 1) As Double
+            For k = 0 To nc - 1
+                u(k) = Math.Log(Ki(idx(k)))
+                u0(k) = u(k)
+            Next
+            u(nc) = Math.Log(P)
+
+            ' the incipient phase, normalized: vapour y = z K on the bubble side, liquid x = z / K on the dew side;
+            ' s(0) returns the unnormalized sum
+            Dim incipient = Function(w As Double(), s As Double()) As Double()
+                                Dim inc(Vz.Length - 1) As Double
+                                s(0) = 0.0
+                                For k = 0 To nc - 1
+                                    inc(idx(k)) = zn(idx(k)) * Math.Exp(If(V = 0.0, w(k), -w(k)))
+                                    s(0) += inc(idx(k))
+                                Next
+                                For k = 0 To nc - 1
+                                    inc(idx(k)) /= s(0)
+                                Next
+                                Return inc
+                            End Function
+
+            Dim resid = Function(w As Double()) As Double()
+                            Dim s(0) As Double
+                            Dim inc = incipient(w, s)
+                            Dim Kc = If(V = 0.0, PP.DW_CalcKvalue(zn, inc, T, Math.Exp(w(nc))), PP.DW_CalcKvalue(inc, zn, T, Math.Exp(w(nc))))
+                            Dim f(nx - 1) As Double
+                            For k = 0 To nc - 1
+                                f(k) = w(k) - Math.Log(Kc(idx(k)))
+                            Next
+                            f(nc) = s(0) - 1.0
+                            Return f
+                        End Function
+
+            Dim converged = False
+            For it = 1 To 30
+                Dim f = resid(u)
+                If f.Any(Function(q) Double.IsNaN(q) OrElse Double.IsInfinity(q)) Then Return Nothing
+                Dim J As New Mapack.Matrix(nx, nx), b As New Mapack.Matrix(nx, 1)
+                For c = 0 To nx - 1
+                    Dim uc = DirectCast(u.Clone(), Double())
+                    uc(c) += 0.000001
+                    Dim fc = resid(uc)
+                    For r = 0 To nx - 1
+                        J(r, c) = (fc(r) - f(r)) / 0.000001
+                    Next
+                Next
+                For r = 0 To nx - 1
+                    b(r, 0) = -f(r)
+                Next
+                Dim d(nx - 1) As Double
+                Try
+                    Dim lu As New Mapack.LuDecomposition(J)
+                    Dim sol = lu.Solve(b)
+                    For r = 0 To nx - 1
+                        d(r) = sol(r, 0)
+                    Next
+                Catch ex As Exception
+                    Return Nothing
+                End Try
+                If d.Any(Function(q) Double.IsNaN(q) OrElse Double.IsInfinity(q)) Then Return Nothing
+                ' damped to 0.5 in ln K and 5 % in P per iteration
+                Dim sc = Math.Max(1.0, Math.Max(d.Take(nc).Max(Function(q) Math.Abs(q)) / 0.5, Math.Abs(d(nc)) / 0.05))
+                For r = 0 To nx - 1
+                    u(r) += d(r) / sc
+                Next
+                ' converged on the step, relative to ln K: a slide towards the trivial solution never meets it
+                If sc = 1.0 AndAlso Math.Abs(d(nc)) < 0.0000001 AndAlso
+                    d.Take(nc).Max(Function(q) Math.Abs(q)) < 0.000001 * u.Take(nc).Max(Function(q) Math.Abs(q)) Then
+                    converged = True
+                    Exit For
+                End If
+            Next
+            If Not converged Then Return Nothing
+
+            Dim dot As Double = 0.0
+            For k = 0 To nc - 1
+                dot += u(k) * u0(k)
+            Next
+            If Not u.Take(nc).Max(Function(q) Math.Abs(q)) > 0.001 OrElse Not Math.Abs(u(nc) - Math.Log(P)) < 0.1 OrElse Not dot > 0.0 Then Return Nothing
+
+            Dim Kn = DirectCast(Ki.Clone(), Double())
+            For k = 0 To nc - 1
+                Kn(idx(k)) = Math.Exp(u(k))
+            Next
+            Dim incn = incipient(u, New Double(0) {})
+            If V = 0.0 Then
+                Return New Object() {Math.Exp(u(nc)), Kn, zn, incn}
+            Else
+                Return New Object() {Math.Exp(u(nc)), Kn, incn, zn}
+            End If
 
         End Function
 
@@ -2944,6 +3119,18 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
                 deltaT = result(11)
 
+            End If
+
+            'A bubble or dew point that did not converge from the caller's seed is tried once more
+            'from the ideal-solution seed, with K values from the package, before the pressure
+            'stepping below, which costs a dozen flashes.
+            If Not AcceptStalledSaturationPoint And Math.Abs(deltaT) > 0.01 And (V = 0 Or V = 1) And (Tref <> 0.0 Or ReuseKI) Then
+                Dim retry As Object() = Flash_PV_1(Vz, P, V, 0.0, PP, False, Nothing)
+                If retry.Count = 1 Then retry = Flash_PV_1(Vz, P, V, 0.0, PP, False, Nothing, True)
+                If retry.Count > 1 AndAlso Math.Abs(retry(11)) <= 0.01 Then
+                    result = retry
+                    deltaT = retry(11)
+                End If
             End If
 
             If Math.Abs(deltaT) > 0.01 And (V = 0 Or V = 1) Then
@@ -3019,7 +3206,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             'and an extrapolation), which returned the same temperature.
             If result.Count > 1 AndAlso PP.PackageType <> PropertyPackages.PackageType.ActivityCoefficient Then
                 Kvals = result(6)
-                If PP.AUX_CheckTrivial(Kvals, 0.21) Then trivial = True
+                If PP.AUX_CheckTrivial(Kvals, 0.21, Vz) Then trivial = True
             End If
 
             If result.Count = 1 Or trivial Then
@@ -3027,7 +3214,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, 0.0, PP, False, Nothing, True)
                 If result.Count > 1 Then
                     Kvals = result(6)
-                    If PP.AUX_CheckTrivial(Kvals, 0.2) Then trivial = True
+                    If PP.AUX_CheckTrivial(Kvals, 0.2, Vz) Then trivial = True
                 End If
             End If
 
@@ -3054,6 +3241,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
                 End If
             End If
+
+            'The fallbacks above hand back their last attempt whether it converged or not. A bubble or
+            'dew point is returned only when the temperature loop converged on it.
+            If Not AcceptStalledSaturationPoint AndAlso result.Count > 1 AndAlso (V = 0 Or V = 1) AndAlso Math.Abs(result(11)) > 0.01 Then result = New Object() {-1}
 
             Dim idealcalc As Boolean = Me.FlashSettings(Interfaces.Enums.FlashSetting.PVFlash_TryIdealCalcOnFailure)
             If result.Count = 1 And idealcalc Then
@@ -3233,6 +3424,36 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Return K
         End Function
 
+        ''' <summary>
+        ''' Keeps the bubble/dew point acceptance of earlier versions: a Brent exit of Flash_PV_1 reports a
+        ''' zero step whether or not the equation holds, and Flash_PV neither retries from the ideal seed
+        ''' nor rejects an unconverged fallback result.
+        ''' </summary>
+        ''' <remarks>
+        ''' For the Wang-Henke column solvers only, whose outer loop has come to rely on it: on
+        ''' WideBoilingStripper.dwxmz the top stage (no liquid) ends on a stalled bubble point, and with the
+        ''' stricter acceptance the column no longer converges.
+        ''' </remarks>
+        Public Property AcceptStalledSaturationPoint As Boolean = False
+
+        ''' <summary>
+        ''' Temperature step still left where a Brent exit of the bubble/dew loop stops.
+        ''' </summary>
+        ''' <remarks>
+        ''' The azeotrope and oscillation exits reported a step of zero whatever Brent found. When the
+        ''' bracket holds no root, Brent returns one of its ends and the zero step passed for
+        ''' convergence. Zero is kept when the bubble/dew equation holds to the loop tolerance;
+        ''' otherwise the remaining Newton step is returned.
+        ''' </remarks>
+        Private Function BrentExitStep(Ki As Double(), Vx As Double(), Vy As Double(), V As Double, dFdT As Double) As Double
+            If AcceptStalledSaturationPoint Then Return 0.0
+            Dim res As Double = If(V = 0.0, Ki.MultiplyY(Vx).SumY, Vy.DivideY(Ki).SumY) - 1.0
+            If Math.Abs(res) < etol Then Return 0.0
+            Dim stp As Double = -res / dFdT
+            If Double.IsNaN(stp) OrElse Double.IsInfinity(stp) OrElse Math.Abs(stp) <= 0.01 Then Return 100.0
+            Return stp
+        End Function
+
         Public Function Flash_PV_1(ByVal Vz2 As Double(), ByVal P As Double, ByVal V As Double, ByVal Tref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing, Optional OldTempEstimation As Boolean = False) As Object
 
             Dim IObj As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
@@ -3358,7 +3579,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) And Not Double.IsNaN(PrevKi(0)) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) And Not Double.IsNaN(PrevKi(0)) Then
                     For i = 0 To n
                         IObj?.SetCurrent
                         Ki(i) = PrevKi(i)
@@ -3683,7 +3904,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                                 Else
                                     Vx = Vy.DivideY(Ki).NormalizeY()
                                 End If
-                                deltaT = 0
+                                deltaT = BrentExitStep(Ki, Vx, Vy, V, dFdT)
                                 Exit Do
                             End If
                         End If
@@ -3724,7 +3945,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                             Vx = Vy.DivideY(Ki).NormalizeY()
                         End If
 
-                        deltaT = 0
+                        deltaT = BrentExitStep(Ki, Vx, Vy, V, dFdT)
 
                         Exit Do
 
@@ -3990,7 +4211,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 Return New Object() {-1}
             End If
 
-            If PP.AUX_CheckTrivial(Ki) Then
+            If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then
                 IObj?.Close()
                 Return New Object() {-1}
             End If
@@ -4092,7 +4313,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) And Not Double.IsNaN(PrevKi(0)) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) And Not Double.IsNaN(PrevKi(0)) Then
                     For i = 0 To n
                         IObj?.SetCurrent
                         Ki(i) = PrevKi(i)
@@ -4239,7 +4460,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 Return New Object() {-1}
             End If
 
-            If PP.AUX_CheckTrivial(Ki) Then
+            If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then
                 IObj?.Close()
                 Return New Object() {-1}
             End If
@@ -4352,7 +4573,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) And Not Double.IsNaN(PrevKi(0)) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) And Not Double.IsNaN(PrevKi(0)) Then
                     For i = 0 To n
                         IObj?.SetCurrent
                         Ki(i) = PrevKi(i)

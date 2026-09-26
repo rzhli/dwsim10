@@ -1534,7 +1534,7 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) Then
                     For i = 0 To n
                         Vp(i) = PP.AUX_PVAPi(Vn(i), T)
                         Ki(i) = PrevKi(i)
@@ -1577,12 +1577,15 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
             Loop Until i = n + 1
 
             Dim marcador3, marcador2, marcador As Integer
+            'judge the inner loop on the first compound present: one at z = 0 stays at zero and passes the test at once
+            Dim ic As Integer = Math.Max(Array.FindIndex(Vz, Function(zi) zi <> 0.0), 0)
             Dim stmp4_ant, stmp4, Pant, fval As Double
             Dim chk As Boolean = False
 
             If V = 1.0# Or V = 0.0# Then
 
                 ecount = 0
+                Dim conv As Boolean = False
                 Do
 
                     marcador3 = 0
@@ -1634,11 +1637,11 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                         marcador2 = 0
                         If marcador = 1 Then
                             If V = 0 Then
-                                If Math.Abs(Vy(0) - Vy_ant(0)) < itol Then
+                                If Math.Abs(Vy(ic) - Vy_ant(ic)) < itol Then
                                     marcador2 = 1
                                 End If
                             Else
-                                If Math.Abs(Vx(0) - Vx_ant(0)) < itol Then
+                                If Math.Abs(Vx(ic) - Vx_ant(ic)) < itol Then
                                     marcador2 = 1
                                 End If
                             End If
@@ -1679,11 +1682,22 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                         P = P - fval / dFdP
                     End If
 
+                    ' converged: a step under 1 Pa and under etol relative to P (1 Pa alone stops after one step when the
+                    ' pressure is a few Pa or less), with a small residual (a halved or stalled step is not convergence)
+                    conv = Math.Abs(P - Pant) < Math.Min(1.0#, etol * P) AndAlso Math.Abs(fval) < etol
+
                     WriteDebugInfo("TV Flash [SimpleLLE]: Iteration #" & ecount & ", P = " & P & ", VF = " & V)
 
                     If Not PP.CurrentMaterialStream.Flowsheet Is Nothing Then PP.CurrentMaterialStream.Flowsheet.CheckStatus()
 
-                Loop Until Math.Abs(P - Pant) < 1 Or Double.IsNaN(P) = True Or ecount > maxit_e Or Double.IsNaN(P) Or Double.IsInfinity(P)
+                Loop Until conv Or Double.IsNaN(P) = True Or ecount > maxit_e Or Double.IsNaN(P) Or Double.IsInfinity(P)
+
+                If ecount > maxit_e AndAlso Not conv Then
+                    Dim ex As New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt2") & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("G6"), Vz.ToArrayString()))
+                    ex.Data.Add("DetailedDescription", "The Flash Algorithm was unable to converge to a solution.")
+                    ex.Data.Add("UserAction", "Try another Property Package and/or Flash Algorithm.")
+                    Throw ex
+                End If
 
             Else
 
@@ -1861,7 +1875,7 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) And Not Double.IsNaN(PrevKi(0)) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) And Not Double.IsNaN(PrevKi(0)) Then
                     For i = 0 To n
                         Vp(i) = PP.AUX_PVAPi(Vn(i), T)
                         Ki(i) = PrevKi(i)
@@ -1904,6 +1918,8 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
             Loop Until i = n + 1
 
             Dim marcador3, marcador2, marcador As Integer
+            'judge the inner loop on the first compound present: one at z = 0 stays at zero and passes the test at once
+            Dim ic As Integer = Math.Max(Array.FindIndex(Vz, Function(zi) zi <> 0.0), 0)
             Dim stmp4_ant, stmp4, Tant, fval As Double
             Dim chk As Boolean = False
 
@@ -1961,11 +1977,11 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                         marcador2 = 0
                         If marcador = 1 Then
                             If V = 0 Then
-                                If Math.Abs(Vy(0) - Vy_ant(0)) < itol Then
+                                If Math.Abs(Vy(ic) - Vy_ant(ic)) < itol Then
                                     marcador2 = 1
                                 End If
                             Else
-                                If Math.Abs(Vx(0) - Vx_ant(0)) < itol Then
+                                If Math.Abs(Vx(ic) - Vx_ant(ic)) < itol Then
                                     marcador2 = 1
                                 End If
                             End If
@@ -2009,6 +2025,18 @@ alt:            T = bo.BrentOpt(Tinf, Tsup, 10, tolEXT, maxitEXT, {P, Vz, PP})
                     If Not PP.CurrentMaterialStream.Flowsheet Is Nothing Then PP.CurrentMaterialStream.Flowsheet.CheckStatus()
 
                 Loop Until Math.Abs(T - Tant) < 0.1 Or Double.IsNaN(T) = True Or ecount > maxit_e Or Double.IsNaN(T) Or Double.IsInfinity(T)
+
+                ' out of iterations, or stopped on the Tmin/Tmax clamp (two clamped steps in a row pass the 0.1 K test
+                ' with the temperature sitting on the limit): neither is a saturation temperature
+                If ecount > maxit_e AndAlso Not Math.Abs(T - Tant) < 0.1 Then
+                    Dim ex As New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt2") & String.Format(" (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
+                    ex.Data.Add("DetailedDescription", "The Flash Algorithm was unable to converge to a solution.")
+                    ex.Data.Add("UserAction", "Try another Property Package and/or Flash Algorithm.")
+                    Throw ex
+                End If
+                If Math.Abs(T - Tant) < 0.1 AndAlso (T = Tmin OrElse T = Tmax) Then
+                    Throw New Exception(String.Format("PV Flash [SimpleLLE]: the temperature stopped on the search limit without converging (T = {0} K, P = {1} Pa, MoleFracs = {2})", T.ToString("N2"), P.ToString("N2"), Vz.ToArrayString()))
+                End If
 
             Else
 
