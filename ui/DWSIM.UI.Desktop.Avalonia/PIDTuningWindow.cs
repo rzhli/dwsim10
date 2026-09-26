@@ -19,8 +19,8 @@ namespace DWSIM.UI.Desktop.Avalonia;
 /// <summary>
 /// PID Controller Tuning. Avalonia counterpart of
 /// DWSIM.UI.Desktop.Editors.Dynamics.PIDTuningTool: minimizes the summed absolute cumulative
-/// error of the selected controllers with a Nelder-Mead simplex over their Kp/Ki/Kd, running
-/// the schedule through <see cref="IntegratorRunner"/> once per function evaluation.
+/// error of the selected controllers with a bounded DotNumerics Simplex search (COBYLA) over their
+/// Kp/Ki/Kd, running the schedule through <see cref="IntegratorRunner"/> once per function evaluation.
 /// </summary>
 public sealed class PIDTuningWindow : Window
 {
@@ -187,9 +187,13 @@ public sealed class PIDTuningWindow : Window
                 var simplex = new Simplex { MaxFunEvaluations = maxIts };
                 int counter = 1;
 
-                return simplex.ComputeMin(x =>
+                var best = simplex.ComputeMin(x0 =>
                 {
-                    if (_abort) return 0.0;
+                    if (_abort) return double.MaxValue;
+
+                    // COBYLA treats the bounds as constraints it may violate on the way; run the
+                    // schedule with the gains held inside them.
+                    var x = ClampToBounds(x0, vars);
 
                     AppendFromWorker($"Iteration #{counter}:");
 
@@ -205,12 +209,14 @@ public sealed class PIDTuningWindow : Window
                         k += 3;
                     }
 
-                    new IntegratorRunner(_flowsheet).Run(new IntegratorRunOptions
+                    var run = new IntegratorRunner(_flowsheet).Run(new IntegratorRunOptions
                     {
                         Schedule = schedule.ID,
                         RealTime = false,
-                        // The state was just restored above; do not restore it again.
+                        // The state was just restored above; do not restore it again, but start the
+                        // controllers from it as a normal run of the schedule does.
                         RestoreInitialState = false,
+                        InitialStateRestored = true,
                         // Hot path: the objective runs the whole schedule once per evaluation, and a
                         // snapshot plus compression per step would dominate the cost. Nothing here
                         // needs the historian — event transitions are not being tuned.
@@ -218,11 +224,15 @@ public sealed class PIDTuningWindow : Window
                         AbortRequested = () => _abort
                     });
 
+                    // A run cut short by Cancel integrated less error; it must not win the search.
+                    if (run.Aborted) return double.MaxValue;
+
                     var totalError = controllers.Sum(c => Math.Abs(c.CumulativeError));
                     AppendFromWorker($"  total error = {totalError:G8}");
                     counter += 1;
                     return totalError;
                 }, vars.ToArray());
+                return ClampToBounds(best, vars);
             });
         }
         catch (Exception ex)
@@ -256,6 +266,14 @@ public sealed class PIDTuningWindow : Window
     }
 
     // -------------------------------------------------------------------------
+
+    private static double[] ClampToBounds(double[] x, List<OptSimplexBoundVariable> vars)
+    {
+        var clamped = new double[x.Length];
+        for (var i = 0; i < x.Length; i++)
+            clamped[i] = Math.Min(Math.Max(x[i], vars[i].LowerBound), vars[i].UpperBound);
+        return clamped;
+    }
 
     private void Append(string line)
     {

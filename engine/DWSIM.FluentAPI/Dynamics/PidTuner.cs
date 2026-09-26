@@ -156,8 +156,8 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
     }
 
     /// <summary>
-    /// Tunes PID controllers by simulation: a Nelder-Mead simplex over their gains, running the
-    /// whole schedule once per trial and scoring the resulting transient.
+    /// Tunes PID controllers by simulation: a bounded DotNumerics Simplex search (COBYLA) over their
+    /// gains, running the whole schedule once per trial and scoring the resulting transient.
     /// </summary>
     /// <remarks>
     /// Trials are only comparable if they all start from the same state, so the schedule needs a
@@ -222,23 +222,10 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
             Exception error = null;
             double[] best = null;
             var initialObjective = double.NaN;
+            var trials = new List<KeyValuePair<double[], double>>();
 
             try
             {
-                OptMultivariateFunction objective = x =>
-                {
-                    if (options.AbortRequested != null && options.AbortRequested())
-                    {
-                        aborted = true;
-                        return double.MaxValue;
-                    }
-
-                    evaluations += 1;
-                    var score = Evaluate(flowsheet, schedule, controllers, x, options, log, evaluations);
-                    if (double.IsNaN(initialObjective)) initialObjective = score;
-                    return score;
-                };
-
                 var variables = new List<OptSimplexBoundVariable>();
                 foreach (var c in controllers)
                 {
@@ -247,8 +234,26 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
                     variables.Add(new OptSimplexBoundVariable(c.Kd, 0.0, options.KdMax));
                 }
 
+                OptMultivariateFunction objective = x =>
+                {
+                    if (options.AbortRequested != null && options.AbortRequested())
+                    {
+                        aborted = true;
+                        return double.MaxValue;
+                    }
+
+                    // COBYLA treats the bounds as constraints it may violate on the way; run the
+                    // schedule with the gains held inside them.
+                    var gains = ClampToBounds(x, variables);
+                    evaluations += 1;
+                    var score = Evaluate(flowsheet, schedule, controllers, gains, options, log, evaluations);
+                    if (double.IsNaN(initialObjective)) initialObjective = score;
+                    trials.Add(new KeyValuePair<double[], double>(gains, score));
+                    return score;
+                };
+
                 var simplex = new Simplex { MaxFunEvaluations = options.MaxEvaluations };
-                best = simplex.ComputeMin(objective, variables.ToArray());
+                best = ClampToBounds(simplex.ComputeMin(objective, variables.ToArray()), variables);
             }
             catch (Exception ex)
             {
@@ -269,7 +274,9 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
 
             if (best != null && error == null)
             {
-                finalObjective = Score(flowsheet, controllers, options);
+                // The score of the trial that ran the returned gains, in the same measure as the initial one.
+                var hit = trials.FirstOrDefault(t => t.Key.SequenceEqual(best));
+                if (hit.Key != null) finalObjective = hit.Value;
 
                 for (var i = 0; i < controllers.Count; i++)
                 {
@@ -291,6 +298,15 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
 
         // -------------------------------------------------------------------------
 
+        /// <summary>The point with each coordinate moved inside its variable's bounds.</summary>
+        internal static double[] ClampToBounds(double[] x, IList<OptSimplexBoundVariable> variables)
+        {
+            var clamped = new double[x.Length];
+            for (var i = 0; i < x.Length; i++)
+                clamped[i] = Math.Min(Math.Max(x[i], variables[i].LowerBound), variables[i].UpperBound);
+            return clamped;
+        }
+
         private static double Evaluate(IFlowsheet flowsheet, IDynamicsSchedule schedule,
             List<PIDController> controllers, double[] gains, PidTuningOptions options,
             List<string> log, int evaluation)
@@ -304,6 +320,9 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
                 RealTime = false,
                 // The state was just restored; restoring again would undo the gains we just applied.
                 RestoreInitialState = false,
+                // The controllers still start as in a normal run of this schedule, from the
+                // manipulated variable the state carries, not from a plain reset.
+                InitialStateRestored = true,
                 // Hot path: a snapshot plus compression per step would dominate the cost, and
                 // nothing here interpolates event transitions.
                 EnableHistorian = false,
@@ -312,9 +331,10 @@ namespace DWSIM.Automation.FluentAPI.Dynamics
             });
 
             double score;
-            if (run.Exceptions.Count > 0)
+            if (run.Exceptions.Count > 0 || run.Aborted)
             {
-                // A gain set that breaks the solver is simply a bad one.
+                // A gain set that breaks the solver is simply a bad one. A run cut short (abort,
+                // MaxWallTimePerRun) has integrated less error and must not look better than a full one.
                 score = double.MaxValue;
             }
             else

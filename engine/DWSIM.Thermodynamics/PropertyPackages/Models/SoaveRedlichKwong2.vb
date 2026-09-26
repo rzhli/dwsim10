@@ -427,9 +427,15 @@ Namespace PropertyPackages.ThermoPlugs
             ' root is spurious (fails the vapour criterion 0.9/P < beta < 3/P), regenerate the vapour
             ' at a reduced pressure where a real vapour root exists, so the fugacity coefficient stays
             ' physical and the K-values do not collapse to the trivial solution near the critical point.
+            ' The root is spurious only when it is the single, liquid-like root of a subcritical
+            ' pseudo-pure fluid (am/(bm R T) above the ratio Omega_a/Omega_b): no vapour exists at that
+            ' composition. A dense vapour near the mixture critical point has a supercritical pseudo-fluid
+            ' and its own root is the right one; replacing it with a root from a lower pressure moves the
+            ' saturation line away from the critical point.
             If phase = 1 Then
                 Dim betav As Double = PGP_Beta(Z, T, P, aml, bml)
-                If betav <= 0.9 / P OrElse betav >= 3.0 / P Then
+                If _zarray.Count = 1 AndAlso betav <= 0.9 / P AndAlso
+                    aml / (bml * R * T) > 0.42748 / 0.08664 Then
                     Dim Zx, AGx, BGx As Double
                     If PGP_VaporRootReducingP(T, P, aml, bml, Zx, AGx, BGx) Then
                         Z = Zx
@@ -649,56 +655,14 @@ Namespace PropertyPackages.ThermoPlugs
         Shared Function CalcZ2(AG As Double, BG As Double) As List(Of Double)
 
             Dim coeff(3) As Double
-            Dim Vant(0, 4) As Double
 
             coeff(0) = -AG * BG
             coeff(1) = AG - BG - BG * BG
             coeff(2) = -1
             coeff(3) = 1
 
-            Dim temp1 = Poly_Roots(coeff)
-
-            Dim tv = 0.0#
-            Dim ZV, tv2 As Double
-
-            Dim result As New List(Of Double)
-
-            If temp1(0, 0) > temp1(1, 0) Then
-                tv = temp1(1, 0)
-                temp1(1, 0) = temp1(0, 0)
-                temp1(0, 0) = tv
-                tv2 = temp1(1, 1)
-                temp1(1, 1) = temp1(0, 1)
-                temp1(0, 1) = tv2
-            End If
-            If temp1(0, 0) > temp1(2, 0) Then
-                tv = temp1(2, 0)
-                temp1(2, 0) = temp1(0, 0)
-                temp1(0, 0) = tv
-                tv2 = temp1(2, 1)
-                temp1(2, 1) = temp1(0, 1)
-                temp1(0, 1) = tv2
-            End If
-            If temp1(1, 0) > temp1(2, 0) Then
-                tv = temp1(2, 0)
-                temp1(2, 0) = temp1(1, 0)
-                temp1(1, 0) = tv
-                tv2 = temp1(2, 1)
-                temp1(2, 1) = temp1(1, 1)
-                temp1(1, 1) = tv2
-            End If
-
-            ZV = temp1(2, 0)
-            If temp1(2, 1) <> 0 Then
-                ZV = temp1(1, 0)
-                If temp1(1, 1) <> 0 Then
-                    ZV = temp1(0, 0)
-                End If
-            End If
-
-            If temp1(0, 1) = 0.0# And temp1(0, 0) > 0.0# Then result.Add(temp1(0, 0))
-            If temp1(1, 1) = 0.0# And temp1(1, 0) > 0.0# Then result.Add(temp1(1, 0))
-            If temp1(2, 1) = 0.0# And temp1(2, 0) > 0.0# Then result.Add(temp1(2, 0))
+            ' analytical real roots above the covolume, as in PR.CalcZ2 (issue #40)
+            Dim result = ValidZRoots(coeff, BG)
 
             If result.Count = 0 Then
                 Throw New Exception("SRK EOS: unable to calculate the compressibility factor at these conditions" &

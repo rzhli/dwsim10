@@ -94,10 +94,10 @@ namespace DWSIM.Engine.SmokeTests
         /// <summary>
         /// Methane/ethane/propane at random compositions, sweeping methane from 0 to 100 percent with the
         /// balance split randomly between ethane and propane (fixed seed for reproducibility). Every
-        /// composition must build an envelope without throwing; genuine ternary mixtures (no component
-        /// vanishing) must produce a real envelope whose dew curve reaches the critical point. The
-        /// near-pure endpoints are tolerated: pure methane is degenerate, and the ethane/propane binary
-        /// at zero methane hits a separate critical-point-solver defect that is out of scope here.
+        /// composition must build an envelope whose dew curve reaches the critical point, the pure-methane
+        /// endpoint included (ethane and propane at zero: its vapour-pressure line, bubble and dew
+        /// coinciding, ends on methane's critical point). The zero-methane step is the ethane/propane
+        /// binary 0.342/0.658, which must build like any other mixture.
         /// </summary>
         [Test]
         public void MethaneEthanePropaneEnvelopesBuildAcrossTheMethaneRange()
@@ -113,33 +113,19 @@ namespace DWSIM.Engine.SmokeTests
                 double xC2 = rest * split, xC3 = rest * (1.0 - split);
                 double sum = xC1 + xC2 + xC3;
                 var fr = new[] { xC1 / sum, xC2 / sum, xC3 / sum };
-                double minFrac = fr.Min();
-
-                // A near-pure endpoint (a component vanishing) is a degenerate case - a single-component
-                // vapour-pressure line, not a mixture envelope - so it is only required not to bring the
-                // generator down. A genuine ternary mixture must build a real envelope.
-                bool genuineMixture = minFrac > 0.02;
-
                 try
                 {
                     var e = Envelope(PR78(new[] { "Methane", "Ethane", "Propane" }, fr));
                     TestContext.WriteLine($"x=[{fr[0]:F3}, {fr[1]:F3}, {fr[2]:F3}]  CP T={e.tc:F1} K P={e.pc / 1e5:F1} bar  bubble={e.nb} dew={e.nd}  closestDewRel={e.closestDewRel:F4}");
 
-                    if (genuineMixture)
-                    {
-                        if (e.nb < 10) problems.Add($"x(C1)={fr[0]:F3}: bubble curve too short ({e.nb})");
-                        if (e.nd < 10) problems.Add($"x(C1)={fr[0]:F3}: dew curve too short ({e.nd})");
-                        if (e.tc > 0.0 && e.closestDewRel >= 0.05)
-                            problems.Add($"x(C1)={fr[0]:F3}: dew curve stops short of the critical point (closest {e.closestDewRel:F4})");
-                    }
-                }
-                catch (Exception ex) when (genuineMixture)
-                {
-                    problems.Add($"x(C1)={fr[0]:F3}: {ex.Message}");
+                    if (e.nb < 10) problems.Add($"x(C1)={fr[0]:F3}: bubble curve too short ({e.nb})");
+                    if (e.nd < 10) problems.Add($"x(C1)={fr[0]:F3}: dew curve too short ({e.nd})");
+                    if (e.tc > 0.0 && e.closestDewRel >= 0.05)
+                        problems.Add($"x(C1)={fr[0]:F3}: dew curve stops short of the critical point (closest {e.closestDewRel:F4})");
                 }
                 catch (Exception ex)
                 {
-                    TestContext.WriteLine($"x=[{fr[0]:F3}, {fr[1]:F3}, {fr[2]:F3}] (near-pure, tolerated): {ex.Message}");
+                    problems.Add($"x(C1)={fr[0]:F3}: {ex.Message}");
                 }
             }
 
