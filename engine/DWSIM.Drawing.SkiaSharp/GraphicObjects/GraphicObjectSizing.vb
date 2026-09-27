@@ -32,15 +32,20 @@ Namespace GraphicObjects
                     Return 0.56
                 Case ObjectType.NodeIn, ObjectType.NodeOut, ObjectType.Mixer, ObjectType.Splitter, ObjectType.EnergyMixer
                     Return 0.56
+                Case ObjectType.Heater, ObjectType.Cooler
+                    Return 0.8
                 Case ObjectType.HeatExchanger
-                    'Allow for the shorter visible height of the heat exchanger artwork.
+                    'Keep the artwork's relative size while reducing all exchangers by 20%.
+                    Return 1.12
+                Case ObjectType.Vessel, ObjectType.ComponentSeparator, ObjectType.Tank
+                    'Also used by palette entries without an available simulation object class.
                     Return 1.4
                 Case ObjectType.RCT_Conversion, ObjectType.RCT_Equilibrium, ObjectType.RCT_Gibbs,
                      ObjectType.RCT_CSTR, ObjectType.RCT_PFR, ObjectType.RCT_GibbsReaktoro
                     Return 1.2
                 Case ObjectType.ShortcutColumn, ObjectType.DistillationColumn, ObjectType.AbsorptionColumn,
                      ObjectType.RefluxedAbsorber, ObjectType.ReboiledAbsorber
-                    Return 1.6
+                    Return 2.0
             End Select
 
             'External unit operations share a graphic type; their class supplies the size tier.
@@ -53,12 +58,14 @@ Namespace GraphicObjects
                     Return 0.56
                 Case SimulationObjectClass.MixersSplitters
                     Return 0.56
+                Case SimulationObjectClass.Exchangers
+                    Return 0.8
                 Case SimulationObjectClass.Reactors
                     Return 1.2
                 Case SimulationObjectClass.Columns
-                    Return 1.6
+                    Return 2.0
                 Case SimulationObjectClass.Separators
-                    Return 1.2
+                    Return 1.4
                 Case Else
                     Return 1.0
             End Select

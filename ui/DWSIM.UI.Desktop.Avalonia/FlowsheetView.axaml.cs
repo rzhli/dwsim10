@@ -2686,10 +2686,11 @@ public partial class FlowsheetView : UserControl
             // Rotate/flip straight from the menu, without opening the Appearance window. These act on
             // the graphic object directly, so they work for pure-graphic items too (simObj may be null).
             // Rotation is edited inline: a spinner sits in the submenu so the angle is typed right
-            // there (any 0-360 value) instead of opening a separate dialog. Apply on every change.
+            // there (-360 to 360 degrees; negative is counterclockwise) instead of opening a
+            // separate dialog. Apply on every change.
             var rotSpin = new NumericUpDown
             {
-                Minimum = 0,
+                Minimum = -360,
                 Maximum = 360,
                 Increment = 15,
                 FormatString = "0",
@@ -2697,22 +2698,18 @@ public partial class FlowsheetView : UserControl
                 MinWidth = DWSIM.UI.Shared.Avalonia.UiScale.Size(90),
                 Margin = new Thickness(6, 0, 0, 0)
             };
+            ToolTip.SetTip(rotSpin, "Rotation in degrees: positive = clockwise, negative = counterclockwise.");
             rotSpin.ValueChanged += (_, _) =>
             {
                 var deg = (int)(rotSpin.Value ?? 0);
+                // Keep the equivalent angle in [0, 360) for connector direction calculations.
                 obj.Rotation = ((deg % 360) + 360) % 360;
                 Canvas.Refresh();
             };
-            // The spinner lives inside a MenuItem, and Avalonia's menu keeps keyboard focus on
-            // whichever item the pointer is over for its own navigation. So clicking the field
-            // never lets typed digits reach it — the menu grabs focus back and its key handler
-            // eats the keystrokes; only the up/down buttons work. Fix it on three fronts:
-            //  1) the host MenuItem is made non-focusable so the menu can't pull keyboard focus
-            //     back onto it once the inner text box has it;
-            //  2) every pointer press routes focus into the inner TextBox (selecting its text)
-            //     and is swallowed so the menu item doesn't close;
-            //  3) key and text input are marked handled at the spinner (after the text box has
-            //     already processed them) so they never bubble to the menu's key handler.
+            // Keep keyboard focus in the editor rather than on its host MenuItem.
+            // Only consume navigation/editing keys after the TextBox and spinner process them:
+            // on X11, marking a printable KeyDown handled suppresses the following TextInput.
+            // Escape and Tab remain available for leaving the editor/menu.
             void FocusRotBox()
             {
                 if (rotSpin.FindDescendantOfType<TextBox>() is { } tb)
@@ -2722,7 +2719,13 @@ public partial class FlowsheetView : UserControl
                 }
             }
             rotSpin.PointerPressed += (_, e) => { FocusRotBox(); e.Handled = true; };
-            rotSpin.AddHandler(InputElement.KeyDownEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble);
+            rotSpin.AddHandler(InputElement.KeyDownEvent, (_, e) =>
+            {
+                if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down
+                    or Key.Home or Key.End or Key.PageUp or Key.PageDown
+                    or Key.Enter or Key.Back or Key.Delete)
+                    e.Handled = true;
+            }, RoutingStrategies.Bubble);
             rotSpin.AddHandler(InputElement.TextInputEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble);
             var rotate = new MenuItem
             {
@@ -2749,11 +2752,6 @@ public partial class FlowsheetView : UserControl
             transform.Items.Add(flipH);
             transform.Items.Add(flipV);
             ctx.Items.Add(transform);
-
-            var sizeSymbols = new MenuItem { Header = "Size Selected Symbols by Equipment Type", Icon = IconHelper.MIcon("📐") };
-            sizeSymbols.Click += (_, _) => SizeSymbolsByType(
-                _surface?.SelectedObjects.Count > 0 ? _surface.SelectedObjects.Values : new[] { obj });
-            ctx.Items.Add(sizeSymbols);
 
             var copyData = new MenuItem { Header = "Copy Data to Clipboard", Icon = IconHelper.MIcon("\U0001F4CB") }; // clipboard
             copyData.Click += async (_, _) =>
@@ -2999,10 +2997,6 @@ public partial class FlowsheetView : UserControl
             ctx.Items.Add(new Separator());
 
             // Layout operations
-            var sizeSymbols = new MenuItem { Header = "Size Symbols by Equipment Type", Icon = IconHelper.MIcon("📐") };
-            sizeSymbols.Click += (_, _) => SizeSymbolsByType();
-            ctx.Items.Add(sizeSymbols);
-
             var autoLayout = new MenuItem { Header = "Perform Auto-Layout", Icon = IconHelper.MIcon("\U0001F4D0") }; // ruler
             autoLayout.Click += (_, _) =>
             {
@@ -3316,6 +3310,10 @@ public partial class FlowsheetView : UserControl
                 Margin = new Thickness(4, 2, 4, 6)
             };
 
+            // Share a slot within each category, large enough for its biggest thumbnail.
+            // Enlarged columns must not overflow the slot into the label below.
+            var iconSlotSize = DWSIM.UI.Shared.Avalonia.UiScale.Size(Math.Max(56, 40 * items.Max(item => item.scale)));
+
             foreach (var (name, iconBytes, tip, iconScale) in items)
             {
                 var cell = new StackPanel
@@ -3356,8 +3354,8 @@ public partial class FlowsheetView : UserControl
                 iconCtrl.VerticalAlignment = VerticalAlignment.Center;
                 cell.Children.Add(new Border
                 {
-                    Width = DWSIM.UI.Shared.Avalonia.UiScale.Size(56),
-                    Height = DWSIM.UI.Shared.Avalonia.UiScale.Size(56),
+                    Width = iconSlotSize,
+                    Height = iconSlotSize,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Child = iconCtrl
                 });
