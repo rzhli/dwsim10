@@ -3379,7 +3379,8 @@ Namespace UnitOperations
             Next
         End Sub
 
-        Public Overridable Function GetSolverInputData(Optional ByVal ignoreuserestimates As Boolean = False) As ColumnSolverInputData
+        Public Overridable Function GetSolverInputData(Optional ByVal ignoreuserestimates As Boolean = False,
+                                                       Optional ByVal splitFeedByVolatility As Boolean = False) As ColumnSolverInputData
 
             Dim IObj As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
 
@@ -3890,6 +3891,26 @@ Namespace UnitOperations
                 End If
             End If
 
+            'Reflux ratio and product rates say nothing about the product compositions, and without them every
+            'stage starts at the feed composition, between the feed's bubble and dew points (an ethanol/water
+            'column at reflux ratio 8 then starts its condenser 8 K too hot, and neither solver gets back from
+            'there). When asked (the retry after a failed solve), split the feed sharply by volatility instead:
+            'the most volatile compounds fill the distillate rate, the rest leave in the bottoms, and the stage
+            'temperatures and compositions start on the line between the two products.
+            If splitFeedByVolatility AndAlso ColumnType = ColType.DistillationColumn AndAlso
+                CondenserType = condtype.Total_Condenser AndAlso distVx.Sum = 0.0 AndAlso rebVx.Sum = 0.0 AndAlso
+                distrate > 0.0 AndAlso distrate < sumF - sum0_ Then
+                Dim left As Double = distrate
+                For Each k In Enumerable.Range(0, nc).OrderByDescending(Function(c) Convert.ToDouble(Kref(c)))
+                    Dim take As Double = Math.Min(left, sumcf(k))
+                    distVx(k) = take
+                    rebVx(k) = sumcf(k) - take
+                    left -= take
+                Next
+                distVx = distVx.NormalizeY()
+                rebVx = rebVx.NormalizeY()
+            End If
+
             IObj?.Paragraphs.Add(String.Format("Estimated/Specified Distillate Rate: {0} mol/s", distrate))
             IObj?.Paragraphs.Add(String.Format("Estimated/Specified Vapor Overflow Rate: {0} mol/s", vaprate))
             IObj?.Paragraphs.Add(String.Format("Estimated/Specified Reflux Ratio: {0}", rr))
@@ -4250,7 +4271,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -4290,7 +4312,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -5288,7 +5311,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -5328,7 +5352,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -5631,8 +5656,12 @@ Namespace UnitOperations
                         ' Sort components by K-value; alpha = K_lightest / K_2nd-lightest
                         ' rr â‰ˆ alpha / (alpha - 1), then scale by Gilliland factor 1.3
                         If nc >= 2 Then
-                            Dim sortedK = Kref.Select(Function(k, idx) New With {.K = k, .Idx = idx}).
+                            'rank only the compounds in the column feed: one at zero in every feed carries whatever
+                            'K its model gives at zero fraction and would set alpha (all of them if fewer than two)
+                            Dim allK = Kref.Select(Function(k, idx) New With {.K = k, .Idx = idx}).
                                               OrderByDescending(Function(e) e.K).ToArray()
+                            Dim sortedK = allK.Where(Function(e) zm(e.Idx) <> 0.0).ToArray()
+                            If sortedK.Length < 2 Then sortedK = allK
                             Dim K1 = Math.Max(sortedK(0).K, 0.0000000001)
                             Dim K2 = Math.Max(sortedK(1).K, 0.0000000001)
                             Dim alpha_lk As Double = K1 / K2
@@ -6316,7 +6345,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -6348,7 +6378,8 @@ Namespace UnitOperations
                             x2trials.Add(xt2.ToArray())
                         End If
                         Dim rnd As New Random(counter)
-                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d) rnd.NextDouble()).ToArray
+                        'random trials only over the compounds in the column feed (same draws when all are present)
+                        trialcomp = Enumerable.Repeat(0, nc).Select(Function(d, jj) rnd.NextDouble() * If(zm(jj) <> 0.0, 1.0, 0.0)).ToArray
                         trialcomp = trialcomp.NormalizeY
                     Next
 
@@ -6469,6 +6500,34 @@ Namespace UnitOperations
 
         End Sub
 
+        ''' <summary>
+        ''' The last attempt of the bubble-point solvers, from the auto-generated estimates. When that fails
+        ''' too, the column goes to the Naphtali-Sandholm solver, started from the estimates that split the
+        ''' feed by volatility: a column the bubble-point method cannot converge (a long section pinched
+        ''' against an azeotrope, for one) still converges. A column that converges on either bubble-point
+        ''' attempt never gets here. When Naphtali-Sandholm fails as well, the bubble-point error is reported.
+        ''' </summary>
+        Private Function SolveBubblePointRetry(bpsolver As ColumnSolver) As ColumnSolverOutputData
+            SetColumnSolver(bpsolver)
+            Try
+                Return Solver.SolveColumn(GetSolverInputData(True))
+            Catch oex As OperationCanceledException
+                Throw
+            Catch bpex As Exception
+                FlowSheet.ShowMessage(GraphicObject.Tag + ": the bubble-point solver did not converge (" + bpex.Message + "). DWSIM will solve the column with the Naphtali-Sandholm solver...", IFlowsheet.MessageType.Warning)
+                Dim nsinput = GetSolverInputData(True, True)
+                nsinput.CalculationMode = 0
+                SetColumnSolver(New SolvingMethods.NaphtaliSandholmMethod())
+                Try
+                    Return Solver.SolveColumn(nsinput)
+                Catch oex As OperationCanceledException
+                    Throw
+                Catch ex As Exception
+                    Throw bpex
+                End Try
+            End Try
+        End Function
+
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
 
             ColumnPropertiesProfile = ""
@@ -6554,9 +6613,8 @@ Namespace UnitOperations
                     End Try
                     If solvererror Then
                         FlowSheet.ShowMessage(GraphicObject.Tag + ": Column Solver did not converge. Will reset some parameters and try again shortly...", IFlowsheet.MessageType.Warning)
-                        'try to solve with auto-generated initial estimates.
-                        SetColumnSolver(New SolvingMethods.WangHenkeMethod2())
-                        so = Solver.SolveColumn(GetSolverInputData(True))
+                        'try to solve with auto-generated initial estimates, then with Naphtali-Sandholm.
+                        so = SolveBubblePointRetry(New SolvingMethods.WangHenkeMethod2())
                     End If
                 ElseIf SolvingMethodName.Contains("Bubble") Then
                     Try
@@ -6567,9 +6625,8 @@ Namespace UnitOperations
                     End Try
                     If solvererror Then
                         FlowSheet.ShowMessage(GraphicObject.Tag + ": Column Solver did not converge. Will reset some parameters and try again shortly...", IFlowsheet.MessageType.Warning)
-                        'try to solve with auto-generated initial estimates.
-                        SetColumnSolver(New SolvingMethods.WangHenkeMethod())
-                        so = Solver.SolveColumn(GetSolverInputData(True))
+                        'try to solve with auto-generated initial estimates, then with Naphtali-Sandholm.
+                        so = SolveBubblePointRetry(New SolvingMethods.WangHenkeMethod())
                     End If
                 ElseIf SolvingMethodName.Contains("Naphtali") Then
                     Try
@@ -6583,10 +6640,10 @@ Namespace UnitOperations
                     End Try
                     If solvererror Then
                         FlowSheet.ShowMessage(GraphicObject.Tag + ": the column did not converge. DWSIM will try again with a different solver configuration...", IFlowsheet.MessageType.Warning)
-                        'try to solve with auto-generated initial estimates.
+                        'try to solve with auto-generated initial estimates, the products split by volatility.
                         inputdata.CalculationMode = 0
                         SetColumnSolver(New SolvingMethods.NaphtaliSandholmMethod())
-                        so = Solver.SolveColumn(GetSolverInputData(True))
+                        so = Solver.SolveColumn(GetSolverInputData(True, True))
                     End If
                 Else
                     If Column.ExternalColumnSolvers.ContainsKey(SolvingMethodName) Then

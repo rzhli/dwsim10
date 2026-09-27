@@ -45,6 +45,10 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         private static DWSIM.Thermodynamics.PropertyPackages.PropertyPackage Package(params string[] compounds)
+            => Package(new DWSIM.Thermodynamics.PropertyPackages.NRTLPropertyPackage(), compounds);
+
+        private static DWSIM.Thermodynamics.PropertyPackages.PropertyPackage Package(
+            DWSIM.Thermodynamics.PropertyPackages.PropertyPackage pp, params string[] compounds)
         {
             var flowsheet = new DWSIM.DynamicRunner.Flowsheet(null, null);
             flowsheet.Init();
@@ -57,10 +61,7 @@ namespace DWSIM.Engine.SmokeTests
                 flowsheet.AddCompound(name);
             }
 
-            var pp = new DWSIM.Thermodynamics.PropertyPackages.NRTLPropertyPackage
-            {
-                Flowsheet = flowsheet
-            };
+            pp.Flowsheet = flowsheet;
 
             var obj = flowsheet.AddObject(
                 Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream, 0, 0, "feed");
@@ -74,20 +75,57 @@ namespace DWSIM.Engine.SmokeTests
         }
 
         /// <summary>
-        /// What used to fail here was not the arithmetic: it was that the solver reported an
-        /// iteration in which it took no step. The line search would reject all forty-seven of
-        /// its trial points, the iteration would be spent rebuilding the quasi-Newton matrix from
-        /// the same point, and the next iteration would report the same objective to the last
-        /// bit. This flash watches the objective for a stall, on a threshold of 1e-10, and read
-        /// the repeat as convergence: it ended the solve at iteration 13 of the 26 it needed.
-        /// Those iterations are flagged as restoration now and are kept out of the callback.
+        /// What used to fail here was the solve, and the flash believing it. The constrained solver
+        /// measured its trial points under the new barrier parameter against the current point
+        /// under the old one, so after every fall of the parameter the line search rejected all
+        /// its trial points; and the flash's stall callback (objective repeated to 1e-10) read the
+        /// repeat as convergence. The solver now measures both under the same parameter, and the
+        /// flash takes Newton steps on the exact Hessian of the Gibbs energy with no stall callback.
+        ///
+        /// Water, n-hexane and methane at 10 bar and 350 K split into a vapour and two liquids, so
+        /// the Gibbs flash runs its constrained minimization from a genuine second liquid. It is
+        /// checked against NestedLoops3PV3 on the same package in the same run, which keeps the
+        /// comparison free of cross-architecture last-bit differences.
         /// </summary>
         [Test]
         public void TheGibbsFlashMatchesTheNativeSolver()
         {
-            // Native reference, ethanol and water at 355 K, from the DWSIM_Private harness:
-            //   gibbs   V 0.42217598424112829  y 0.5737043701687784  x 0.27315871509177725
-            //   nested  V 0.42112183178205903  y 0.5738157532569774  x 0.27354160543063455
+            var pp = Package(new DWSIM.Thermodynamics.PropertyPackages.PengRobinsonPropertyPackage(),
+                             "Water", "N-hexane", "Methane");
+            var feed = new[] { 0.5, 0.3, 0.2 };
+            const double p = 10e5, t = 350.0;
+
+            var nested = Split.Of((object[])new NestedLoops3PV3
+            {
+                StabSearchSeverity = 0,
+                StabSearchCompIDs = pp.RET_VNAMES()
+            }.Flash_PT((double[])feed.Clone(), p, t, pp));
+
+            var gibbs = Split.Of((object[])new GibbsMinimization3P
+            {
+                StabSearchSeverity = 0,
+                StabSearchCompIDs = pp.RET_VNAMES()
+            }.Flash_PT((double[])feed.Clone(), p, t, pp));
+
+            TestContext.WriteLine("nested V {0:R17}  L1 {1:R17}  L2 {2:R17}", nested.Vapour, nested.Liquid1, nested.Liquid2);
+            TestContext.WriteLine("gibbs  V {0:R17}  L1 {1:R17}  L2 {2:R17}", gibbs.Vapour, gibbs.Liquid1, gibbs.Liquid2);
+
+            Assert.That(nested.Vapour, Is.GreaterThan(0.0), "the reference is not three-phase");
+            Assert.That(nested.Liquid2, Is.GreaterThan(0.0), "the reference is not three-phase");
+            // which liquid is called 1 and which 2 is each algorithm's own convention
+            Assert.That(gibbs.Vapour, Is.EqualTo(nested.Vapour).Within(1e-3));
+            Assert.That(Math.Min(gibbs.Liquid1, gibbs.Liquid2), Is.EqualTo(Math.Min(nested.Liquid1, nested.Liquid2)).Within(1e-3));
+            Assert.That(Math.Max(gibbs.Liquid1, gibbs.Liquid2), Is.EqualTo(Math.Max(nested.Liquid1, nested.Liquid2)).Within(1e-3));
+        }
+
+        /// <summary>
+        /// Ethanol and water at 355 K have no second liquid. The stability test's only candidate is
+        /// a copy of the liquid, which the Gibbs flash drops, so it returns the two-phase result of
+        /// the nested-loops flash it starts from.
+        /// </summary>
+        [Test]
+        public void TheGibbsFlashKeepsATwoPhaseSplitTwoPhase()
+        {
             var pp = Package("Ethanol", "Water");
             var feed = new[] { 0.4, 0.6 };
 
@@ -100,18 +138,10 @@ namespace DWSIM.Engine.SmokeTests
 
             TestContext.WriteLine("gibbs V {0:R17}  y {1:R17}  x {2:R17}", gibbs.Vapour, gibbs.Y[0], gibbs.X1[0]);
 
-            // The reference is what the native Ipopt39.dll produced on x64. The managed
-            // reimplementation converges to a slightly different, equally valid point: it lands about
-            // 5.6e-5 from the reference even on x64, so most of a 1e-4 band is already spent on the
-            // solver difference alone. On arm64 (the macOS runner) the last-bit differences of fused
-            // multiply-add and of the platform's Exp/Log, amplified next to the flat ethanol/water
-            // azeotrope, push it past 1e-4. A 1e-3 band (0.1 mol%) still pins the correct two-phase
-            // split and still catches the premature stall this test exists for, without depending on
-            // cross-architecture bit reproducibility the runtime does not promise.
-            const double tol = 1e-3;
-            Assert.That(gibbs.Vapour, Is.EqualTo(0.42217598424112829).Within(tol));
-            Assert.That(gibbs.Y[0], Is.EqualTo(0.5737043701687784).Within(tol));
-            Assert.That(gibbs.X1[0], Is.EqualTo(0.27315871509177725).Within(tol));
+            Assert.That(gibbs.Liquid2, Is.EqualTo(0.0).Within(1e-12));
+            Assert.That(gibbs.Vapour, Is.EqualTo(0.42112183178205903).Within(1e-4));
+            Assert.That(gibbs.Y[0], Is.EqualTo(0.5738157532569774).Within(1e-4));
+            Assert.That(gibbs.X1[0], Is.EqualTo(0.27354160543063455).Within(1e-4));
         }
 
         [Test]

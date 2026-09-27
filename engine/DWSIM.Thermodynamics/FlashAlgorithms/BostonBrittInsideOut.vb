@@ -75,6 +75,28 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
         Public Overrides Function Flash_PT(ByVal Vz As Double(), ByVal P As Double, ByVal T As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
 
+            Dim r = Flash_PT_IO(Vz, P, T, PP, ReuseKI, PrevKi)
+
+            ' The inside-out loop calls the feed single-phase when the vapour fraction sits at 0 or 1 after ten
+            ' outer iterations. An iteration that drifts there from a real two-phase split (NRTL methanol/acetone
+            ' near its azeotrope) is confirmed against the nested-loops flash, the default algorithm.
+            Dim vr = Convert.ToDouble(r(1)), itr = Convert.ToInt32(r(4))
+            If itr > 10 AndAlso (vr >= 0.999999 OrElse vr <= 0.0000001) Then
+                Try
+                    Dim nl As New NestedLoops() With {.FlashSettings = Me.FlashSettings}
+                    Dim rn = nl.Flash_PT(Vz, P, T, PP, ReuseKI, PrevKi)
+                    Dim vn = Convert.ToDouble(rn(1))
+                    If vn > 0.0000001 AndAlso vn < 0.999999 Then Return rn
+                Catch ex As Exception
+                End Try
+            End If
+
+            Return r
+
+        End Function
+
+        Private Function Flash_PT_IO(ByVal Vz As Double(), ByVal P As Double, ByVal T As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
+
             Dim d1, d2 As Date, dt As TimeSpan
             Dim i, j As Integer
 
@@ -313,7 +335,8 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 'Kb = CalcKbj1(Ki)
 
                 For i = 0 To n
-                    uic(i) = Log(Ki(i))
+                    'a compound at z = 0 keeps its variable: it adds nothing to the error or to the update
+                    If fi(i) = 0.0 Then uic(i) = ui(i) Else uic(i) = Log(Ki(i))
                 Next
 
                 '-------------------------------------------
@@ -359,7 +382,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                 If Not proppack.CurrentMaterialStream.Flowsheet Is Nothing Then proppack.CurrentMaterialStream.Flowsheet.CheckStatus()
 
-            Loop Until AbsSqrSumY(fx) < etol
+            Loop Until AbsSum(fx) < etol
 
             d2 = Date.Now
 
@@ -541,8 +564,12 @@ out:
                 i = i + 1
             Loop Until i = n + 1
 
-            Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T_, P))
-            Kb = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P))
+            Dim K_ As Double() = PP.DW_CalcKvalue(Vx, Vy, T_, P)
+            Dim Kt As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P)
+            'both ends of the finite difference from the same compound
+            Dim jb As Integer = CalcKbj1Index(Kt)
+            Kb_ = RefK(K_(jb))
+            Kb = RefK(Kt(jb))
             Kb0 = Kb_
 
             Dim invTdiff_AB As Double = 1 / T_ - 1 / T
@@ -680,7 +707,8 @@ restart:    Do
                 Ki = PP.DW_CalcKvalue(Vx, Vy, T, P)
 
                 For i = 0 To n
-                    If Ki(i) > 0 AndAlso Kb > 0 Then
+                    'a compound at z = 0 keeps its variable: it adds nothing to the error or to the update
+                    If fi(i) <> 0.0 AndAlso Ki(i) > 0 AndAlso Kb > 0 Then
                         uic(i) = Log(Ki(i) / Kb)
                     Else
                         uic(i) = ui(i)
@@ -815,7 +843,7 @@ restart:    Do
 
                 If Not proppack.CurrentMaterialStream.Flowsheet Is Nothing Then proppack.CurrentMaterialStream.Flowsheet.CheckStatus()
 
-            Loop Until AbsSqrSumY(fx) < etol Or ecount > maxit_e
+            Loop Until AbsSum(fx) < etol Or ecount > maxit_e
 
             If Abs(fr) > itol Then
 
@@ -1061,10 +1089,15 @@ restart:    Do
                 i = i + 1
             Loop Until i = n + 1
 
-            Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T_, P))
+            'Kb at T from the same K values and the same compound as Kb_ at T_: with the Wilson estimate at T
+            'against the EOS at T_ (0.1 K apart) the slope B of the Kb model came out of the order of 1E+5 K
+            Dim K_ As Double() = PP.DW_CalcKvalue(Vx, Vy, T_, P)
+            Dim Kt As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P)
+            Dim jb As Integer = CalcKbj1Index(Kt)
+            Kb_ = RefK(K_(jb))
             Kb0 = Kb_
 
-            Kb = CalcKbj1(Ki)
+            Kb = RefK(Kt(jb))
 
             Dim invTdiff_AB As Double = 1 / T_ - 1 / T
             If Math.Abs(invTdiff_AB) < 1.0E-30 Then invTdiff_AB = Math.Sign(invTdiff_AB + 1.0E-30) * 1.0E-30
@@ -1199,7 +1232,8 @@ restart:    Do
                 Ki = PP.DW_CalcKvalue(Vx, Vy, T, P)
 
                 For i = 0 To n
-                    If Ki(i) > 0 AndAlso Kb > 0 Then
+                    'a compound at z = 0 keeps its variable: it adds nothing to the error or to the update
+                    If fi(i) <> 0.0 AndAlso Ki(i) > 0 AndAlso Kb > 0 Then
                         uic(i) = Log(Ki(i) / Kb)
                     Else
                         uic(i) = ui(i)
@@ -1413,6 +1447,44 @@ restart:    Do
 
         Public Overrides Function Flash_PV(ByVal Vz As Double(), ByVal P As Double, ByVal V As Double, ByVal Tref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
 
+            If PP.AUX_IS_SINGLECOMP(Vz) Then Return Flash_PV_IO(Vz, P, V, Tref, PP, ReuseKI, PrevKi)
+
+            'With no temperature given, a two-phase specification starts at the ideal Rachford-Rice temperature,
+            'as in NestedLoops: from 0.8 x the mole-average Tc with Raoult K values the loop can end a hundred
+            'kelvin away, next to the trivial solution. Bubble and dew points keep their seed and use this one
+            'only to retry after a failure.
+            Dim Tseed As Double = Tref
+            If Tref = 0.0 AndAlso V > 0.0 AndAlso V < 1.0 Then Tseed = EstimatePVTemperature(Vz, P, V, PP)
+
+            Try
+                Return Flash_PV_IO(Vz, P, V, Tseed, PP, ReuseKI, PrevKi)
+            Catch ex As Exception
+                Dim Tretry As Double = EstimatePVTemperature(Vz, P, V, PP)
+                If Tretry <> Tseed AndAlso Not Double.IsNaN(Tretry) Then
+                    Try
+                        Return Flash_PV_IO(Vz, P, V, Tretry, PP, False, Nothing)
+                    Catch
+                    End Try
+                End If
+                'near the critical point both starts can end on a stationary point that is not the equilibrium
+                'split: the nested-loops flash, the default algorithm, answers if a PT flash confirms its result
+                Dim rn = NestedLoopsFallback(Vz, P, 0.0, V, PP, True)
+                If rn IsNot Nothing Then Return rn
+                Throw ex
+            End Try
+
+        End Function
+
+        Private Function EstimatePVTemperature(Vz As Double(), P As Double, V As Double, PP As PropertyPackages.PropertyPackage) As Double
+            Dim Tsat(Vz.Length - 1) As Double
+            For i As Integer = 0 To Vz.Length - 1
+                Tsat(i) = PP.AUX_TSATi(P, i)
+            Next
+            Return NestedLoops.EstimatePVTemperature(Vz, P, V, PP, Tsat)
+        End Function
+
+        Private Function Flash_PV_IO(ByVal Vz As Double(), ByVal P As Double, ByVal V As Double, ByVal Tref As Double, ByVal PP As PropertyPackages.PropertyPackage, ByVal ReuseKI As Boolean, ByVal PrevKi As Double()) As Object
+
             Dim d1, d2 As Date, dt As TimeSpan
             Dim i, j As Integer
 
@@ -1496,7 +1568,7 @@ restart:    Do
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) Then
                     For i = 0 To n
                         Vp(i) = PP.AUX_PVAPi(Vn(i), T)
                         Ki(i) = PrevKi(i)
@@ -1538,9 +1610,15 @@ restart:    Do
                 i = i + 1
             Loop Until i = n + 1
 
-            Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T_, P))
-            Kb0 = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T0, P))
-            Kb = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P))
+            'the three reference K values from one compound, the one closest to 1 at T: picked separately, the
+            'finite difference could compare two compounds
+            Dim K_ As Double() = PP.DW_CalcKvalue(Vx, Vy, T_, P)
+            Dim K0 As Double() = PP.DW_CalcKvalue(Vx, Vy, T0, P)
+            Dim Kt As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P)
+            Dim jb As Integer = CalcKbj1Index(Kt)
+            Kb_ = RefK(K_(jb))
+            Kb0 = RefK(K0(jb))
+            Kb = RefK(Kt(jb))
 
             B = Log(Kb_ / Kb) / (1 / T_ - 1 / T)
             A = Log(Kb) - B * (1 / T - 1 / T0)
@@ -1569,19 +1647,7 @@ restart:    Do
 
                 If RLoop Then
 
-                    Dim fr, dfr, R0, R1 As Double
-                    Dim icount As Integer = 0
-
-                    Do
-                        R1 = R + 0.001
-                        fr = Me.LiquidFractionBalance(R)
-                        dfr = (fr - Me.LiquidFractionBalance(R1)) / -0.001
-                        R0 = R
-                        R += -fr / dfr
-                        If R < 0 Then R = 0
-                        If R > 1 Then R = 1
-                        icount += 1
-                    Loop Until Abs(fr) < itol Or icount > maxit_i Or Abs(R - R0) < 0.000001
+                    R = SolveR(AddressOf LiquidFractionBalance, R)
 
                 Else
 
@@ -1622,7 +1688,8 @@ restart:    Do
                 'Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T_, P))
 
                 For i = 0 To n
-                    uic(i) = Log(Ki(i) / Kb)
+                    'a compound at z = 0 keeps its variable: it adds nothing to the error or to the update
+                    If fi(i) = 0.0 Then uic(i) = ui(i) Else uic(i) = Log(Ki(i) / Kb)
                 Next
 
                 Bc = Log(Kb_ / Kb) / (1 / T_ - 1 / T)
@@ -1697,13 +1764,18 @@ restart:    Do
 
                 If Not proppack.CurrentMaterialStream.Flowsheet Is Nothing Then proppack.CurrentMaterialStream.Flowsheet.CheckStatus()
 
-            Loop Until AbsSum(fx) < etol * (n + 2)
+            Loop Until AbsSum(fx) < etol * (fi.Where(Function(zi) zi <> 0.0).Count() + 1)
 
 final:      d2 = Date.Now
 
             dt = d2 - d1
 
-            If PP.AUX_CheckTrivial(Ki) Then Throw New Exception("PV Flash [IO]: Invalid result: converged to the trivial solution (T = " & T & " ).")
+            'a single compound skips the loop (T is its saturation temperature) and its K values are 1 by definition
+            If Not PP.AUX_IS_SINGLECOMP(Vz) Then
+                If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then Throw New Exception("PV Flash [IO]: Invalid result: converged to the trivial solution (T = " & T & " ).")
+                If NearTrivialRejected(Vz, P, T, V, Ki, PP) Then Throw New Exception("PV Flash [IO]: Invalid result: converged next to the trivial solution (T = " & T & " ).")
+            End If
+            If SaturationPointRejected(Vz, T, P, V, Vx, Vy, PP) Then Throw New Exception("PV Flash [IO]: Invalid result: the feed has no incipient phase at T = " & T & " K (not a saturation point).")
 
             WriteDebugInfo("PV Flash [IO]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms. Error function value: " & AbsSum(fx))
 
@@ -1712,6 +1784,59 @@ final:      d2 = Date.Now
         End Function
 
         Public Overrides Function Flash_TV(ByVal Vz As Double(), ByVal T As Double, ByVal V As Double, ByVal Pref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
+
+            If PP.AUX_IS_SINGLECOMP(Vz) Then Return Flash_TV_IO(Vz, T, V, Pref, PP, ReuseKI, PrevKi)
+
+            'The Kb model is fitted to the EOS K values at the starting pressure. Far from the answer they can be
+            'all near 1 (the feed takes the vapour root as the liquid), the slope comes out near 1 and the pressure
+            'update divides by zero; after a failure the loop starts again from the ideal (Raoult) pressure of the
+            'specification, and then the nested-loops flash answers if a PT flash confirms its result.
+            Try
+                Return Flash_TV_IO(Vz, T, V, Pref, PP, ReuseKI, PrevKi)
+            Catch ex As Exception
+                Dim Pretry As Double = EstimateTVPressure(Vz, T, V, PP)
+                If Pretry <> Pref AndAlso Pretry > 0.0 AndAlso Not Double.IsInfinity(Pretry) Then
+                    Try
+                        Return Flash_TV_IO(Vz, T, V, Pretry, PP, False, Nothing)
+                    Catch
+                    End Try
+                End If
+                Dim rn = NestedLoopsFallback(Vz, 0.0, T, V, PP, False)
+                If rn IsNot Nothing Then Return rn
+                Throw ex
+            End Try
+
+        End Function
+
+        ''' <summary>
+        ''' Pressure at which the ideal (Raoult) K values meet the specified vapour fraction at T.
+        ''' </summary>
+        ''' <remarks>
+        ''' Above its critical temperature a compound's vapour pressure correlation is an extrapolation (hydrogen
+        ''' at 140 K gives 2E+5 bar); the Wilson estimate stands in for it there.
+        ''' </remarks>
+        Private Function EstimateTVPressure(Vz As Double(), T As Double, V As Double, PP As PropertyPackages.PropertyPackage) As Double
+            Dim nc As Integer = Vz.Length - 1
+            Dim Tc = PP.RET_VTC(), Pc = PP.RET_VPC(), w = PP.RET_VW()
+            Dim Ps(nc) As Double
+            For i As Integer = 0 To nc
+                If T < Tc(i) Then Ps(i) = PP.AUX_PVAPi(i, T) Else Ps(i) = Pc(i) * Exp(5.373 * (1 + w(i)) * (1 - Tc(i) / T))
+            Next
+            Dim present = Enumerable.Range(0, nc + 1).Where(Function(i) Vz(i) > 0.0 AndAlso Ps(i) > 0.0).ToArray()
+            If present.Length = 0 Then Return 0.0
+            If V <= 0.0 Then Return present.Sum(Function(i) Vz(i) * Ps(i))
+            If V >= 1.0 Then Return 1.0 / present.Sum(Function(i) Vz(i) / Ps(i))
+            'Rachford-Rice in P, decreasing in P between the lowest and the highest vapour pressure
+            Dim lo As Double = present.Min(Function(i) Ps(i)), hi As Double = present.Max(Function(i) Ps(i)), m As Double = lo
+            For k As Integer = 1 To 200
+                m = Sqrt(lo * hi)
+                If present.Sum(Function(i) Vz(i) * (Ps(i) / m - 1) / (1 + V * (Ps(i) / m - 1))) > 0.0 Then lo = m Else hi = m
+                If hi / lo < 1.0000001 Then Exit For
+            Next
+            Return m
+        End Function
+
+        Private Function Flash_TV_IO(ByVal Vz As Double(), ByVal T As Double, ByVal V As Double, ByVal Pref As Double, ByVal PP As PropertyPackages.PropertyPackage, ByVal ReuseKI As Boolean, ByVal PrevKi As Double()) As Object
 
             Dim d1, d2 As Date, dt As TimeSpan
             Dim i, j As Integer
@@ -1745,8 +1870,11 @@ final:      d2 = Date.Now
                     i += 1
                 Loop Until i = n + 1
                 ' vapour pressures of the compounds present only: one at z = 0 says nothing about this mixture
-                Dim Vpz = Enumerable.Range(0, n + 1).Where(Function(q) Vz(q) <> 0.0).Select(Function(q) Vp(q)).ToArray()
-                If Vpz.Length = 0 Then Vpz = Vp
+                ' and with a vapour pressure: above 0.9 Tc it is left at zero, and a zero Pmin gives P = 0 at V = 1
+                Dim Vpz = Enumerable.Range(0, n + 1).Where(Function(q) Vz(q) <> 0.0 AndAlso Vp(q) > 0.0).Select(Function(q) Vp(q)).ToArray()
+                'every compound present above 0.9 Tc: start from the ideal pressure (Common.Min of the all-zero Vp read
+                'past its end)
+                If Vpz.Length = 0 Then Vpz = {EstimateTVPressure(Vz, T, V, PP)}
 
                 Pmin = Common.Min(Vpz)
                 Pmax = Common.Max(Vpz)
@@ -1790,7 +1918,7 @@ final:      d2 = Date.Now
                     i += 1
                 Loop Until i = n + 1
             Else
-                If Not PP.AUX_CheckTrivial(PrevKi) And Not Double.IsNaN(PrevKi(0)) Then
+                If Not PP.AUX_CheckTrivial(PrevKi, 0.01, Vz) And Not Double.IsNaN(PrevKi(0)) Then
                     For i = 0 To n
                         Vp(i) = PP.AUX_PVAPi(Vn(i), T)
                         Ki(i) = PrevKi(i)
@@ -1832,9 +1960,15 @@ final:      d2 = Date.Now
                 i = i + 1
             Loop Until i = n + 1
 
-            Kb0 = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P0))
-            Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P_))
-            Kb = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P))
+            'the three reference K values from one compound, the one closest to 1 at P: picked separately, the
+            'slope B compared two compounds (and is never updated in the loop)
+            Dim K0 As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P0)
+            Dim K_ As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P_)
+            Dim Kp As Double() = PP.DW_CalcKvalue(Vx, Vy, T, P)
+            Dim jb As Integer = CalcKbj1Index(Kp)
+            Kb0 = RefK(K0(jb))
+            Kb_ = RefK(K_(jb))
+            Kb = RefK(Kp(jb))
 
             B = Log(Kb_ * P_ / (Kb0 * P0)) / Log(P_ / P0)
             A = Log(Kb * P) - B * Log(P / P0)
@@ -1863,19 +1997,7 @@ final:      d2 = Date.Now
 
                 If RLoop Then
 
-                    Dim fr, dfr, R0, R1 As Double
-                    Dim icount As Integer = 0
-
-                    Do
-                        R1 = R + 0.001
-                        fr = Me.LiquidFractionBalanceP(R)
-                        dfr = (fr - Me.LiquidFractionBalanceP(R1)) / -0.001
-                        R0 = R
-                        R += -fr / dfr
-                        If R < 0 Then R = 0
-                        If R > 1 Then R = 1
-                        icount += 1
-                    Loop Until Abs(fr) < itol Or icount > maxit_i
+                    R = SolveR(AddressOf LiquidFractionBalanceP, R)
 
                 Else
 
@@ -1921,7 +2043,8 @@ final:      d2 = Date.Now
                 'Kb_ = CalcKbj1(PP.DW_CalcKvalue(Vx, Vy, T, P_))
 
                 For i = 0 To n
-                    uic(i) = Log(Ki(i) / Kb)
+                    'a compound at z = 0 keeps its variable: it adds nothing to the error or to the update
+                    If fi(i) = 0.0 Then uic(i) = ui(i) Else uic(i) = Log(Ki(i) / Kb)
                 Next
 
                 Bc = Log(Kb_ * P_ / (Kb0 * P0)) / Log(P_ / P0)
@@ -1985,18 +2108,123 @@ final:      d2 = Date.Now
 
 
 
-            Loop Until AbsSum(fx) < etol * (n + 2)
+            Loop Until AbsSum(fx) < etol * (fi.Where(Function(zi) zi <> 0.0).Count() + 1)
 
 final:      d2 = Date.Now
 
             dt = d2 - d1
 
-            If PP.AUX_CheckTrivial(Ki) Then Throw New Exception("TV Flash [IO]: Invalid result: converged to the trivial solution (P = " & P & " ).")
+            'a single compound skips the loop (P is its vapour pressure) and its K values are 1 by definition
+            If Not PP.AUX_IS_SINGLECOMP(Vz) Then
+                If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then Throw New Exception("TV Flash [IO]: Invalid result: converged to the trivial solution (P = " & P & " ).")
+                If NearTrivialRejected(Vz, P, T, V, Ki, PP) Then Throw New Exception("TV Flash [IO]: Invalid result: converged next to the trivial solution (P = " & P & " ).")
+            End If
 
             WriteDebugInfo("TV Flash [IO]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms. Error function value: " & AbsSum(fx))
 
             Return New Object() {L, V, Vx, Vy, P, ecount, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
 
+        End Function
+
+        ''' <summary>
+        ''' Solves the inner-loop balance L(R) = Lf of the PV and TV flashes for R in [0, 1].
+        ''' </summary>
+        ''' <remarks>
+        ''' L falls monotonically from 1 at R = 0 to 0 at R = 1, so [0, 1] brackets the root for 0 &lt; Lf &lt; 1.
+        ''' Newton steps (forward difference, as before) are taken while they stay inside the bracket, bisection
+        ''' otherwise: the clamped Newton could bounce between R = 0 and R = 1 and stop on an end. The balance is
+        ''' evaluated last at the returned R, so T (or P), the compositions and L left in the fields belong to
+        ''' that R and not to the R + 0.001 of the derivative.
+        ''' </remarks>
+        Private Function SolveR(balance As Func(Of Double, Double), R As Double) As Double
+            Dim lo As Double = 0.0, hi As Double = 1.0
+            Dim fr, dfr, Rn, h As Double
+            If Not (R >= 0.0 AndAlso R <= 1.0) Then R = 0.5
+            For icount As Integer = 0 To maxit_i
+                fr = balance(R)
+                If Abs(fr) < 0.0000000001 Then Return R
+                If fr > 0.0 Then lo = R Else hi = R
+                h = If(R + 0.001 <= 1.0, 0.001, -0.001)
+                dfr = (balance(R + h) - fr) / h
+                Rn = R - fr / dfr
+                If Not (Rn > lo AndAlso Rn < hi) Then Rn = 0.5 * (lo + hi)
+                R = Rn
+                If hi - lo < 0.000000000000001 Then Exit For
+            Next
+            balance(R)
+            Return R
+        End Function
+
+        ''' <summary>
+        ''' True when a PV/TV result lies next to the trivial solution or near the critical point and a PT flash at
+        ''' it does not confirm it.
+        ''' </summary>
+        ''' <remarks>
+        ''' Near the critical region the inside-out equations also hold at stationary points that are not the
+        ''' equilibrium split (both phases almost the feed, or a split a PT flash does not find), and the loop
+        ''' converges there as readily as on the real one; with the outer tolerance of the flash settings a
+        ''' near-critical split also lands some tenths of a kelvin away. Results whose K values span less than
+        ''' NearCriticalLnKSpan in ln K are checked with PTConfirms.
+        ''' </remarks>
+        Private Function NearTrivialRejected(Vz As Double(), P As Double, T As Double, V As Double, K As Double(), PP As PropertyPackages.PropertyPackage) As Boolean
+            Dim lnK = Enumerable.Range(0, Vz.Length).Where(Function(i) Vz(i) <> 0.0 AndAlso K(i) > 0.0).Select(Function(i) Log(K(i))).ToArray()
+            If lnK.Length = 0 OrElse lnK.Max() - lnK.Min() >= NearCriticalLnKSpan Then Return False
+            Return Not PTConfirms(Vz, P, T, V, PP)
+        End Function
+
+        ''' <summary>ln K span below which a PV/TV result is confirmed with a PT flash.</summary>
+        Private Const NearCriticalLnKSpan As Double = 1.5
+
+        ''' <summary>
+        ''' True when a PT flash at (T, P) gives the vapour fraction V: a two-phase V within 0.01, or within a quarter
+        ''' of the smaller phase fraction when that is less; a bubble or dew point within 0.01.
+        ''' </summary>
+        ''' <remarks>
+        ''' The PT flash runs to 1E-7 with up to 1000 iterations: with the default 1E-4 it is itself off by up to
+        ''' 0.06 near the critical point (a correct CO2/N2 dew point came out at V = 0.94) or stops at 100.
+        ''' </remarks>
+        Private Function PTConfirms(Vz As Double(), P As Double, T As Double, V As Double, PP As PropertyPackages.PropertyPackage) As Boolean
+            Dim tol As Double = If(V > 0.0 AndAlso V < 1.0, Math.Min(0.01, 0.25 * Math.Min(V, 1.0 - V)), 0.01)
+            Dim ptsettings As New Dictionary(Of Interfaces.Enums.FlashSetting, String)(FlashSettings)
+            ptsettings(Interfaces.Enums.FlashSetting.PTFlash_External_Loop_Tolerance) = "0.0000001"
+            ptsettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_External_Iterations) = "1000"
+            Dim pt As New BostonBrittInsideOut With {.FlashSettings = ptsettings}
+            Try
+                Return Abs(CDbl(pt.Flash_PT(Vz, P, T, PP)(1)) - V) <= tol
+            Catch ex As Exception
+                Return False
+            End Try
+        End Function
+
+        ''' <summary>
+        ''' The nested-loops PV (TV) flash, returned only when it is an equilibrium state that a PT flash confirms;
+        ''' Nothing otherwise.
+        ''' </summary>
+        ''' <remarks>
+        ''' The K values at the result have to reproduce y/x within 0.01 in ln K, they must not be trivial, and
+        ''' PTConfirms must accept it wherever its K values lie: near the critical point the nested-loops flash
+        ''' also returns saturation points where the feed is two-phase.
+        ''' </remarks>
+        Private Function NestedLoopsFallback(Vz As Double(), P As Double, T As Double, V As Double, PP As PropertyPackages.PropertyPackage, pv As Boolean) As Object
+            Try
+                Dim nl As New NestedLoops() With {.FlashSettings = Me.FlashSettings}
+                Dim res As Object() = If(pv, nl.Flash_PV(Vz, P, V, 0.0, PP), nl.Flash_TV(Vz, T, V, 0.0, PP))
+                If pv Then T = Convert.ToDouble(res(4)) Else P = Convert.ToDouble(res(4))
+                Dim x = DirectCast(res(2), Double()), y = DirectCast(res(3), Double())
+                If Double.IsNaN(T) OrElse Double.IsNaN(P) OrElse T <= 0.0 OrElse P <= 0.0 Then Return Nothing
+                If Abs(Convert.ToDouble(res(1)) - V) > 0.000001 Then Return Nothing
+                Dim K = PP.DW_CalcKvalue(x, y, T, P)
+                For i As Integer = 0 To Vz.Length - 1
+                    If Vz(i) = 0.0 Then Continue For
+                    If Not (x(i) > 0.0 AndAlso y(i) > 0.0 AndAlso K(i) > 0.0) Then Return Nothing
+                    If Abs(Log(K(i)) - Log(y(i) / x(i))) > 0.01 Then Return Nothing
+                Next
+                If PP.AUX_CheckTrivial(K, 0.01, Vz) Then Return Nothing
+                If Not PTConfirms(Vz, P, T, V, PP) Then Return Nothing
+                Return res
+            Catch ex As Exception
+                Return Nothing
+            End Try
         End Function
 
         Private Function LiquidFractionBalance(ByVal R As Double) As Double
@@ -2366,20 +2594,44 @@ final:      d2 = Date.Now
 
         Private Function CalcKbj1(ByVal K() As Double) As Double
 
+            Return RefK(K(CalcKbj1Index(K)))
+
+        End Function
+
+        ''' <summary>
+        ''' Index of the compound whose K value is closest to 1, the reference of the Kb model.
+        ''' </summary>
+        Private Function CalcKbj1Index(ByVal K() As Double) As Integer
+
             Dim i As Integer
             Dim n As Integer = UBound(K)
 
-            Dim Kbj1 As Double
+            Dim j As Integer
+            Dim first As Integer = 0
 
-            Kbj1 = K(0)
-            For i = 1 To n
-                If Abs(K(i) - 1) < Abs(Kbj1 - 1) Then Kbj1 = K(i)
+            'the reference comes from a compound in the mixture: one at z = 0 has a K value but no
+            'part in the equilibrium
+            If fi IsNot Nothing AndAlso fi.Length = K.Length Then
+                Do While first < n AndAlso fi(first) = 0.0
+                    first += 1
+                Loop
+            End If
+
+            j = first
+            For i = first + 1 To n
+                If fi IsNot Nothing AndAlso fi.Length = K.Length AndAlso fi(i) = 0.0 Then Continue For
+                If Abs(K(i) - 1) < Abs(K(j) - 1) Then j = i
             Next
 
-            ' Guard against zero or negative Kb (would cause Log errors)
-            If Kbj1 <= 0.0 Then Kbj1 = 1.0E-20
+            Return j
 
-            Return Kbj1
+        End Function
+
+        ''' <summary>Reference K value, guarded against zero or negative values (they would break the logarithms).</summary>
+        Private Shared Function RefK(ByVal K As Double) As Double
+
+            If K <= 0.0 Then Return 1.0E-20
+            Return K
 
         End Function
 

@@ -1348,11 +1348,13 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             'If CalcMode = 0 And esolv Is Nothing Then
             Try
-                'run 4 iterations of the bubble point method to enhance the initial estimates.
-                'if it doesn't suceeed, go on with the original estimates.
+                'solve the column with the bubble point method (to convergence, with its fallbacks) to
+                'enhance the initial estimates. a warm-up cut to a few sweeps leaves some columns (the
+                'natural gas deethanizer) out of Newton's reach. if it doesn't suceeed, go on with the
+                'original estimates.
 
                 Dim result = New WangHenkeMethod().Solve(dc, nc, ns, maxits, tol, F, V, Q, L, VSS, LSS, Kval,
-                                           x, y, z, fc, HF, T, P, condt, 1, eff,
+                                           x, y, z, fc, HF, T, P, condt, -1, eff,
                                            coltype, pp, specs, False, False)
                 T = result(0)
                 V = result(1)
@@ -1995,12 +1997,17 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             IObj?.Paragraphs.Add(String.Format("Final converged values for K: {0}", K.ToMathArrayString))
             IObj?.Paragraphs.Add(String.Format("Final converged values for Q: {0}", Q.ToMathArrayString))
 
-            For Each Ki In _Kval
-                If pp.AUX_CheckTrivial(Ki) Then
-                    IObj?.Paragraphs.Add("Invalid result - converged to the trivial solution.")
-                    Throw New Exception("Invalid result - converged to the trivial solution.")
-                End If
-            Next
+            'an activity-coefficient package has no vapour-liquid trivial solution: a stage with every K within
+            '0.01 of 1 sits at a real azeotrope (the top stages of an ethanol/water column). A liquid-liquid
+            'extractor keeps the test, since one liquid phase there is the trivial solution.
+            If LLEX OrElse pp.PackageType <> PropertyPackages.PackageType.ActivityCoefficient Then
+                For Each Ki In _Kval
+                    If pp.AUX_CheckTrivial(Ki) Then
+                        IObj?.Paragraphs.Add("Invalid result - converged to the trivial solution.")
+                        Throw New Exception("Invalid result - converged to the trivial solution.")
+                    End If
+                Next
+            End If
 
             IObj?.Close()
 
