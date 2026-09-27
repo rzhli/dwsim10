@@ -1053,7 +1053,13 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 PP.AUX_IS_SINGLECOMP(Phase.Mixture) Or trigger Then
                 IObj?.Paragraphs.Add("Using the normal version of the PS Flash Algorithm.")
                 IObj?.Close()
-                Return Flash_PS_2(Vz, P, S, Tref, PP, ReuseKI, PrevKi)
+                'as Flash_PH_0: the fast version when the normal one fails, which it does where the bubble or dew
+                'point it starts from does not exist (above the cricondenbar)
+                Try
+                    Return Flash_PS_2(Vz, P, S, Tref, PP, ReuseKI, PrevKi)
+                Catch ex As Exception
+                End Try
+                Return Flash_PS_1(Vz, P, S, Tref, PP, ReuseKI, PrevKi)
             Else
                 IObj?.Paragraphs.Add("Using the fast version of the PS Flash Algorithm.")
                 IObj?.Close()
@@ -1487,6 +1493,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 Dim hres = PerformHeuristicsTest(Vz, T, P, PP)
                 If hres.SolidPhase Then V = 0.5
                 H1 = Hb
+                'the enthalpy error falls from Hb > 0 at V = 0 to Hd < 0 at V = 1: Vlo and Vhi keep the
+                'interval that holds its root, used once a secant step has gone past an end of [0, 1]
+                Dim Vlo As Double = 0.0, Vhi As Double = 1.0
+                Dim bracketed As Boolean = False
                 Do
 
                     ecount += 1
@@ -1496,6 +1506,8 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Else
                         V2 = V1 - 0.01
                     End If
+                    'inside the interval the derivative is taken inside it too (no vapour fraction above 1)
+                    If bracketed Then V2 = If(Vhi - V1 >= V1 - Vlo, V1 + 0.5 * Math.Min(0.02, Vhi - V1), V1 - 0.5 * Math.Min(0.02, V1 - Vlo))
                     IObj?.SetCurrent()
                     herrfunc = Herror("PV", V2, P, Vz, PP, True, Ki)
                     H2 = herrfunc(0)
@@ -1503,13 +1515,31 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx1 = herrfunc(5)
                     Ki = Vy.DivideY(Vx1)
                     V = V1 + (V2 - V1) * (0 - H1) / (H2 - H1)
+                    If bracketed AndAlso Not (V > Vlo AndAlso V < Vhi) Then V = 0.5 * (Vlo + Vhi)
                     If V < 0 Then V = 0.0#
                     If V > 1 Then V = 1.0#
                     IObj?.Paragraphs.Add(String.Format("Updated Vapor Fraction estimate: {0}", V))
                     IObj?.SetCurrent()
                     resultFlash = Herror("PV", V, P, Vz, PP, True, Ki)
                     H1 = resultFlash(0)
-                    If V = 1.0 Or V = 0.0 And Math.Abs(H1) < 0.01 Then Exit Do
+                    If (V = 1.0 Or V = 0.0) And Math.Abs(H1) < 0.01 Then Exit Do
+                    If H1 > 0 Then Vlo = Math.Max(Vlo, V) Else Vhi = Math.Min(Vhi, V)
+                    If Not bracketed AndAlso (V = 1.0 Or V = 0.0) Then
+                        'The secant step went past an end of [0, 1] and the enthalpy is not met there: the
+                        'enthalpy is far from linear in V when a light end boils off first. From here on the
+                        'steps stay inside the interval that holds the root, starting from its middle.
+                        bracketed = True
+                        V = 0.5 * (Vlo + Vhi)
+                        IObj?.SetCurrent()
+                        resultFlash = Herror("PV", V, P, Vz, PP, True, Ki)
+                        H1 = resultFlash(0)
+                        If H1 > 0 Then Vlo = Math.Max(Vlo, V) Else Vhi = Math.Min(Vhi, V)
+                    End If
+                    'an interval that closes on a jump of the enthalpy holds no root: the bubble and dew points
+                    'were no pair of this feed
+                    If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(H1) > 0.01 Then
+                        Throw New Exception("PH Flash [NL]: Invalid result: the enthalpy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                    End If
                     IObj?.Paragraphs.Add(String.Format("Enthalpy Error (Spec - Calculated): {0}", H1))
                 Loop Until Abs(H1) < itol Or ecount > maxitEXT
 
@@ -2099,6 +2129,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 ecount = 0
                 V = 0
                 S1 = Sb
+                'the entropy error falls from Sb > 0 at V = 0 to Sd < 0 at V = 1: Vlo and Vhi keep the
+                'interval that holds its root, used once a secant step has gone past an end of [0, 1]
+                Dim Vlo As Double = 0.0, Vhi As Double = 1.0
+                Dim bracketed As Boolean = False
                 Do
                     ecount += 1
                     V1 = V
@@ -2107,6 +2141,8 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Else
                         V2 = V1 - 0.01
                     End If
+                    'inside the interval the derivative is taken inside it too (no vapour fraction above 1)
+                    If bracketed Then V2 = If(Vhi - V1 >= V1 - Vlo, V1 + 0.5 * Math.Min(0.02, Vhi - V1), V1 - 0.5 * Math.Min(0.02, V1 - Vlo))
 
                     IObj?.SetCurrent()
                     serrfunc = Serror("PV", V2, P, Vz, PP, True, Ki)
@@ -2115,13 +2151,31 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx1 = serrfunc(5)
                     Ki = Vy.DivideY(Vx1)
                     V = V1 + (V2 - V1) * (0 - S1) / (S2 - S1)
+                    If bracketed AndAlso Not (V > Vlo AndAlso V < Vhi) Then V = 0.5 * (Vlo + Vhi)
                     If V < 0 Then V = 0
                     If V > 1 Then V = 1
                     IObj?.Paragraphs.Add(String.Format("Updated Vapor Fraction estimate: {0}", V))
                     IObj?.SetCurrent()
                     resultFlash = Serror("PV", V, P, Vz, PP, True, Ki)
                     S1 = resultFlash(0)
-                    If V = 1.0 Or V = 0.0 And Math.Abs(S1) < 0.01 Then Exit Do
+                    If (V = 1.0 Or V = 0.0) And Math.Abs(S1) < 0.01 Then Exit Do
+                    If S1 > 0 Then Vlo = Math.Max(Vlo, V) Else Vhi = Math.Min(Vhi, V)
+                    If Not bracketed AndAlso (V = 1.0 Or V = 0.0) Then
+                        'The secant step went past an end of [0, 1] and the entropy is not met there: the
+                        'entropy is far from linear in V when a light end boils off first. From here on the
+                        'steps stay inside the interval that holds the root, starting from its middle.
+                        bracketed = True
+                        V = 0.5 * (Vlo + Vhi)
+                        IObj?.SetCurrent()
+                        resultFlash = Serror("PV", V, P, Vz, PP, True, Ki)
+                        S1 = resultFlash(0)
+                        If S1 > 0 Then Vlo = Math.Max(Vlo, V) Else Vhi = Math.Min(Vhi, V)
+                    End If
+                    'an interval that closes on a jump of the entropy holds no root: the bubble and dew points
+                    'were no pair of this feed
+                    If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(S1) > 0.01 Then
+                        Throw New Exception("PS Flash [NL]: Invalid result: the entropy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                    End If
                     IObj?.Paragraphs.Add(String.Format("Entropy Error (Spec - Calculated): {0}", S1))
                 Loop Until Abs(S1) < itol Or ecount > maxitEXT
 
@@ -2929,6 +2983,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             End If
 
             If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then Throw New Exception("TV Flash [NL]: Invalid result: converged to the trivial solution (P = " & P & " ).")
+            If SaturationPointRejected(Vz, T, P, V, Vx, Vy, PP) Then Throw New Exception("TV Flash [NL]: Invalid result: the feed has no incipient phase at P = " & P & " Pa (not a saturation point).")
 
             WriteDebugInfo("TV Flash [NL]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms.")
 
@@ -3193,8 +3248,15 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     If result.Count > 1 Then
                         'extrapolate Tl
                         Tl = Interpolate.RationalWithPoles(Plist, Tlist).Interpolate(P)
-                        result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals)
-                        If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
+                        If Tl > 0.0 OrElse AcceptStalledSaturationPoint OrElse CheckedByCaller Then
+                            result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals)
+                            If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
+                        Else
+                            'extrapolated from another branch to a temperature below zero, where the
+                            'equation of state throws (NestedLoops3PV3, which takes the ideal-solution answer
+                            'unchecked, keeps the exception)
+                            result = New Object() {-1}
+                        End If
                         If result.Count > 1 Then
                             deltaT = result(11)
                         Else
@@ -3251,8 +3313,12 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 If result.Count > 1 Then
                     'extrapolate Tl
                     Tl = Interpolate.RationalWithPoles(Plist, Tlist).Interpolate(P)
-                    result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals)
-                    If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
+                    If Tl > 0.0 OrElse AcceptStalledSaturationPoint OrElse CheckedByCaller Then
+                        result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals)
+                        If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
+                    Else
+                        result = New Object() {-1}
+                    End If
                 End If
             End If
 
@@ -3260,7 +3326,15 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
             'The fallbacks above hand back their last attempt whether it converged or not. A bubble or
             'dew point is returned only when the temperature loop converged on it.
-            If Not AcceptStalledSaturationPoint AndAlso result.Count > 1 AndAlso (V = 0 Or V = 1) AndAlso Math.Abs(result(11)) > 0.01 Then result = New Object() {-1}
+            'That step is the one the loop took last: a bubble-point loop that stops on its residual right after a
+            'large step has converged, and is kept when the model confirms the point.
+            If Not AcceptStalledSaturationPoint AndAlso result.Count > 1 AndAlso (V = 0 Or V = 1) AndAlso Math.Abs(result(11)) > 0.01 Then
+                If V = 0.0 AndAlso Not CalculatingAzeotrope AndAlso SaturationPointHolds(Vz, P, V, result, PP) Then
+                    result(11) = 0.0
+                Else
+                    result = New Object() {-1}
+                End If
+            End If
             'Nor is one whose incipient phase is none: Wilson's K values, which the package substitutes next to
             'the trivial solution, can hold the loop on a point where the model has a single phase. That result
             'fails outright, since the ideal-solution fallback below would put Raoult's law in its place. The
@@ -3268,6 +3342,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso result.Count > 1 AndAlso SaturationPointRejected(Vz, result(4), P, V, result(2), result(3), PP) Then
                 Throw New Exception("PV Flash [NL]: Invalid result: the feed has no incipient phase at T = " & result(4) & " K (not a saturation point).")
             End If
+
+            'Nor is a result between the bubble and dew points that is no two-phase state of the model.
+            If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso Not CheckedByCaller AndAlso result.Count > 1 AndAlso V > 0.0 AndAlso V < 1.0 AndAlso
+                Not TwoPhaseResultHolds(Vz, P, result, PP) Then result = New Object() {-1}
 
             Dim idealcalc As Boolean = Me.FlashSettings(Interfaces.Enums.FlashSetting.PVFlash_TryIdealCalcOnFailure)
             If result.Count = 1 And idealcalc Then
@@ -3279,6 +3357,12 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                         result = Flash_PV_4(Vz, P, V, 0.0, IPP, ReuseKI, PrevKi)
                     End If
                 End Using
+                'Raoult's law answers with a temperature of the ideal solution: it stands only where the model
+                'confirms it
+                If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso result.Count > 1 AndAlso Not TypeOf PP Is RaoultPropertyPackage AndAlso
+                    Not CheckedByCaller AndAlso Not IdealResultHolds(Vz, P, V, result, PP) Then
+                    result = New Object() {-1}
+                End If
             End If
 
             If result.Count = 1 Then
@@ -3611,6 +3695,152 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Next
 
             Return New Object() {-1}
+
+        End Function
+
+        ''' <summary>
+        ''' Set by NestedLoops3PV3, which takes over the results this class cannot verify (an answer of the ideal-solution
+        ''' fallback, or a vapour fraction between 0 and 1 that is no two-phase state of the model) as estimates for its
+        ''' own paths, as it did before these checks existed. The guard against a negative extrapolated temperature is off
+        ''' in this mode too: the flash keeps failing where it failed before, where the unchecked fallback would answer.
+        ''' </summary>
+        Friend Property CheckedByCaller As Boolean = False
+
+        ''' <summary>
+        ''' Whether the checks below apply: to an equation of state, a corresponding-states or an activity-coefficient
+        ''' package whose K values come from its fugacity coefficients, and not to a single compound, nor to a feed with
+        ''' solids or salts, which Flash_PV_1 keeps out of the vapour on another basis.
+        ''' </summary>
+        Private Function SaturationCheckApplies(Vz As Double(), PP As PropertyPackages.PropertyPackage) As Boolean
+            If Not (PP.PackageType = PropertyPackages.PackageType.EOS OrElse PP.PackageType = PropertyPackages.PackageType.CorrespondingStates OrElse
+                    PP.PackageType = PropertyPackages.PackageType.ActivityCoefficient) OrElse PP.OverrideKvalFugCoeff Then Return False
+            Dim cprops = PP.DW_GetConstantProperties()
+            For j = 0 To Vz.Length - 1
+                If Vz(j) > 0.0 AndAlso (cprops(j).IsSolid Or cprops(j).TemperatureOfFusion > 1000.0 Or cprops(j).Normal_Boiling_Point * 0.7 > 1000.0) Then Return False
+            Next
+            Return Not PP.AUX_IS_SINGLECOMP(Vz)
+        End Function
+
+        ''' <summary>
+        ''' True when a bubble (V = 0) or dew (V = 1) point is a saturation point of the model: the returned incipient
+        ''' phase lies on the tangent plane of the feed (tpd within 10 etol, each composition on its root of lower Gibbs
+        ''' energy), and no stationary point of the tangent plane distance lies below it. The test of
+        ''' DewPointOnStableBranch, for a result that is not re-seeded.
+        ''' </summary>
+        Private Function SaturationPointHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+
+            If result.Count < 7 OrElse Not (V = 0.0 OrElse V = 1.0) OrElse Not SaturationCheckApplies(Vz, PP) Then Return False
+            'phases next to each other (y/x within 0.21 of 1, the trivial solution as Flash_PV takes it; within 0.01
+            'with an activity-coefficient package), or equal after an azeotrope exit: the tangent plane cannot tell
+            Dim x0 As Double() = result(2), y0 As Double() = result(3)
+            Dim Kxy(Vz.Length - 1) As Double
+            For j = 0 To Vz.Length - 1
+                Kxy(j) = If(x0(j) > 0.0, y0(j) / x0(j), 1.0)
+            Next
+            If PP.AUX_CheckTrivial(Kxy, If(PP.PackageType = PropertyPackages.PackageType.ActivityCoefficient, 0.01, 0.21), Vz) Then Return False
+
+            Dim n As Integer = Vz.Length - 1
+            Dim T As Double = Convert.ToDouble(result(4))
+            If Double.IsNaN(T) OrElse Double.IsInfinity(T) OrElse T <= 0.0 Then Return False
+
+            Dim lnphi = Function(w As Double()) As Double()
+                            Dim lv = PP.DW_CalcLnFugCoeff(w, T, P, State.Vapor)
+                            Dim ll = PP.DW_CalcLnFugCoeff(w, T, P, State.Liquid)
+                            Dim gv, gl As Double
+                            For j = 0 To n
+                                If w(j) > 0.0 Then
+                                    gv += w(j) * lv(j)
+                                    gl += w(j) * ll(j)
+                                End If
+                            Next
+                            Return If(gl <= gv, ll, lv)
+                        End Function
+
+            Dim lnz = lnphi(Vz)
+            Dim tpd = Function(w0 As Double()) As Double
+                          Dim w = w0.NormalizeY()
+                          Dim lnw = lnphi(w)
+                          Dim s As Double = 0.0
+                          For j = 0 To n
+                              If Vz(j) > 0.0 AndAlso w(j) > 0.0 Then s += w(j) * (Log(w(j)) + lnw(j) - Log(Vz(j)) - lnz(j))
+                          Next
+                          Return s
+                      End Function
+
+            Dim tol As Double = 10 * etol
+            Dim tpdw As Double = tpd(DirectCast(If(V = 0.0, result(3), result(2)), Double()))
+            If Not (Math.Abs(tpdw) < tol) Then Return False
+
+            Dim st As Object() = StabTest(T, P, Vz, PP.RET_VTC(), PP)
+            If Not st(0) Then
+                Dim est As Double(,) = st(1)
+                For k = 0 To est.GetLength(0) - 1
+                    Dim w(n) As Double
+                    For j = 0 To n
+                        w(j) = est(k, j)
+                    Next
+                    If tpd(w) < -tol Then Return False
+                Next
+            End If
+
+            Return True
+
+        End Function
+
+        ''' <summary>
+        ''' Whether the answer of the ideal-solution fallback holds for the model: a bubble or dew point that is one of
+        ''' the model, or a two-phase state of the model. Feeds outside the saturation-point check keep the answer.
+        ''' </summary>
+        Private Function IdealResultHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+            If Not SaturationCheckApplies(Vz, PP) Then Return True
+            If V = 0.0 OrElse V = 1.0 Then Return SaturationPointHolds(Vz, P, V, result, PP)
+            Return TwoPhaseResultHolds(Vz, P, result, PP)
+        End Function
+
+        ''' <summary>
+        ''' True when a result between the bubble and dew points is a two-phase state of the model: the phases close
+        ''' the material balance of the feed, have equal fugacities, and, with an equation of state, each lies on its
+        ''' own root of lower Gibbs energy (a "vapour" held on the vapour root of a liquid-like composition is none).
+        ''' </summary>
+        Private Function TwoPhaseResultHolds(Vz As Double(), P As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+
+            If result.Count < 5 Then Return False
+            If Not SaturationCheckApplies(Vz, PP) Then Return True
+            Dim n As Integer = Vz.Length - 1
+            Dim T As Double = Convert.ToDouble(result(4))
+            If Double.IsNaN(T) OrElse Double.IsInfinity(T) OrElse T <= 0.0 Then Return False
+            Dim L As Double = Convert.ToDouble(result(0)), Vv As Double = Convert.ToDouble(result(1))
+            Dim x As Double() = result(2), y As Double() = result(3)
+
+            Dim lx = PP.DW_CalcLnFugCoeff(x, T, P, State.Liquid)
+            Dim ly = PP.DW_CalcLnFugCoeff(y, T, P, State.Vapor)
+            Dim mb, fres As Double
+            For j = 0 To n
+                If Vz(j) > 0.0 Then
+                    mb = Math.Max(mb, Math.Abs(L * x(j) + Vv * y(j) - Vz(j)))
+                    If x(j) > 0.0 AndAlso y(j) > 0.0 Then fres += 0.5 * (x(j) + y(j)) * Math.Abs(Log(x(j)) + lx(j) - Log(y(j)) - ly(j))
+                End If
+            Next
+            If Not (mb < 10 * etol AndAlso fres < 10 * etol) Then Return False
+
+            If PP.PackageType = PropertyPackages.PackageType.EOS Then
+                Dim yl = PP.DW_CalcLnFugCoeff(y, T, P, State.Liquid)
+                Dim xv = PP.DW_CalcLnFugCoeff(x, T, P, State.Vapor)
+                Dim gyv, gyl, gxl, gxv As Double
+                For j = 0 To n
+                    If y(j) > 0.0 Then
+                        gyv += y(j) * ly(j)
+                        gyl += y(j) * yl(j)
+                    End If
+                    If x(j) > 0.0 Then
+                        gxl += x(j) * lx(j)
+                        gxv += x(j) * xv(j)
+                    End If
+                Next
+                If gyv > gyl + etol OrElse gxl > gxv + etol Then Return False
+            End If
+
+            Return True
 
         End Function
 
