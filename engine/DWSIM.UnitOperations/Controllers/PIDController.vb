@@ -285,6 +285,8 @@ Namespace SpecialOps
         ''' DTerm). 2 = series (interacting), Kp * (1 + 1 / (Ti s)) * (1 + Td s): Output = Kp * ((1 + Td / Ti) *
         ''' beta * e + ITerm / Ti + Td * DTerm), the same as the ISA form with Kp * (1 + Td / Ti), Ti + Td and Ti
         ''' * Td / (Ti + Td). Any other value is calculated with the ISA form.
+        ''' Since Ti and Td are taken from Ki and Kd, the ISA output equals the parallel one and both are
+        ''' calculated as PTerm + Ki * ITerm + Kd * DTerm, which stays finite at Kp = 0.
         ''' </summary>
         Public Property PIDForm As Integer = 0
 
@@ -324,32 +326,35 @@ Namespace SpecialOps
         End Property
 
         ''' <summary>
-        ''' Feedforward gain, in manipulated variable units per disturbance unit, applied to the change of the
-        ''' disturbance since the previous step, after the lead-lag of <see cref="FeedforwardLeadTime"/> and <see
-        ''' cref="FeedforwardLagTime"/>, and added to the manipulated variable value. Zero (default) disables
-        ''' feedforward.
+        ''' Feedforward gain, in manipulated variable units per disturbance unit, applied to the deviation of the
+        ''' disturbance from its first reading after a reset, after the lead-lag of <see cref="FeedforwardLeadTime"/>
+        ''' and <see cref="FeedforwardLagTime"/>, and added to the manipulated variable value for as long as the
+        ''' deviation lasts. Zero (default) disables feedforward.
         ''' </summary>
         Public Property FeedforwardGain As Double = 0.0
 
         ''' <summary>
         ''' Lead time constant, in s, of the feedforward lead-lag (FeedforwardLeadTime s + 1) /
-        ''' (<see cref="FeedforwardLagTime"/> s + 1) applied to the disturbance change before the feedforward
+        ''' (<see cref="FeedforwardLagTime"/> s + 1) applied to the disturbance deviation before the feedforward
         ''' gain. Zero or less (default 0) leaves the plain lag.
         ''' </summary>
         Public Property FeedforwardLeadTime As Double = 0.0
 
         ''' <summary>
-        ''' Lag time constant, in s, of the feedforward lead-lag applied to the disturbance change before the
+        ''' Lag time constant, in s, of the feedforward lead-lag applied to the disturbance deviation before the
         ''' feedforward gain. Zero or less disables the lag. Default 1.
         ''' </summary>
         Public Property FeedforwardLagTime As Double = 1.0
 
         Private FeedforwardFilterState As Double = 0.0
 
-        'disturbance change of the previous step, for the lead without a lag
+        'disturbance deviation of the previous step, for the lead without a lag
         Private LastFeedforwardInput As Double = 0.0
 
-        Private LastDisturbanceValue As Double = 0.0
+        'disturbance reading the feedforward deviation is measured from
+        Private FeedforwardReference As Double = 0.0
+
+        Private FeedforwardInitialized As Boolean = False
 
         ''' <summary>
         ''' Gets or sets the controller setpoint, in the controlled variable's units. Same value as <see
@@ -942,6 +947,11 @@ Namespace SpecialOps
             LastSetPoint = Nothing
             WasManualOverride = False
 
+            FeedforwardFilterState = 0.0
+            LastFeedforwardInput = 0.0
+            FeedforwardReference = 0.0
+            FeedforwardInitialized = False
+
             PVHistory.Clear()
             MVHistory.Clear()
             SPHistory.Clear()
@@ -1117,7 +1127,8 @@ Namespace SpecialOps
             Dim rawDerivative As Double = 0.0
 
             If UseDerivativeOnPV Then
-                If prevPV <> 0.0 Then rawDerivative = -(LastPV - prevPV) / timestep
+                'the error is (PV - SP) / BaseSP, so on a constant setpoint its change is the change of PV / BaseSP
+                If prevPV <> 0.0 Then rawDerivative = (LastPV - prevPV) / timestep
             Else
                 Dim delta_error = CurrentError - LastError
                 'derivative setpoint weight gamma: the derivative acts on (PV - gamma SP) / BaseSP, which is the
@@ -1181,12 +1192,10 @@ Namespace SpecialOps
                 ' so it must not be folded into the dimensionless controller output here
                 Dim bias As Double = If(ManipulatedVariableSpan > 0.0, 0.0, Offset / BaseSP)
 
-                If PIDForm = 0 Then
-                    Output = PTerm + Ki * ITerm + Kd * DTerm + bias
-                Else
-                    'ISA, or series with the interaction factor (1 at any other form)
-                    Output = Kp * (seriesFactor * beta * CurrentError + ITerm / Ti + Td * DTerm) + bias
-                End If
+                'with Ti = Kp / Ki and Td = Kd / Kp, the ISA form Kp (beta e + ITerm / Ti + Td DTerm) is
+                'PTerm + Ki ITerm + Kd DTerm, which stays finite at Kp = 0; the series form differs only by the
+                'interaction factor already in PTerm
+                Output = PTerm + Ki * ITerm + Kd * DTerm + bias
 
                 Dim ffOutput As Double = 0.0
 
@@ -1199,27 +1208,32 @@ Namespace SpecialOps
                                 m_DisturbanceObjectData.Units,
                                 dvObj.GetPropertyValue(m_DisturbanceObjectData.PropertyName))
 
-                            Dim dvChange = dvVal - LastDisturbanceValue
-                            LastDisturbanceValue = dvVal
+                            'the first reading is the reference, so the feedforward starts at zero; it then holds
+                            'gain times the deviation from it, as the PID output is positional
+                            If Not FeedforwardInitialized Then
+                                FeedforwardReference = dvVal
+                                FeedforwardInitialized = True
+                            End If
+                            Dim dvDeviation = dvVal - FeedforwardReference
 
                             If FeedforwardLagTime > 0 Then
                                 Dim alphaFF = Math.Exp(-timestep / FeedforwardLagTime)
-                                FeedforwardFilterState = alphaFF * FeedforwardFilterState + (1.0 - alphaFF) * dvChange
+                                FeedforwardFilterState = alphaFF * FeedforwardFilterState + (1.0 - alphaFF) * dvDeviation
                                 If FeedforwardLeadTime > 0 Then
                                     'lead-lag (Tlead s + 1)/(Tlag s + 1) = Tlead/Tlag + (1 - Tlead/Tlag)/(Tlag s + 1):
                                     'a direct share of the input plus the rest through the same lag
                                     Dim leadRatio = FeedforwardLeadTime / FeedforwardLagTime
-                                    ffOutput = FeedforwardGain * (leadRatio * dvChange + (1.0 - leadRatio) * FeedforwardFilterState)
+                                    ffOutput = FeedforwardGain * (leadRatio * dvDeviation + (1.0 - leadRatio) * FeedforwardFilterState)
                                 Else
                                     ffOutput = FeedforwardGain * FeedforwardFilterState
                                 End If
                             ElseIf FeedforwardLeadTime > 0 Then
                                 'lead without a lag, Tlead s + 1, with a backward difference
-                                ffOutput = FeedforwardGain * (dvChange + FeedforwardLeadTime * (dvChange - LastFeedforwardInput) / timestep)
+                                ffOutput = FeedforwardGain * (dvDeviation + FeedforwardLeadTime * (dvDeviation - LastFeedforwardInput) / timestep)
                             Else
-                                ffOutput = FeedforwardGain * dvChange
+                                ffOutput = FeedforwardGain * dvDeviation
                             End If
-                            LastFeedforwardInput = dvChange
+                            LastFeedforwardInput = dvDeviation
                         End If
                     Catch
                     End Try
