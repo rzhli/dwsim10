@@ -23,6 +23,7 @@ Namespace UnitOperations
 
         Private Image As SKImage
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>Gets the list of equipment sub-types (PEM, Alkaline, Solid Oxide).</summary>
@@ -86,10 +87,10 @@ Namespace UnitOperations
         ''' <summary>Gets or sets the reversible (equilibrium) cell voltage (V).</summary>
         Public Property ReversibleVoltage As Double
 
-        ''' <summary>Gets or sets the calculated electrolyser efficiency (%).</summary>
+        ''' <summary>Gets or sets the calculated electrolyser efficiency (fraction, 0 to 1).</summary>
         Public Property Efficiency As Double
 
-        ''' <summary>Gets or sets the user-specified input efficiency (%).</summary>
+        ''' <summary>Gets or sets the user-specified input efficiency (fraction, 0 to 1); used when no cell voltage is given.</summary>
         Public Property InputEfficiency As Double
 
         ''' <summary>Returns an array of property identifiers for the specified property type.</summary>
@@ -517,9 +518,13 @@ Namespace UnitOperations
             ' a specific enthalpy. The size of the error was the numerical value of the mass flow,
             ' so a PEM stack circulating water in excess of the stoichiometry to cool itself came
             ' out with a temperature rise orders of magnitude too large.
+            '
+            ' The water that leaves as saturated vapour with the hydrogen takes its heat of
+            ' vaporization out of the waste heat; the rest heats the outlets.
+            Dim Qvap As Double = NH20sat * DHvap ' kW (mol/s x kJ/mol)
             Dim dh As Double = 0.0
 
-            If msin.GetMassFlow() > 0.0 Then dh = WasteHeat / msin.GetMassFlow()
+            If msin.GetMassFlow() > 0.0 Then dh = (WasteHeat - Qvap) / msin.GetMassFlow()
 
             msout1.Clear()
             msout1.ClearAllProps()

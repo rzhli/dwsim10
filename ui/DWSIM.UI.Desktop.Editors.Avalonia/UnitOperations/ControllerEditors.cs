@@ -304,6 +304,7 @@ namespace DWSIM.UI.Desktop.Editors
             public string Gain { get; set; } = "";
             public string TimeConstant { get; set; } = "";
             public string DeadTime { get; set; } = "";
+            public string Integrating { get; set; } = "";
             public string Coefficients { get; set; } = "";
         }
 
@@ -431,6 +432,7 @@ namespace DWSIM.UI.Desktop.Editors
                         Gain = model.Gain.ToString("G6", CultureInfo.CurrentCulture),
                         TimeConstant = model.TimeConstant.ToString("G6", CultureInfo.CurrentCulture),
                         DeadTime = model.DeadTime.ToString("G6", CultureInfo.CurrentCulture),
+                        Integrating = model.Integrating ? "Yes" : "No",
                         Coefficients = model.StepCoefficients.Count + " pts"
                     });
             }
@@ -447,6 +449,7 @@ namespace DWSIM.UI.Desktop.Editors
             grid.Columns.Add(Column("Gain", "Gain", 1.0));
             grid.Columns.Add(Column("Time Constant", "TimeConstant", 1.0));
             grid.Columns.Add(Column("Dead Time", "DeadTime", 1.0));
+            grid.Columns.Add(Column("Integrating", "Integrating", 0.8));
             grid.Columns.Add(Column("Coefficients", "Coefficients", 1.0));
 
             stack.Children.Add(grid);
@@ -613,7 +616,7 @@ namespace DWSIM.UI.Desktop.Editors
         internal static void Show(MPCController mpc, Action<StepResponseModel> accepted)
         {
             var panel = AvaloniaCommon.GetDefaultContainer();
-            var window = AvaloniaCommon.GetDefaultEditorForm("Add Step Response Model", 520, 380, panel);
+            var window = AvaloniaCommon.GetDefaultEditorForm("Add Step Response Model", 520, 420, panel);
 
             if (mpc.ControlledVariables.Count == 0 || mpc.ManipulatedVariables.Count == 0)
             {
@@ -636,6 +639,9 @@ namespace DWSIM.UI.Desktop.Editors
             var gain = panel.CreateAndAddTextBoxRow(nf, "Gain", model.Gain, null);
             var timeConstant = panel.CreateAndAddTextBoxRow(nf, "Time Constant", model.TimeConstant, null);
             var deadTime = panel.CreateAndAddTextBoxRow(nf, "Dead Time", model.DeadTime, null);
+
+            panel.CreateAndAddCheckBoxRow("Integrating (Gain is the slope per second)", model.Integrating,
+                (cb, e) => model.Integrating = cb.IsChecked.GetValueOrDefault());
 
             panel.CreateAndAddButtonRow("Add", null, (btn, e) =>
             {

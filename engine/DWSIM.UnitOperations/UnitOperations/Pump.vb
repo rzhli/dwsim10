@@ -268,9 +268,10 @@ Namespace UnitOperations
         ''' <summary>Gets a value indicating whether this unit operation supports dynamic simulation mode.</summary>
         Public Overrides ReadOnly Property SupportsDynamicMode As Boolean = True
 
-        ''' <summary>Gets a value indicating whether this unit operation has no dedicated dynamic-mode properties.</summary>
+        ''' <summary>Gets a value indicating that this unit operation has dedicated dynamic-mode properties.</summary>
         Public Overrides ReadOnly Property HasPropertiesForDynamicMode As Boolean = True
 
+        ''' <summary>The classic (WinForms) editor window open for this pump, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>Gets the list of pump equipment sub-types available for this unit operation.</summary>
@@ -781,6 +782,11 @@ Namespace UnitOperations
         ''' <summary>Gets or sets the pump head (pressure rise expressed as liquid column height, in m).</summary>
         Public Property Head As Double
 
+        ''' <summary>
+        ''' Creates the properties the pump uses in dynamic mode: casing conductance and volume,
+        ''' minimum pressure, holdup initialization, and the speed model (inertia, current, target
+        ''' and rated speed, motor torque).
+        ''' </summary>
         Public Overrides Sub CreateDynamicProperties()
 
             AddDynamicProperty("Flow Conductance", "Flow Conductance (inverse of Resistance).", 1, UnitOfMeasure.conductance, 1.0.GetType())
@@ -935,6 +941,12 @@ Namespace UnitOperations
 
         End Sub
 
+        ''' <summary>
+        ''' Advances the pump one integration step in dynamic mode. The speed ramps towards the
+        ''' target speed, limited by the motor torque and the rotational inertia. By default the
+        ''' pump then acts as a pressure-flow element (a flow source in PositiveDisplacement mode);
+        ''' with Integrate Casing Holdup set, the casing volume is integrated as a capacity.
+        ''' </summary>
         Public Overrides Sub RunDynamicModel()
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -1590,11 +1602,13 @@ Namespace UnitOperations
                         End With
                     End If
 
-                    H2 = Hi + Me.DeltaQ.GetValueOrDefault * (Me.Eficiencia.GetValueOrDefault / 100) / Wi
-                    CheckSpec(H2, False, "outlet enthalpy")
-
-                    P2 = Pi + (H2 - Hi) * rho_li * 1000
+                    'the efficient part of the shaft power raises the pressure; all of it reaches the
+                    'liquid, the rest as heat, as in the Delta_P and OutletPressure modes
+                    P2 = Pi + Me.DeltaQ.GetValueOrDefault * (Me.Eficiencia.GetValueOrDefault / 100) / Wi * rho_li * 1000
                     CheckSpec(P2, True, "outlet pressure")
+
+                    H2 = Hi + Me.DeltaQ.GetValueOrDefault / Wi
+                    CheckSpec(H2, False, "outlet enthalpy")
 
                     DeltaP = P2 - Pi
 
@@ -1644,11 +1658,13 @@ Namespace UnitOperations
                         End With
                     End If
 
-                    H2 = Hi + Me.DeltaQ.GetValueOrDefault * (Me.Eficiencia.GetValueOrDefault / 100) / Wi
-                    CheckSpec(H2, False, "outlet enthalpy")
-
-                    P2 = Pi + (H2 - Hi) * rho_li * 1000
+                    'the efficient part of the shaft power raises the pressure; all of it reaches the
+                    'liquid, the rest as heat, as in the Delta_P and OutletPressure modes
+                    P2 = Pi + Me.DeltaQ.GetValueOrDefault * (Me.Eficiencia.GetValueOrDefault / 100) / Wi * rho_li * 1000
                     CheckSpec(P2, True, "outlet pressure")
+
+                    H2 = Hi + Me.DeltaQ.GetValueOrDefault / Wi
+                    CheckSpec(H2, False, "outlet enthalpy")
 
                     DeltaP = P2 - Pi
 
@@ -2080,6 +2096,15 @@ Namespace UnitOperations
                 Case 8
                     'PROP_PU_8 (Operating Speed)
                     Me.OperatingSpeed = propval
+                Case 9
+                    'PROP_PU_9 (Displacement per revolution)
+                    Me.Displacement = SystemsOfUnits.Converter.ConvertToSI(su.volume, propval)
+                Case 10
+                    'PROP_PU_10 (Volumetric Efficiency)
+                    Me.VolumetricEfficiency = propval
+                Case 11
+                    'PROP_PU_11 (Relief Pressure)
+                    Me.ReliefPressure = SystemsOfUnits.Converter.ConvertToSI(su.pressure, propval)
             End Select
             Return 1
         End Function
@@ -2106,7 +2131,7 @@ Namespace UnitOperations
                         value = su.deltaP
                     Case 1
                         'PROP_PU_1(Efficiency)
-                        value = ""
+                        value = "%"
                     Case 2
                         'PROP_PU_2(Delta - T)
                         value = su.deltaT
@@ -2123,6 +2148,14 @@ Namespace UnitOperations
                         value = su.distance
                     Case 8
                         value = "rpm"
+                    Case 9
+                        value = su.volume
+                    Case 10
+                        value = "%"
+                    Case 11
+                        value = su.pressure
+                    Case 12
+                        value = su.volumetricFlow
                 End Select
 
                 Return value

@@ -124,6 +124,19 @@ namespace DWSIM.Automation.FluentAPI
             return this;
         }
 
+        /// <summary>
+        /// Orthogonal layout: feeds on the left, products on the right, streams lined up on the ports they
+        /// connect so the connectors come out straight; energy streams, controllers and tables beside the
+        /// objects they belong to. <paramref name="wrapRows"/> wraps the columns into rows (each read left to
+        /// right) for the smallest drawing whose width stays between half and twice its height.
+        /// </summary>
+        public Flowsheet OrthogonalLayout(bool wrapRows = false)
+        {
+            var surface = Inner.GetSurface();
+            surface?.GetType().GetMethod("OrthogonalArrange")?.Invoke(surface, new object[] { wrapRows });
+            return this;
+        }
+
         // ------------------------------------------------------------- Compounds
 
         /// <summary>Adds a single compound by its DWSIM database name (e.g. <c>"Water"</c>, <c>"Methane"</c>).</summary>
@@ -553,6 +566,40 @@ namespace DWSIM.Automation.FluentAPI
         public PIDControllerBuilder AddPIDController(string tag) =>
             Make<DWSIM.UnitOperations.SpecialOps.PIDController, PIDControllerBuilder>(
                 ObjectType.Controller_PID, tag, (f, o) => new PIDControllerBuilder(f, o));
+
+        /// <summary>Adds a Python (IronPython script) controller tagged <paramref name="tag"/> and returns its fluent builder.</summary>
+        public PythonControllerBuilder AddPythonController(string tag) =>
+            Make<DWSIM.UnitOperations.SpecialOps.PythonController, PythonControllerBuilder>(
+                ObjectType.Controller_Python, tag, (f, o) => new PythonControllerBuilder(f, o));
+
+        /// <summary>Adds a model predictive controller tagged <paramref name="tag"/> and returns its fluent builder.</summary>
+        public MPCControllerBuilder AddMPCController(string tag) =>
+            Make<DWSIM.UnitOperations.SpecialOps.MPCController, MPCControllerBuilder>(
+                ObjectType.Controller_MPC, tag, (f, o) => new MPCControllerBuilder(f, o));
+
+        // ---------------------------------------------------------- Logical blocks
+
+        /// <summary>
+        /// Adds an Adjust block tagged <paramref name="tag"/> and returns its fluent builder. The block is
+        /// included in the simultaneous adjust solver, which is how the flowsheet solver runs adjusts.
+        /// </summary>
+        public AdjustBuilder AddAdjust(string tag)
+        {
+            var b = Make<DWSIM.UnitOperations.SpecialOps.Adjust, AdjustBuilder>(
+                ObjectType.OT_Adjust, tag, (f, o) => new AdjustBuilder(f, o));
+            b.Object.SimultaneousAdjust = true;
+            return b;
+        }
+
+        /// <summary>Adds a Spec block tagged <paramref name="tag"/> and returns its fluent builder.</summary>
+        public SpecBuilder AddSpec(string tag) =>
+            Make<DWSIM.UnitOperations.SpecialOps.Spec, SpecBuilder>(
+                ObjectType.OT_Spec, tag, (f, o) => new SpecBuilder(f, o));
+
+        /// <summary>Adds an Information Carrier block tagged <paramref name="tag"/> and returns its fluent builder.</summary>
+        public InformationCarrierBuilder AddInformationCarrier(string tag) =>
+            Make<DWSIM.UnitOperations.SpecialOps.InformationCarrier, InformationCarrierBuilder>(
+                ObjectType.OT_InformationCarrier, tag, (f, o) => new InformationCarrierBuilder(f, o));
 
         /// <summary>
         /// Adds an indicator tagged <paramref name="tag"/> and returns its fluent builder.

@@ -685,11 +685,30 @@ Namespace Reactors.ADM1
             Return Max(phys.k_P * (P_total - phys.P_atm), 0.0) * P_total / phys.P_atm
         End Function
 
-        ''' <summary>Biogas flow rate in Nm³/d (at standard conditions 273.15 K, 1.013 bar).</summary>
+        ''' <summary>
+        ''' Biogas flow rate in Nm³/d (at standard conditions 273.15 K, 1.01325 bar), water vapour included.
+        ''' The headspace leaves at q_gas and at the headspace pressure, so the moles it carries are
+        ''' P_total q_gas / (R T): the same moles the gas-phase balances remove (S_gas x q_gas).
+        ''' </summary>
         Public Function BiogasFlow_Nm3_d(s As ADM1State, p As ADM1Parameters) As Double
             Dim q = GasOutflow(s, p)
             Dim phys = TemperatureCorrect(p.Physicochemical)
-            Return q * (273.15 / phys.T_op_K)
+            Dim p_h2, p_ch4, p_co2, p_h2s As Double
+            Dim P_total = DryGasTotal(s, p, p_h2, p_ch4, p_co2, p_h2s) + phys.P_gas_h2o
+            Return q * (273.15 / phys.T_op_K) * P_total / 1.01325
+        End Function
+
+        ''' <summary>
+        ''' Dry biogas flow rate in Nm³/d: the wet flow without its water vapour, the basis the dry
+        ''' mole fractions (CH4MoleFraction and the others) apply to.
+        ''' </summary>
+        Public Function BiogasFlowDry_Nm3_d(s As ADM1State, p As ADM1Parameters) As Double
+            Dim phys = TemperatureCorrect(p.Physicochemical)
+            Dim p_h2, p_ch4, p_co2, p_h2s As Double
+            Dim P_dry = DryGasTotal(s, p, p_h2, p_ch4, p_co2, p_h2s)
+            Dim P_total = P_dry + phys.P_gas_h2o
+            If P_total <= 0.0 Then Return 0.0
+            Return BiogasFlow_Nm3_d(s, p) * P_dry / P_total
         End Function
 
         ''' <summary>

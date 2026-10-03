@@ -48,6 +48,7 @@ Namespace Streams
         'CAPE-OPEN Error Interfaces
         Implements ECapeUser, ECapeUnknown, ECapeRoot
 
+        ''' <summary>The classic (WinForms) editor window open for this energy stream, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         Private WithEvents m_work As CapeOpen.RealParameter
@@ -108,6 +109,10 @@ Namespace Streams
 
         End Sub
 
+        ''' <summary>
+        ''' Initializes the CAPE-OPEN parameter collection of this energy stream (skipped when running on Mono)
+        ''' and marks the stream as initialized.
+        ''' </summary>
         Sub Init()
 
             If Type.GetType("Mono.Runtime") Is Nothing Then CreateParamCol()
@@ -115,9 +120,13 @@ Namespace Streams
 
         End Sub
 
+        ''' <summary>
+        ''' Creates the CAPE-OPEN real parameters exposed by this energy stream: "work" (the energy flow, in J/s),
+        ''' "temperatureLow" and "temperatureHigh" (in K).
+        ''' </summary>
         Sub CreateParamCol()
 
-            m_work = New CapeOpen.RealParameter("work", Me.EnergyFlow.GetValueOrDefault, 0.0#, "J/s")
+            m_work = New CapeOpen.RealParameter("work", Me.EnergyFlow.GetValueOrDefault * 1000.0, 0.0#, "J/s")
             m_tLow = New CapeOpen.RealParameter("temperatureLow", 0.0, 0.0#, "K")
             m_tUp = New CapeOpen.RealParameter("temperatureHigh", 2000.0, 2000.0#, "K")
 
@@ -310,7 +319,10 @@ Namespace Streams
 
 #Region "   CAPE-OPEN"
 
+        <NonSerialized> Private _syncingWork As Boolean = False
+
         Private Sub m_work_OnParameterValueChanged(ByVal sender As Object, ByVal args As System.EventArgs) Handles m_work.ParameterValueChanged
+            If _syncingWork Then Exit Sub
             Me.EnergyFlow = m_work.SIValue / 1000
         End Sub
 
@@ -319,7 +331,8 @@ Namespace Streams
         ''' </summary>
         ''' <returns>The count of parameters exposed via the CAPE-OPEN <see cref="ICapeCollection"/> interface.</returns>
         Public Function Count() As Integer Implements CapeOpen.ICapeCollection.Count
-            Return 1
+            ' work, temperatureLow and temperatureHigh: a unit only looks up by name the items it enumerated
+            Return 3
         End Function
 
         ''' <summary>
@@ -331,13 +344,21 @@ Namespace Streams
             If Not initialized Then Init()
             Select Case index.ToString()
                 Case "1", "work"
+                    ' the unit reads the current duty of an inlet energy stream, in W
+                    _syncingWork = True
+                    Try
+                        m_work.SIValue = Me.EnergyFlow.GetValueOrDefault * 1000.0
+                    Finally
+                        _syncingWork = False
+                    End Try
                     Return m_work
                 Case "2", "temperatureLow"
                     Return m_tLow
                 Case "3", "temperatureHigh"
                     Return m_tUp
                 Case Else
-                    Return m_work
+                    ' an unknown item used to come back as "work", so a temperature written to it became the duty
+                    Throw New CapeOpen.CapeInvalidArgumentException("Energy stream " & Me.ComponentName & " has no parameter " & index.ToString(), New ArgumentException(), 0)
             End Select
         End Function
 

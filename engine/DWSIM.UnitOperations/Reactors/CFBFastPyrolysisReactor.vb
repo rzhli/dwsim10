@@ -55,6 +55,7 @@ Namespace Reactors
         Inherits Reactor
 
         Implements IExternalUnitOperation
+        ''' <summary>Gets a value that marks this reactor as a bioprocess unit. The object palettes read this flag by reflection to list it in the Biochemical group.</summary>
         Public ReadOnly Property IsBio As Boolean = True
 
         Public Overrides Property ObjectClass As SimulationObjectClass
@@ -86,6 +87,9 @@ Namespace Reactors
         ''' <summary>Average solids hold-up fraction in the riser (m3_solid / m3_total).
         ''' Default 0.05 is typical for Geldart-A sand at u_g &gt;&gt; u_mf in a dilute riser.</summary>
         Public Property SolidsHoldup As Double = 0.05
+
+        ''' <summary>Solids residence time over vapor residence time in the riser (slip factor, 1 = no slip). Risers run at 2 to 3.</summary>
+        Public Property SolidsSlipFactor As Double = 1.0
 
         ''' <summary>Bed material (sand/olivine) density (kg/m3). Default 2600 (silica sand).</summary>
         Public Property BedMaterialDensity_kgm3 As Double = 2600.0
@@ -122,8 +126,9 @@ Namespace Reactors
         ''' <summary>Lignin mass fraction of dry biomass (0â€“1). Typical 0.20â€“0.30.</summary>
         Public Property LigninMassFrac As Double = 0.25
 
-        ''' <summary>Enthalpy of pyrolysis per kg of dry biomass feed (J/kg).
-        ''' Positive = endothermic. Default 250 kJ/kg (Bridgwater 2012).</summary>
+        ''' <summary>Enthalpy of pyrolysis per kg of dry biomass feed (J/kg), for reference.
+        ''' Positive = endothermic. Default 250 kJ/kg (Bridgwater 2012). The duty comes from the
+        ''' riser energy balance, which uses the reaction heats of the kinetic scheme.</summary>
         Public Property HeatOfPyrolysis_Jkg As Double = 250000.0
 
         ' -------- COMPOUND ROLES --------
@@ -165,49 +170,72 @@ Namespace Reactors
 
         ' -------- RESULT PROPERTIES --------
 
+        ''' <summary>Gets or sets the calculated bio-oil (condensable vapor) yield at the riser outlet, as a mass fraction of the biomass feed.</summary>
         Public Property Result_OilYield_wfrac As Double = 0.0
+        ''' <summary>Gets or sets the calculated non-condensable gas yield at the riser outlet, as a mass fraction of the biomass feed.</summary>
         Public Property Result_GasYield_wfrac As Double = 0.0
+        ''' <summary>Gets or sets the calculated char yield at the riser outlet (char plus activated lignin residue), as a mass fraction of the biomass feed.</summary>
         Public Property Result_CharYield_wfrac As Double = 0.0
+        ''' <summary>Gets or sets the calculated fraction of the biomass feed that leaves the riser unconverted (cellulose, hemicellulose and lignin, native or activated), as a mass fraction.</summary>
         Public Property Result_UnreactedSolid_wfrac As Double = 0.0
+        ''' <summary>Gets or sets the calculated temperature of the reacting mixture at the riser outlet, in K. The outlet stream is written at this temperature.</summary>
         Public Property Result_OutletTemperature_K As Double = 0.0
+        ''' <summary>Gets or sets the calculated vapor residence time in the riser, in s.</summary>
         Public Property Result_VaporResidenceTime_s As Double = 0.0
+        ''' <summary>Gets or sets the calculated sand (bed material) circulation rate through the riser, in kg/s. In <c>InternalCharCombustor</c> mode this is the rate that closes the combustor energy balance.</summary>
         Public Property Result_SandCirculation_kgps As Double = 0.0
+        ''' <summary>Gets or sets the calculated sand temperature at the riser outlet, in K.</summary>
         Public Property Result_SandOutletTemperature_K As Double = 0.0
+        ''' <summary>Gets or sets the calculated pyrolysis duty, in kW: the heat the sand delivers to the reacting mixture (sensible heat, reaction heats and feed preheat). In <c>External</c> sand mode this value is written to the energy stream.</summary>
         Public Property Result_PyrolysisDuty_kW As Double = 0.0
+        ''' <summary>Gets or sets the calculated heat released by the internal char combustor after its heat loss, in kW. Zero in <c>External</c> sand mode.</summary>
         Public Property Result_CombustorDuty_kW As Double = 0.0
+        ''' <summary>Gets or sets the calculated air mass flow fed to the internal char combustor, including excess air, in kg/s. Zero in <c>External</c> sand mode.</summary>
         Public Property Result_CombustorAirFlow_kgps As Double = 0.0
+        ''' <summary>Gets or sets the estimated adiabatic flue gas temperature of the internal char combustor, in K. Zero in <c>External</c> sand mode.</summary>
         Public Property Result_CombustorFlueT_K As Double = 0.0
 
         ''' <summary>Last axial trajectory (not persisted - recomputed on each Calculate).</summary>
         <Xml.Serialization.XmlIgnore> <Newtonsoft.Json.JsonIgnore>
         Public Property LastTrajectory As CFBPyrolysisTrajectoryResult
 
+        ''' <summary>The classic (WinForms) editor window open for this reactor, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
+        ''' <summary>Gets a value indicating whether this reactor supports dynamic simulation mode. Always <c>False</c>.</summary>
         Public Overrides ReadOnly Property SupportsDynamicMode As Boolean = False
 
+        ''' <summary>Gets a value indicating whether this reactor is compatible with mobile interfaces. Always <c>False</c>.</summary>
         Public Overrides ReadOnly Property MobileCompatible As Boolean
             Get
                 Return False
             End Get
         End Property
 
+        ''' <summary>Initializes a new default instance of the <see cref="Reactor_CFBFastPyrolysis"/> class.</summary>
         Public Sub New()
             MyBase.New()
         End Sub
 
+        ''' <summary>Initializes a new instance of the <see cref="Reactor_CFBFastPyrolysis"/> class with a name and description.</summary>
+        ''' <param name="name">The name of this reactor.</param>
+        ''' <param name="description">A brief description of this reactor.</param>
         Public Sub New(ByVal name As String, ByVal description As String)
             MyBase.New()
             Me.ComponentName = name
             Me.ComponentDescription = description
         End Sub
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through XML serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_CFBFastPyrolysis"/> instance with the same property values.</returns>
         Public Overrides Function CloneXML() As Object
             Dim obj As ICustomXMLSerialization = New Reactor_CFBFastPyrolysis()
             obj.LoadData(Me.SaveData)
             Return obj
         End Function
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through JSON serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_CFBFastPyrolysis"/> instance with the same property values.</returns>
         Public Overrides Function CloneJSON() As Object
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Reactor_CFBFastPyrolysis)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
@@ -246,6 +274,11 @@ Namespace Reactors
             Dim compounds = ims.Phases(0).Compounds
             If Not compounds.ContainsKey(BiomassCompound) Then _
                 Throw New Exception("CFB Fast Pyrolysis: biomass compound '" & BiomassCompound & "' not in stream.")
+            ' every product needs a compound to go to, or its mass would leave the balance
+            For Each role In {Tuple.Create("char", CharCompound), Tuple.Create("bio-oil", BioOilCompound), Tuple.Create("gas", GasLumpCompound)}
+                If String.IsNullOrEmpty(role.Item2) OrElse Not compounds.ContainsKey(role.Item2) Then _
+                    Throw New Exception("CFB Fast Pyrolysis: assign the " & role.Item1 & " compound; the pyrolysis products need all three of char, bio-oil and gas.")
+            Next
 
             Dim m_biomass As Double = compounds(BiomassCompound).MassFlow.GetValueOrDefault  ' kg/s
             If m_biomass <= 0.0 Then _
@@ -465,20 +498,28 @@ Namespace Reactors
                 vaporTau += dt_cell
 
                 ' --- Sub-step Ranzi ODEs with explicit RK2 over dt_cell ---
-                Dim nSub = Max(5, CInt(dt_cell / 0.02) + 1)
+                ' keep k*h below 0.5 for the fastest reaction so the explicit march stays stable
+                Dim slip = Max(1.0, SolidsSlipFactor)
+                Dim kMax As Double = 0.0
+                For Each rxn In reactions
+                    Dim kr = rxn.A * Exp(-rxn.Ea_JmolK / (RanziKinetics.R_JmolK * Max(T, T_sand)))
+                    If RanziKinetics.IsSolid(rxn.Reactant) Then kr *= slip
+                    kMax = Max(kMax, kr)
+                Next
+                Dim nSub = CInt(Min(20000.0, Max(Max(5.0, dt_cell / 0.02 + 1.0), System.Math.Ceiling(dt_cell * kMax / 0.5))))
                 Dim h = dt_cell / nSub
                 Dim dwdt() As Double = Nothing
                 Dim qRxn As Double = 0.0
                 Dim QcellTotal As Double = 0.0
 
                 For j = 1 To nSub
-                    RanziKinetics.EvaluateRates(w, T, reactions, dwdt, qRxn)
+                    RanziKinetics.EvaluateRates(w, T, reactions, dwdt, qRxn, slip)
                     ' RK2 (midpoint)
                     Dim wMid(w.Length - 1) As Double
                     For k = 0 To w.Length - 1 : wMid(k) = w(k) + 0.5 * h * dwdt(k) : Next
                     Dim dwdt_mid() As Double = Nothing
                     Dim qRxn_mid As Double = 0.0
-                    RanziKinetics.EvaluateRates(wMid, T, reactions, dwdt_mid, qRxn_mid)
+                    RanziKinetics.EvaluateRates(wMid, T, reactions, dwdt_mid, qRxn_mid, slip)
                     For k = 0 To w.Length - 1 : w(k) = Max(0.0, w(k) + h * dwdt_mid(k)) : Next
 
                     ' Energy balance for the sub-step (per kg of reacting mixture, rate W/kg)
@@ -514,17 +555,20 @@ Namespace Reactors
             ' ----- Summary yields -----
             traj.OutletYield_Oil = w(CInt(PyroSpecies.BIO_OIL))
             traj.OutletYield_Gas = w(CInt(PyroSpecies.GAS))
-            traj.OutletYield_Char = w(CInt(PyroSpecies.CHAR_S))
+            ' the activated lignin (LIGOH) is a solid residue that leaves with the char
+            traj.OutletYield_Char = w(CInt(PyroSpecies.CHAR_S)) + w(CInt(PyroSpecies.LIGA))
             traj.OutletYield_UnreactedSolid = w(CInt(PyroSpecies.CELL)) + w(CInt(PyroSpecies.HCE)) +
                                               w(CInt(PyroSpecies.LIG)) +
-                                              w(CInt(PyroSpecies.CELLA)) + w(CInt(PyroSpecies.HCEA)) +
-                                              w(CInt(PyroSpecies.LIGA))
+                                              w(CInt(PyroSpecies.CELLA)) + w(CInt(PyroSpecies.HCEA))
             traj.OutletTemperature_K = T
             traj.OutletVaporResidenceTime_s = vaporTau
             traj.RequiredSandCirculation_kgps = m_sand
             traj.SandInletTemperature_K = T_sand_in
             traj.SandOutletTemperature_K = T_sand
-            traj.NetPyrolysisDuty_kW = (m_biomass * HeatOfPyrolysis_Jkg) / 1000.0   ' kW
+            ' heat the sand hands to the reacting mixture: sensible heat plus the reaction heats, and
+            ' the preheat the march skips by starting the mixture at 450 K
+            Dim Q_preheat = m_biomass * cpMix * (Max(T_in, 450.0) - T_in)
+            traj.NetPyrolysisDuty_kW = (Q_total + Q_preheat) / 1000.0   ' kW
 
             ReDim wOut(w.Length - 1)
             Array.Copy(w, wOut, w.Length)
@@ -574,18 +618,29 @@ Namespace Reactors
         '                 Identity / Drawing / Edit
         ' ------------------------------------------------------------
 
+        ''' <summary>Returns the raw bytes of the icon image for this reactor.</summary>
+        ''' <returns>A byte array containing the PNG image data for the icon.</returns>
         Public Overrides Function GetIconBitmapBytes() As Byte()
             Return UnitOperations.BioOpsDrawHelper.RenderIconToPngBytes(64, 64, AddressOf DrawIcon)
         End Function
 
+        ''' <summary>Returns the description string for this reactor type.</summary>
+        ''' <returns>A description string identifying this reactor type.</returns>
         Public Overrides Function GetDisplayDescription() As String
             Return "CFB fast pyrolysis reactor (1-D axial PFR, Ranzi multi-step kinetics, optional char combustor)"
         End Function
 
+        ''' <summary>Returns the display name for this reactor type.</summary>
+        ''' <returns>The name string for this reactor type.</returns>
         Public Overrides Function GetDisplayName() As String
             Return "CFB Fast Pyrolysis"
         End Function
 
+        ''' <summary>Generates a plain-text results report for this reactor.</summary>
+        ''' <param name="su">The unit system used for formatting output values (not used; values are reported in fixed units).</param>
+        ''' <param name="ci">The culture info used for number formatting.</param>
+        ''' <param name="numberformat">A .NET numeric format string (e.g. "G6") applied to output values.</param>
+        ''' <returns>A formatted multi-line string report.</returns>
         Public Overrides Function GetReport(su As IUnitsOfMeasure, ci As Globalization.CultureInfo, numberformat As String) As String
             Dim s As New Text.StringBuilder
             s.AppendLine("CFB Fast Pyrolysis Reactor: " & Me.GraphicObject.Tag)
@@ -632,7 +687,7 @@ Namespace Reactors
 
         Private Shared ReadOnly _inputProps As String() = {
             "Riser Height", "Riser Diameter", "Num Axial Cells",
-            "Solids Holdup", "Bed Material Density", "Bed Material Cp",
+            "Solids Holdup", "Solids Slip Factor", "Bed Material Density", "Bed Material Cp",
             "Carrier Gas Velocity",
             "Sand Mode", "Sand Inlet Temperature", "Sand To Biomass Ratio", "Heat Loss Fraction",
             "Cellulose Mass Fraction", "Hemicellulose Mass Fraction", "Lignin Mass Fraction",
@@ -652,7 +707,12 @@ Namespace Reactors
         Public Overrides Function GetProperties(proptype As PropertyType) As String()
             Dim baseprops = MyBase.GetProperties(proptype)
             Select Case proptype
-                Case PropertyType.WR : Return _inputProps
+                Case PropertyType.WR
+                    'only the inputs the sand mode reads: the char combustor ones belong to the
+                    'internal combustor loop.
+                    If SandMode = CFBSandMode.InternalCharCombustor Then Return _inputProps
+                    Dim combustor As String() = {"Char LHV", "Char Combustor Excess Air", "Char Combustor Heat Loss"}
+                    Return _inputProps.Where(Function(p) Not combustor.Contains(p)).ToArray()
                 Case PropertyType.RO : Return _outputProps
                 Case Else : Return _inputProps.Concat(_outputProps).Concat(baseprops).ToArray()
             End Select
@@ -664,6 +724,7 @@ Namespace Reactors
                 Case "Riser Diameter" : Return RiserDiameter_m
                 Case "Num Axial Cells" : Return NumAxialCells
                 Case "Solids Holdup" : Return SolidsHoldup
+                Case "Solids Slip Factor" : Return SolidsSlipFactor
                 Case "Bed Material Density" : Return BedMaterialDensity_kgm3
                 Case "Bed Material Cp" : Return BedMaterialCp_JkgK
                 Case "Carrier Gas Velocity" : Return CarrierGasVelocity_ms
@@ -706,7 +767,8 @@ Namespace Reactors
             Select Case prop
                 Case "Riser Height", "Riser Diameter" : Return "m"
                 Case "Bed Material Density" : Return "kg/m3"
-                Case "Bed Material Cp", "Char LHV", "Heat Of Pyrolysis" : Return "J/kg"
+                Case "Bed Material Cp" : Return "J/(kg.K)"
+                Case "Char LHV", "Heat Of Pyrolysis" : Return "J/kg"
                 Case "Carrier Gas Velocity" : Return "m/s"
                 Case "Sand Inlet Temperature", "Sand Outlet Temperature", "Outlet Temperature",
                      "Combustor Flue Temperature" : Return "K"
@@ -729,6 +791,7 @@ Namespace Reactors
                 Case "Riser Diameter" : RiserDiameter_m = d : Return True
                 Case "Num Axial Cells" : NumAxialCells = CInt(d) : Return True
                 Case "Solids Holdup" : SolidsHoldup = d : Return True
+                Case "Solids Slip Factor" : SolidsSlipFactor = d : Return True
                 Case "Bed Material Density" : BedMaterialDensity_kgm3 = d : Return True
                 Case "Bed Material Cp" : BedMaterialCp_JkgK = d : Return True
                 Case "Carrier Gas Velocity" : CarrierGasVelocity_ms = d : Return True
@@ -830,6 +893,14 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      SolidsHoldup = tb.Text.ParseExpressionToDouble()
+                                                     FlowSheet.RequestCalculation()
+                                                 End If
+                                             End Sub)
+
+            container.CreateAndAddTextBoxRow(nf, "Solids Slip Factor (-)", SolidsSlipFactor,
+                                             Sub(tb, e)
+                                                 If tb.Text.IsValidDoubleExpression() Then
+                                                     SolidsSlipFactor = tb.Text.ParseExpressionToDouble()
                                                      FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)

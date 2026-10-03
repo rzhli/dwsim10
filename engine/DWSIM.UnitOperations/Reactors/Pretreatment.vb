@@ -47,6 +47,7 @@ Namespace Reactors
         Inherits Reactor
 
         Implements IExternalUnitOperation
+        ''' <summary>Gets a value indicating that this reactor belongs to the Bio group of the object palette. Always <c>True</c>.</summary>
         Public ReadOnly Property IsBio As Boolean = True
 
         Public Overrides Property ObjectClass As SimulationObjectClass
@@ -66,22 +67,41 @@ Namespace Reactors
 
         ' -------- CONFIG --------
 
+        ''' <summary>Gets or sets the pretreatment technology: DiluteAcid (0), SteamExplosion (1), Alkaline (2) or Organosolv (3).
+        ''' It selects the conversion fractions set by <see cref="ApplyTechnologyDefaults"/> and is shown in the report;
+        ''' the mass balance itself reads only the conversion fractions. Default DiluteAcid.</summary>
         Public Property Technology As PretreatmentType = PretreatmentType.DiluteAcid
+        ''' <summary>Gets or sets the pretreatment severity factor, log10(R0) (dimensionless). Default 3.5.
+        ''' Reported for documentation only; the mass balance does not use it.</summary>
         Public Property SeverityLogR0 As Double = 3.5
+        ''' <summary>Gets or sets the reactor residence time, in s. Default 600.
+        ''' Reported for documentation only; the mass balance does not use it.</summary>
         Public Property ResidenceTime_s As Double = 600.0
+        ''' <summary>Gets or sets the solids loading of the slurry, as a mass fraction (0-1). Default 0.20.
+        ''' Reported for documentation only; the mass balance does not use it.</summary>
         Public Property SolidsLoading_wfrac As Double = 0.20
 
         ' -------- COMPOUND ROLES --------
 
+        ''' <summary>Gets or sets the name of the compound that represents cellulose in the feed. The cellulose to glucose reaction consumes it.</summary>
         Public Property CelluloseCompound As String = ""
+        ''' <summary>Gets or sets the name of the compound that represents hemicellulose (xylan with acetyl groups) in the feed. The hemicellulose to xylose and acetic acid reactions consume it.</summary>
         Public Property HemicelluloseCompound As String = ""
+        ''' <summary>Gets or sets the name of the compound that represents insoluble lignin in the feed. The solubilized fraction moves to <see cref="SolubleLigninCompound"/>.</summary>
         Public Property LigninCompound As String = ""
+        ''' <summary>Gets or sets the name of the glucose product compound. Cellulose hydrolysis runs only when this compound is assigned and present.</summary>
         Public Property GlucoseCompound As String = ""
+        ''' <summary>Gets or sets the name of the xylose product compound. Hemicellulose hydrolysis runs only when this compound is assigned and present.</summary>
         Public Property XyloseCompound As String = ""
+        ''' <summary>Gets or sets the name of the furfural compound formed by xylose degradation. The degradation runs only when this compound is assigned and present.</summary>
         Public Property FurfuralCompound As String = ""
+        ''' <summary>Gets or sets the name of the 5-hydroxymethylfurfural (HMF) compound formed by glucose degradation. The degradation runs only when this compound is assigned and present.</summary>
         Public Property HMFCompound As String = ""
+        ''' <summary>Gets or sets the name of the acetic acid compound released from the hemicellulose acetyl groups. The release runs only when this compound is assigned and present.</summary>
         Public Property AceticAcidCompound As String = ""
+        ''' <summary>Gets or sets the name of the water compound, consumed by the hydrolysis reactions and released by the degradation reactions. Default "Water".</summary>
         Public Property WaterCompound As String = "Water"
+        ''' <summary>Gets or sets the name of the soluble lignin compound that receives the solubilized lignin. Lignin solubilization runs only when this compound is assigned and present.</summary>
         Public Property SolubleLigninCompound As String = ""
 
         ' -------- CONVERSION FRACTIONS --------
@@ -106,41 +126,60 @@ Namespace Reactors
 
         ' -------- RESULTS --------
 
+        ''' <summary>Gets or sets the net glucose mass flow produced (after the part degraded to HMF), in kg/s. Calculated result.</summary>
         Public Property Result_GlucoseProduced_kgs As Double = 0.0
+        ''' <summary>Gets or sets the net xylose mass flow produced (after the part degraded to furfural), in kg/s. Calculated result.</summary>
         Public Property Result_XyloseProduced_kgs As Double = 0.0
+        ''' <summary>Gets or sets the furfural mass flow produced, in kg/s. Calculated result.</summary>
         Public Property Result_FurfuralProduced_kgs As Double = 0.0
+        ''' <summary>Gets or sets the HMF mass flow produced, in kg/s. Calculated result.</summary>
         Public Property Result_HMFProduced_kgs As Double = 0.0
+        ''' <summary>Gets or sets the acetic acid mass flow released from the hemicellulose, in kg/s. Calculated result.</summary>
         Public Property Result_AceticAcidProduced_kgs As Double = 0.0
+        ''' <summary>Gets or sets the lignin mass flow moved to the soluble lignin compound, in kg/s. Calculated result.</summary>
         Public Property Result_LigninSolubilized_kgs As Double = 0.0
+        ''' <summary>Gets or sets the cellulose mass flow consumed by hydrolysis, in kg/s. Calculated result.</summary>
         Public Property Result_CelluloseConsumed_kgs As Double = 0.0
+        ''' <summary>Gets or sets the hemicellulose mass flow consumed, in kg/s. Calculated result.</summary>
         Public Property Result_HemicelluloseConsumed_kgs As Double = 0.0
 
+        ''' <summary>The classic (WinForms) editor window open for this reactor, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
+        ''' <summary>Gets a value indicating whether this reactor supports dynamic simulation mode. Always <c>False</c>; it is calculated as a steady-state model.</summary>
         Public Overrides ReadOnly Property SupportsDynamicMode As Boolean = False
 
+        ''' <summary>Gets a value indicating whether this reactor is compatible with mobile interfaces. Always <c>False</c>.</summary>
         Public Overrides ReadOnly Property MobileCompatible As Boolean
             Get
                 Return False
             End Get
         End Property
 
+        ''' <summary>Initializes a new default instance of the <see cref="Reactor_Pretreatment"/> class.</summary>
         Public Sub New()
             MyBase.New()
         End Sub
 
+        ''' <summary>Initializes a new instance of the <see cref="Reactor_Pretreatment"/> class with a name and description.</summary>
+        ''' <param name="name">The name of this reactor.</param>
+        ''' <param name="description">A brief description of this reactor.</param>
         Public Sub New(ByVal name As String, ByVal description As String)
             MyBase.New()
             Me.ComponentName = name
             Me.ComponentDescription = description
         End Sub
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through XML serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_Pretreatment"/> instance with the same property values.</returns>
         Public Overrides Function CloneXML() As Object
             Dim obj As ICustomXMLSerialization = New Reactor_Pretreatment()
             obj.LoadData(Me.SaveData)
             Return obj
         End Function
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through JSON serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_Pretreatment"/> instance with the same property values.</returns>
         Public Overrides Function CloneJSON() As Object
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Reactor_Pretreatment)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
@@ -201,29 +240,37 @@ Namespace Reactors
                 m_lignin_in = compounds(LigninCompound).MassFlow.GetValueOrDefault
 
             ' Cellulose â†’ glucose (with subsequent glucose â†’ HMF)
-            Dim dm_cell = m_cell_in * Max(0.0, Min(1.0, CelluloseConversion))
-            ' 1 g cellulose (162.14) + H2O (18.02) â†’ 1.111 g glucose (180.16)
+            ' A reaction runs only when its product has a compound to go to; otherwise the reactant
+            ' stays as it is, so no mass leaves the balance.
+            Dim assigned = Function(name As String) Not String.IsNullOrEmpty(name) AndAlso newMass.ContainsKey(name)
+
+            ' Cellulose to glucose (with subsequent glucose to HMF)
+            Dim dm_cell = If(assigned(GlucoseCompound), m_cell_in * Max(0.0, Min(1.0, CelluloseConversion)), 0.0)
+            ' 1 g cellulose (162.14) + H2O (18.02) to 1.111 g glucose (180.16)
             Dim dm_glu_gross = dm_cell * 1.111
             Dim dm_h2o_cell = dm_cell * 0.111 ' water consumed by cellulose hydrolysis
-            Dim dm_hmf = dm_glu_gross * Max(0.0, Min(1.0, GlucoseToHMF))
-            ' glucose (180.16) â†’ HMF (126.11) + 3 H2O (54.05); 1 g glu â†’ 0.70 g HMF + 0.30 g H2O
+            Dim dm_hmf = If(assigned(HMFCompound), dm_glu_gross * Max(0.0, Min(1.0, GlucoseToHMF)), 0.0)
+            ' glucose (180.16) to HMF (126.11) + 3 H2O (54.05); 1 g glu to 0.70 g HMF + 0.30 g H2O
             Dim dm_glu_net = dm_glu_gross - dm_hmf / 0.70
-            Dim dm_h2o_hmf_release = dm_hmf * 0.30 / 0.70 ' water released by glucose â†’ HMF
+            Dim dm_h2o_hmf_release = dm_hmf * 0.30 / 0.70 ' water released by glucose to HMF
 
-            ' Hemicellulose â†’ xylose (with subsequent xylose â†’ furfural) + acetic acid
-            Dim dm_hemi = m_hemi_in * Max(0.0, Min(1.0, HemicelluloseConversion))
-            ' 1 g xylan (132.12) + H2O (18.02) â†’ 1.136 g xylose (150.13)
-            Dim dm_xyl_gross = dm_hemi * 1.1364
-            Dim dm_h2o_hemi = dm_hemi * 0.1364
-            Dim dm_fur = dm_xyl_gross * Max(0.0, Min(1.0, XyloseToFurfural))
-            ' xylose (150.13) â†’ furfural (96.08) + 3 H2O (54.05); 1 g xyl â†’ 0.64 g fur + 0.36 g H2O
+            ' Hemicellulose to xylose (with subsequent xylose to furfural); its acetyl groups give acetic acid:
+            ' R-O-COCH3 + H2O to R-OH + CH3COOH, so 60.05 g of acid take 42.04 g from the chain and 18.02 g of water.
+            Dim dm_hemi = If(assigned(XyloseCompound), m_hemi_in * Max(0.0, Min(1.0, HemicelluloseConversion)), 0.0)
+            Dim dm_acetic = If(assigned(AceticAcidCompound), dm_hemi * Max(0.0, AceticAcidYieldOnHemi), 0.0)
+            Dim dm_acetyl = dm_acetic * 42.04 / 60.05
+            Dim dm_h2o_acetic = dm_acetic * 18.02 / 60.05
+            Dim dm_xylan = Max(dm_hemi - dm_acetyl, 0.0)
+            ' 1 g xylan (132.12) + H2O (18.02) to 1.136 g xylose (150.13)
+            Dim dm_xyl_gross = dm_xylan * 1.1364
+            Dim dm_h2o_hemi = dm_xylan * 0.1364
+            Dim dm_fur = If(assigned(FurfuralCompound), dm_xyl_gross * Max(0.0, Min(1.0, XyloseToFurfural)), 0.0)
+            ' xylose (150.13) to furfural (96.08) + 3 H2O (54.05); 1 g xyl to 0.64 g fur + 0.36 g H2O
             Dim dm_xyl_net = dm_xyl_gross - dm_fur / 0.64
             Dim dm_h2o_fur_release = dm_fur * 0.36 / 0.64
 
-            Dim dm_acetic = dm_hemi * Max(0.0, AceticAcidYieldOnHemi)
-
-            ' Lignin solubilization (mass conservative: lignin â†’ soluble lignin; if no soluble form chosen, just convert in place)
-            Dim dm_lignin_sol = m_lignin_in * Max(0.0, Min(1.0, LigninSolubilization))
+            ' Lignin solubilization: without a soluble-lignin compound the lignin stays where it is.
+            Dim dm_lignin_sol = If(assigned(SolubleLigninCompound), m_lignin_in * Max(0.0, Min(1.0, LigninSolubilization)), 0.0)
 
             ' Apply mass balances
             If Not String.IsNullOrEmpty(CelluloseCompound) AndAlso newMass.ContainsKey(CelluloseCompound) Then _
@@ -246,7 +293,7 @@ Namespace Reactors
             If Not String.IsNullOrEmpty(AceticAcidCompound) AndAlso newMass.ContainsKey(AceticAcidCompound) Then _
                 newMass(AceticAcidCompound) += dm_acetic
 
-            Dim dm_h2o_net = -(dm_h2o_cell + dm_h2o_hemi) + dm_h2o_hmf_release + dm_h2o_fur_release
+            Dim dm_h2o_net = -(dm_h2o_cell + dm_h2o_hemi + dm_h2o_acetic) + dm_h2o_hmf_release + dm_h2o_fur_release
             If Not String.IsNullOrEmpty(WaterCompound) AndAlso newMass.ContainsKey(WaterCompound) Then _
                 newMass(WaterCompound) = Max(newMass(WaterCompound) + dm_h2o_net, 0.0)
 
@@ -328,18 +375,29 @@ Namespace Reactors
             End If
         End Sub
 
+        ''' <summary>Returns the raw bytes of the icon image for this reactor.</summary>
+        ''' <returns>A byte array containing the PNG image data for the icon.</returns>
         Public Overrides Function GetIconBitmapBytes() As Byte()
             Return UnitOperations.BioOpsDrawHelper.RenderIconToPngBytes(64, 64, AddressOf DrawIcon)
         End Function
 
+        ''' <summary>Returns the localized description string for this reactor type.</summary>
+        ''' <returns>A translated description string identifying this reactor type.</returns>
         Public Overrides Function GetDisplayDescription() As String
             Return "Biomass pretreatment reactor (dilute-acid / steam-explosion / alkaline / organosolv)"
         End Function
 
+        ''' <summary>Returns the localized display name for this reactor type.</summary>
+        ''' <returns>A translated name string for this reactor type.</returns>
         Public Overrides Function GetDisplayName() As String
             Return "Pretreatment Reactor"
         End Function
 
+        ''' <summary>Generates a plain-text results report for this reactor.</summary>
+        ''' <param name="su">The unit system used for formatting output values.</param>
+        ''' <param name="ci">The culture info used for number formatting.</param>
+        ''' <param name="numberformat">A .NET numeric format string (e.g. "G6") applied to output values.</param>
+        ''' <returns>A formatted multi-line string report.</returns>
         Public Overrides Function GetReport(su As IUnitsOfMeasure, ci As Globalization.CultureInfo, numberformat As String) As String
             Dim s As New Text.StringBuilder
             s.AppendLine("Pretreatment: " & Me.GraphicObject.Tag)

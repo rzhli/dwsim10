@@ -43,6 +43,7 @@ Namespace UnitOperations
         ''' <summary>Gets a value indicating whether this unit operation exposes properties for dynamic mode.</summary>
         Public Overrides ReadOnly Property HasPropertiesForDynamicMode As Boolean = True
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>Gets the list of equipment sub-types available for this heater.</summary>
@@ -279,7 +280,7 @@ Namespace UnitOperations
             AddDynamicProperty("Initialize using Inlet Stream", "Initializes the volume content with information from the inlet stream, if the content is null.", True, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Reset Content", "Discards the current holdup at the next run step and builds it again as on a first run (see Initialize using Inlet Stream).", False, UnitOfMeasure.none, True.GetType())
             AddDynamicProperty("Ambient Temperature", "Ambient temperature for heat loss calculation (K).", 298.15, UnitOfMeasure.temperature, 1.0.GetType())
-            AddDynamicProperty("Ambient UA Product", "Overall heat transfer coefficient times area for ambient heat loss (W/K). Set to 0 to disable.", 0.0, UnitOfMeasure.heat_transf_coeff, 1.0.GetType())
+            AddDynamicProperty("Ambient UA Product", "Overall heat transfer coefficient times area for ambient heat loss (W/K). Set to 0 to disable.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Wall Thermal Mass", "Product of wall mass and specific heat capacity (J/K). Set to 0 to disable wall dynamics.", 0.0, UnitOfMeasure.none, 1.0.GetType())
             AddDynamicProperty("Wall Temperature", "Current wall temperature (K). Used when wall thermal mass > 0.", 298.15, UnitOfMeasure.temperature, 1.0.GetType())
 
@@ -912,7 +913,22 @@ Namespace UnitOperations
                         proplist.Add("PROP_HT_" + CStr(i))
                     Next
                 Case PropertyType.WR
-                    For i = 0 To 5
+                    'only the inputs the active calculation mode reads; Calculate overwrites the others.
+                    'the pressure drop and the efficiency are read in every mode.
+                    Dim writable As New List(Of Integer) From {0, 1}
+                    Select Case CalcMode
+                        Case CalculationMode.HeatAdded, CalculationMode.HeatAddedRemoved
+                            writable.Add(3)
+                        Case CalculationMode.OutletTemperature
+                            writable.Add(2)
+                        Case CalculationMode.OutletVaporFraction
+                            writable.Add(4)
+                        Case CalculationMode.TemperatureChange
+                            writable.Add(5)
+                        Case CalculationMode.EnergyStream
+                            'the duty comes from the energy stream
+                    End Select
+                    For Each i In writable
                         proplist.Add("PROP_HT_" + CStr(i))
                     Next
                 Case PropertyType.ALL

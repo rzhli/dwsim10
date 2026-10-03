@@ -39,6 +39,12 @@ Imports DWSIM.ExtensionMethods
 ''' </summary>
 Namespace Streams
 
+    ''' <summary>
+    ''' Material stream: carries the conditions (temperature, pressure, flow), composition and phase
+    ''' properties of a multicomponent, multiphase process stream between unit operations. It runs the
+    ''' flash and property calculations through its property package, and implements the CAPE-OPEN 1.0
+    ''' and 1.1 material object and thermodynamic interfaces so external components can use it.
+    ''' </summary>
     <System.Serializable()> Public Partial Class MaterialStream
 
         Inherits UnitOperations.BaseClass
@@ -54,8 +60,16 @@ Namespace Streams
 
         Implements Interfaces.IMaterialStream
 
+        ''' <summary>
+        ''' The classic (WinForms) editor window open for this stream, if any. Not saved with the flowsheet.
+        ''' </summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
+        ''' <summary>
+        ''' Backing field of <see cref="PropertyPackage"/>: holds a property package instance assigned directly
+        ''' (one that is not registered in the flowsheet, or set while the stream has no flowsheet). Flowsheet
+        ''' property packages are referenced through <see cref="_ppid"/> instead. Not saved with the flowsheet.
+        ''' </summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public _pp As PropertyPackages.PropertyPackage
 
         ''' <summary>
@@ -69,10 +83,23 @@ Namespace Streams
         <NonSerialized> <Xml.Serialization.XmlIgnore> Private _lookupBuildTask As Task
         <NonSerialized> <Xml.Serialization.XmlIgnore> Private _lookupLock As New Object()
 
+        ''' <summary>
+        ''' Gets or sets whether the stream builds a phase envelope lookup table for its composition before
+        ''' each equilibrium calculation (rebuilt only when the composition changes). The table is used to
+        ''' identify the phase and to give initial temperature estimates to PH and PS flashes. Default <c>False</c>.
+        ''' </summary>
         Public Property GeneratePhaseEnvelopeLookup As Boolean = False
 
+        ''' <summary>
+        ''' Gets or sets which curves the phase envelope lookup table includes: <c>WidomOnly</c> (bubble, dew
+        ''' and Widom lines; default) or <c>FullEnvelope</c> (also the solid-liquid equilibrium lines).
+        ''' </summary>
         Public Property PhaseEnvelopeLookupMode As PropertyPackages.PhaseEnvelopeLookupMode = PropertyPackages.PhaseEnvelopeLookupMode.WidomOnly
 
+        ''' <summary>
+        ''' Gets or sets the phase envelope lookup table built for the current composition of this stream,
+        ''' or <c>Nothing</c> when none has been built.
+        ''' </summary>
         Public Property PhaseEnvelopeLookup As PropertyPackages.PhaseEnvelopeLookupTable
             Get
                 Return _phaseEnvelopeLookup
@@ -82,6 +109,13 @@ Namespace Streams
             End Set
         End Property
 
+        ''' <summary>
+        ''' Starts building the phase envelope lookup table for the current composition on a background task,
+        ''' using a clone of the property package. Does nothing if a build is already running. The new table
+        ''' replaces <see cref="PhaseEnvelopeLookup"/> when the task finishes.
+        ''' </summary>
+        ''' <param name="mode">Which curves to include: <c>WidomOnly</c> (bubble, dew and Widom lines) or
+        ''' <c>FullEnvelope</c> (also the solid-liquid equilibrium lines).</param>
         Public Sub BuildPhaseEnvelopeLookupAsync(Optional mode As PropertyPackages.PhaseEnvelopeLookupMode = PropertyPackages.PhaseEnvelopeLookupMode.WidomOnly)
 
             If _lookupBuildTask IsNot Nothing AndAlso Not _lookupBuildTask.IsCompleted Then Return
@@ -121,12 +155,22 @@ Namespace Streams
                                         End Sub)
         End Sub
 
+        ''' <summary>
+        ''' Returns the phase region of the stream composition at the given conditions from the phase envelope lookup table.
+        ''' </summary>
+        ''' <param name="T">Temperature, in K.</param>
+        ''' <param name="P">Pressure, in Pa.</param>
+        ''' <returns>The phase region (liquid, vapor, vapor-liquid, liquid-like, vapor-like, solid or solid-liquid),
+        ''' or <c>Unknown</c> when no ready lookup table exists.</returns>
         Public Function QueryPhaseRegion(T As Double, P As Double) As PropertyPackages.PhaseRegion
             Dim tbl = _phaseEnvelopeLookup
             If tbl Is Nothing OrElse Not tbl.IsReady Then Return PropertyPackages.PhaseRegion.Unknown
             Return tbl.Query(T, P)
         End Function
 
+        ''' <summary>
+        ''' Marks the current phase envelope lookup table as not ready, so it is no longer used and gets rebuilt.
+        ''' </summary>
         Public Sub InvalidatePhaseEnvelopeLookup()
             SyncLock _lookupLock
                 If _phaseEnvelopeLookup IsNot Nothing Then
@@ -135,12 +179,26 @@ Namespace Streams
             End SyncLock
         End Sub
 
+        ''' <summary>
+        ''' Estimates the temperature at the given pressure and enthalpy by interpolating the bubble and dew
+        ''' curves of the phase envelope lookup table. Used as the initial estimate of PH flashes.
+        ''' </summary>
+        ''' <param name="P">Pressure, in Pa.</param>
+        ''' <param name="H">Mass enthalpy, in kJ/kg.</param>
+        ''' <returns>The estimated temperature in K, or <c>NaN</c> when no ready lookup table exists or no estimate is found.</returns>
         Public Function EstimateTemperatureFromPH(P As Double, H As Double) As Double
             Dim tbl = _phaseEnvelopeLookup
             If tbl Is Nothing OrElse Not tbl.IsReady Then Return Double.NaN
             Return tbl.EstimateTemperaturePH(P, H)
         End Function
 
+        ''' <summary>
+        ''' Estimates the temperature at the given pressure and entropy by interpolating the bubble and dew
+        ''' curves of the phase envelope lookup table. Used as the initial estimate of PS flashes.
+        ''' </summary>
+        ''' <param name="P">Pressure, in Pa.</param>
+        ''' <param name="S">Mass entropy, in kJ/(kg.K).</param>
+        ''' <returns>The estimated temperature in K, or <c>NaN</c> when no ready lookup table exists or no estimate is found.</returns>
         Public Function EstimateTemperatureFromPS(P As Double, S As Double) As Double
             Dim tbl = _phaseEnvelopeLookup
             If tbl Is Nothing OrElse Not tbl.IsReady Then Return Double.NaN
@@ -599,6 +657,10 @@ Namespace Streams
             PostCreationAction3?.Invoke(Me)
 
         End Sub
+        ''' <summary>
+        ''' Returns whether the stream has no property package assigned, neither by ID nor by direct instance.
+        ''' </summary>
+        ''' <returns><c>True</c> if no property package is assigned.</returns>
         Function EmptyPropertyPackage() As Boolean
             Return String.IsNullOrEmpty(Me._ppid) And _pp Is Nothing
         End Function
@@ -860,36 +922,25 @@ Namespace Streams
 
         End Sub
 
-        ''' <summary>
-        ''' Triggers a full equilibrium and property calculation for this stream, respecting flowsheet options.
-        ''' </summary>
-        ''' <param name="args">Optional calculation arguments (unused).</param>
     ''' <summary>
-
     ''' Set when the phase split of this stream was worked out by something other than the
-
     ''' property package of the flowsheet, as a CAPE-OPEN unit operation does with its own
-
     ''' thermodynamics. The next calculation keeps that split and only works out the properties,
-
     ''' then clears the flag.
-
     ''' </summary>
-
     ''' <remarks>
-
     ''' Recalculating it here is what used to make a saturated product change phase on the way
-
     ''' out: on the bubble or the dew curve, temperature and pressure cannot hold a phase split,
-
     ''' and the two models disagree on where that curve is by a fraction of a degree.
-
     ''' </remarks>
-
     <Xml.Serialization.XmlIgnore> Public Property EquilibriumCalculatedExternally As Boolean = False
 
 
 
+        ''' <summary>
+        ''' Triggers a full equilibrium and property calculation for this stream, respecting flowsheet options.
+        ''' </summary>
+        ''' <param name="args">Optional calculation arguments (unused).</param>
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
             UpdateStreamType()
             If EquilibriumCalculatedExternally Then
@@ -4062,6 +4113,57 @@ Namespace Streams
 
 #End Region
 
+#Region "    CAPE-OPEN overall enthalpy and entropy specifications"
+
+        ' A hosted unit may set the overall enthalpy or entropy before the composition (the COCO units
+        ' call SetOverallProp("enthalpy", "Mole", ...) ahead of SetOverallProp("fraction", ...)). The
+        ' molar value can only be turned into the mass value the flash reads once the composition is
+        ' known, so it is kept here and converted when the equilibrium is requested.
+        <NonSerialized> <Xml.Serialization.XmlIgnore> Private _coOverallH As Double?
+        <NonSerialized> <Xml.Serialization.XmlIgnore> Private _coOverallHMolar As Boolean
+        <NonSerialized> <Xml.Serialization.XmlIgnore> Private _coOverallS As Double?
+        <NonSerialized> <Xml.Serialization.XmlIgnore> Private _coOverallSMolar As Boolean
+
+        Private Sub KeepOverallSpec(prop As String, basis As String, value As Double)
+            Dim molar As Boolean = basis IsNot Nothing AndAlso basis.ToLower().StartsWith("mol")
+            Select Case prop.ToLower()
+                Case "enthalpy", "enthalpynf"
+                    _coOverallH = value
+                    _coOverallHMolar = molar
+                Case "entropy", "entropynf"
+                    _coOverallS = value
+                    _coOverallSMolar = molar
+            End Select
+        End Sub
+
+        Private Sub ApplyOverallSpecs()
+            Dim mw As Double = PropertyPackage.AUX_MMM(PropertyPackages.Phase.Mixture)
+            With Phases(0).Properties
+                If _coOverallH.HasValue Then
+                    If _coOverallHMolar Then
+                        .molar_enthalpy = _coOverallH.Value
+                        If mw > 0.0 Then .enthalpy = _coOverallH.Value / mw
+                    Else
+                        .enthalpy = _coOverallH.Value / 1000.0
+                        .molar_enthalpy = _coOverallH.Value / 1000.0 * mw
+                    End If
+                End If
+                If _coOverallS.HasValue Then
+                    If _coOverallSMolar Then
+                        .molar_entropy = _coOverallS.Value
+                        If mw > 0.0 Then .entropy = _coOverallS.Value / mw
+                    Else
+                        .entropy = _coOverallS.Value / 1000.0
+                        .molar_entropy = _coOverallS.Value / 1000.0 * mw
+                    End If
+                End If
+            End With
+            _coOverallH = Nothing
+            _coOverallS = Nothing
+        End Sub
+
+#End Region
+
 #Region "    CAPE-OPEN ICapeIdentification"
 
         ''' <summary>
@@ -4106,6 +4208,7 @@ Namespace Streams
         ''' The Material Object may or may not delegate this call to a Property Package.</remarks>
         Public Sub CalcEquilibrium(ByVal flashType As String, ByVal props As Object) Implements CapeOpen.ICapeThermoMaterialObject.CalcEquilibrium
             Me.PropertyPackage.CurrentMaterialStream = Me
+            ApplyOverallSpecs()
             Try
                 Me.PropertyPackage.CalcEquilibrium(Me, flashType, props)
             Catch ex As Exception
@@ -4721,6 +4824,7 @@ Namespace Streams
                             Me.Phases(f).Properties.density = 1 / values(0)
                     End Select
                 Case "enthalpy", "enthalpynf"
+                    If f = 0 Then KeepOverallSpec([property], basis, values(0))
                     Select Case basis
                         Case "Molar", "molar", "mole", "Mole"
                             Me.Phases(f).Properties.molar_enthalpy = values(0)
@@ -4728,9 +4832,10 @@ Namespace Streams
                             If val <> 0.0# Then Me.Phases(f).Properties.enthalpy = values(0) / val
                         Case "Mass", "mass"
                             Me.Phases(f).Properties.enthalpy = values(0) / 1000
-                            Me.Phases(f).Properties.molar_enthalpy = values(0) * Me.PropertyPackage.AUX_MMM(phs)
+                            Me.Phases(f).Properties.molar_enthalpy = values(0) / 1000 * Me.PropertyPackage.AUX_MMM(phs)
                     End Select
                 Case "entropy", "entropynf"
+                    If f = 0 Then KeepOverallSpec([property], basis, values(0))
                     Select Case basis
                         Case "Molar", "molar", "mole", "Mole"
                             Me.Phases(f).Properties.molar_entropy = values(0)
@@ -4738,7 +4843,7 @@ Namespace Streams
                             If val <> 0.0# Then Me.Phases(f).Properties.entropy = values(0) / val
                         Case "Mass", "mass"
                             Me.Phases(f).Properties.entropy = values(0) / 1000
-                            Me.Phases(f).Properties.molar_entropy = values(0) * Me.PropertyPackage.AUX_MMM(phs)
+                            Me.Phases(f).Properties.molar_entropy = values(0) / 1000 * Me.PropertyPackage.AUX_MMM(phs)
                     End Select
                 Case "enthalpyf"
                     Select Case basis
@@ -5407,6 +5512,8 @@ Namespace Streams
             Me.PropertyPackage.CurrentMaterialStream = Nothing
             AtEquilibrium = False
             MaximumAllowableDynamicMassFlowRate = Nothing
+            _coOverallH = Nothing
+            _coOverallS = Nothing
         End Sub
 
         ''' <summary>
@@ -6442,6 +6549,7 @@ Namespace Streams
                             Me.Phases(f).Properties.density = 1 / values(0)
                     End Select
                 Case "enthalpy", "enthalpynf"
+                    If f = 0 Then KeepOverallSpec([property], basis, values(0))
                     Select Case basis
                         Case "Molar", "molar", "mole", "Mole"
                             Me.Phases(f).Properties.molar_enthalpy = values(0)
@@ -6449,9 +6557,10 @@ Namespace Streams
                             If val <> 0.0# Then Me.Phases(f).Properties.enthalpy = values(0) / val
                         Case "Mass", "mass"
                             Me.Phases(f).Properties.enthalpy = values(0) / 1000
-                            Me.Phases(f).Properties.molar_enthalpy = values(0) * Me.PropertyPackage.AUX_MMM(phs)
+                            Me.Phases(f).Properties.molar_enthalpy = values(0) / 1000 * Me.PropertyPackage.AUX_MMM(phs)
                     End Select
                 Case "entropy", "entropynf"
+                    If f = 0 Then KeepOverallSpec([property], basis, values(0))
                     Select Case basis
                         Case "Molar", "molar", "mole", "Mole"
                             Me.Phases(f).Properties.molar_entropy = values(0)
@@ -6459,7 +6568,7 @@ Namespace Streams
                             If val <> 0.0# Then Me.Phases(f).Properties.entropy = values(0) / val
                         Case "Mass", "mass"
                             Me.Phases(f).Properties.entropy = values(0) / 1000
-                            Me.Phases(f).Properties.molar_entropy = values(0) * Me.PropertyPackage.AUX_MMM(phs)
+                            Me.Phases(f).Properties.molar_entropy = values(0) / 1000 * Me.PropertyPackage.AUX_MMM(phs)
                     End Select
                 Case "enthalpyf"
                     Select Case basis
@@ -6514,7 +6623,7 @@ Namespace Streams
                 Case "moles"
                     DefinedFlow = FlowSpec.Mole
                     Me.Phases(f).Properties.molarflow = values(0)
-                Case "Mass"
+                Case "mass"
                     DefinedFlow = FlowSpec.Mass
                     Me.Phases(f).Properties.massflow = values(0)
                 Case "molecularweight"
@@ -7172,6 +7281,7 @@ Namespace Streams
         ''' fraction) and composition for all Phases present.</remarks>
         Public Sub CalcEquilibrium1(ByVal specification1 As Object, ByVal specification2 As Object, ByVal solutionType As String) Implements ICapeThermoEquilibriumRoutine.CalcEquilibrium
             Me.PropertyPackage.CurrentMaterialStream = Me
+            ApplyOverallSpecs()
             Try
                 Me.PropertyPackage.CalcEquilibrium1(specification1, specification2, solutionType)
             Catch ex As Exception
@@ -7281,6 +7391,18 @@ Namespace Streams
 
 #Region "    CAPE-OPEN Error Interfaces"
 
+        ''' <summary>
+        ''' Stores the CAPE-OPEN error information exposed through the ECapeUser interface, appends the exception
+        ''' to the property package exception log and throws a <c>CapeComputationException</c> wrapping it.
+        ''' </summary>
+        ''' <param name="ex">The original exception.</param>
+        ''' <param name="name">The error name. Not stored.</param>
+        ''' <param name="description">The error description.</param>
+        ''' <param name="interf">The name of the CAPE-OPEN interface where the error occurred.</param>
+        ''' <param name="moreinfo">Additional information about the error (callers pass the exception source).</param>
+        ''' <param name="operation">The operation that failed (callers pass the stack trace).</param>
+        ''' <param name="scope">The scope of the error (callers pass the method name).</param>
+        ''' <param name="code">The error code (HRESULT).</param>
         Sub ThrowCAPEException(ByRef ex As Exception, ByVal name As String, ByVal description As String, ByVal interf As String, ByVal moreinfo As String, ByVal operation As String, ByVal scope As String, ByVal code As Integer)
 
             _code = code
@@ -9380,6 +9502,14 @@ Namespace Streams
 
         End Function
 
+        ''' <summary>
+        ''' Calculates the overall mass enthalpy this stream would have at another temperature and its current
+        ''' pressure, on a temporary clone; the stream itself is left unchanged.
+        ''' </summary>
+        ''' <param name="T">Temperature, in K.</param>
+        ''' <param name="calc_eq"><c>True</c> to recalculate the phase equilibrium at the new temperature;
+        ''' <c>False</c> to keep the current phase split.</param>
+        ''' <returns>The overall mass enthalpy, in kJ/kg.</returns>
         Public Function GetMassEnthalpyAt(T As Double, Optional calc_eq As Boolean = True) As Double
 
             Dim cl As MaterialStream = Clone()
@@ -9398,6 +9528,15 @@ Namespace Streams
 
         End Function
 
+        ''' <summary>
+        ''' Calculates the overall mass enthalpy this stream would have at another temperature and pressure,
+        ''' on a temporary clone; the stream itself is left unchanged.
+        ''' </summary>
+        ''' <param name="T">Temperature, in K.</param>
+        ''' <param name="P">Pressure, in Pa.</param>
+        ''' <param name="calc_eq"><c>True</c> to recalculate the phase equilibrium at the new conditions;
+        ''' <c>False</c> to keep the current phase split.</param>
+        ''' <returns>The overall mass enthalpy, in kJ/kg.</returns>
         Public Function GetMassEnthalpyAt(T As Double, P As Double, Optional calc_eq As Boolean = True) As Double
 
             Dim cl As MaterialStream = Clone()

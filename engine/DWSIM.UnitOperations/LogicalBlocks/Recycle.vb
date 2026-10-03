@@ -38,6 +38,7 @@ Namespace SpecialOps
 
         Implements Interfaces.IRecycle
 
+        ''' <summary>The classic (WinForms) editor window open for this logical block, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         Protected m_ConvPar As Helpers.Recycle.ConvergenceParameters
@@ -227,7 +228,7 @@ Namespace SpecialOps
 
             MyBase.CreateNew()
 
-            m_ConvPar = New ConvergenceParameters
+            m_ConvPar = New ConvergenceParameters With {.VazaoMassicaRelativa = 0.0001}
             m_ConvHist = New ConvergenceHistory
             m_WegPars = New WegsteinParameters
 
@@ -242,7 +243,7 @@ Namespace SpecialOps
 
             MyBase.CreateNew()
 
-            m_ConvPar = New ConvergenceParameters
+            m_ConvPar = New ConvergenceParameters With {.VazaoMassicaRelativa = 0.0001}
             m_ConvHist = New ConvergenceHistory
             m_WegPars = New WegsteinParameters
 
@@ -590,7 +591,13 @@ Namespace SpecialOps
             ' flow itself is within tolerance of zero, converge on the flow alone.
             Dim cvNegligibleFlow = Math.Abs(Me.ConvergenceHistory.VazaoMassica) <= Math.Max(cvTol.VazaoMassica, 0.000000000001)
 
-            If cvWErr <= cvTol.VazaoMassica AndAlso (cvNegligibleFlow OrElse (cvTErr <= cvTol.Temperatura AndAlso cvPErr <= cvTol.Pressao)) Then
+            ' the relative tolerance only tightens the absolute one, down to 1e-9 kg/s
+            Dim cvWTol = cvTol.VazaoMassica
+            If cvTol.VazaoMassicaRelativa > 0.0 AndAlso Not cvNegligibleFlow Then
+                cvWTol = Math.Min(cvWTol, Math.Max(cvTol.VazaoMassicaRelativa * Math.Abs(Me.ConvergenceHistory.VazaoMassica), 0.000000001))
+            End If
+
+            If cvWErr <= cvWTol AndAlso (cvNegligibleFlow OrElse (cvTErr <= cvTol.Temperatura AndAlso cvPErr <= cvTol.Pressao)) Then
 
                 If Me.IterationCount <> 0 Then Me.IterationsTaken = Me.IterationCount
                 Me.IterationCount = 0
@@ -759,6 +766,9 @@ Namespace SpecialOps
                     Case 6
                         'PROP_RY_6	Pressure Error
                         value = SystemsOfUnits.Converter.ConvertFromSI(su.deltaP, Me.ConvergenceHistory.PressaoE)
+                    Case 7
+                        'PROP_RY_7	Relative Mass Flow Tolerance
+                        value = Me.ConvergenceParameters.VazaoMassicaRelativa
                 End Select
 
                 Return value
@@ -786,12 +796,14 @@ Namespace SpecialOps
                     For i = 0 To 3
                         proplist.Add("PROP_RY_" + CStr(i))
                     Next
+                    proplist.Add("PROP_RY_7")
                 Case PropertyType.WR
                     For i = 0 To 3
                         proplist.Add("PROP_RY_" + CStr(i))
                     Next
+                    proplist.Add("PROP_RY_7")
                 Case PropertyType.ALL
-                    For i = 0 To 6
+                    For i = 0 To 7
                         proplist.Add("PROP_RY_" + CStr(i))
                     Next
             End Select
@@ -828,6 +840,9 @@ Namespace SpecialOps
                 Case 3
                     'PROP_RY_3	Pressure Tolerance
                     Me.ConvergenceParameters.Pressao = SystemsOfUnits.Converter.ConvertToSI(su.deltaP, propval)
+                Case 7
+                    'PROP_RY_7	Relative Mass Flow Tolerance
+                    Me.ConvergenceParameters.VazaoMassicaRelativa = Convert.ToDouble(propval)
 
             End Select
             Return 1
@@ -934,6 +949,12 @@ Namespace SpecialOps.Helpers.Recycle
         Public Pressao As Double = 0.1
         ''' <summary>Gets or sets the mass flow tolerance in kg/s.</summary>
         Public VazaoMassica As Double = 0.01
+        ''' <summary>
+        ''' Gets or sets the mass flow tolerance relative to the recycled flow (dimensionless). When it is
+        ''' above zero the flow error must also be within this fraction of the flow; zero keeps the
+        ''' absolute tolerance alone, which is what recycles saved without this setting use.
+        ''' </summary>
+        Public VazaoMassicaRelativa As Double = 0.0
         ''' <summary>Gets or sets the vapour fraction tolerance (dimensionless).</summary>
         Public FracaoVapor As Double = 0.01
         ''' <summary>Gets or sets the enthalpy tolerance in kJ/kg.</summary>
@@ -954,6 +975,8 @@ Namespace SpecialOps.Helpers.Recycle
         Public Function LoadData(data As System.Collections.Generic.List(Of System.Xml.Linq.XElement)) As Boolean Implements Interfaces.ICustomXMLSerialization.LoadData
 
             XMLSerializer.XMLSerializer.Deserialize(Me, data, True)
+            ' saved before the relative tolerance existed: absolute tolerance alone, as it ran then
+            If Not data.Any(Function(x) x.Name = "VazaoMassicaRelativa") Then VazaoMassicaRelativa = 0.0
             Return True
 
         End Function

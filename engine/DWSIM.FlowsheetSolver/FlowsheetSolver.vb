@@ -43,6 +43,61 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
     Public Shared Event CalculatingObject As CustomEvent2
 
     Private Shared _callback As IFlowsheetSolveCallback
+
+    ''' <summary>
+    ''' The mode a spec actually runs in: its own mode, or the flowsheet option when it is set to GlobalSetting
+    ''' (a missing spec object also falls back to the flowsheet option).
+    ''' </summary>
+    Friend Shared Function EffectiveSpecMode(fbag As IFlowsheet, spec As ISpec) As SpecCalcMode2
+        If spec IsNot Nothing AndAlso spec.SpecCalculationMode <> SpecCalcMode2.GlobalSetting Then Return spec.SpecCalculationMode
+        Select Case fbag.FlowsheetOptions.SpecCalculationMode
+            Case SpecCalcMode.BeforeTargetObject : Return SpecCalcMode2.BeforeTargetObject
+            Case SpecCalcMode.BeforeFlowsheet : Return SpecCalcMode2.BeforeFlowsheet
+            Case SpecCalcMode.AfterFlowsheet : Return SpecCalcMode2.AfterFlowsheet
+            Case Else : Return SpecCalcMode2.AfterSourceObject
+        End Select
+    End Function
+
+    ''' <summary>
+    ''' True when the spec attached by id runs at the given point. An empty or unknown id never runs.
+    ''' </summary>
+    Friend Shared Function SpecRunsAt(fbag As IFlowsheet, specId As String, mode As SpecCalcMode2) As Boolean
+        If Not SpecExists(fbag, specId) Then Return False
+        Return EffectiveSpecMode(fbag, TryCast(fbag.SimulationObjects(specId), ISpec)) = mode
+    End Function
+
+    Friend Shared Function SpecExists(fbag As IFlowsheet, specId As String) As Boolean
+        Return Not String.IsNullOrEmpty(specId) AndAlso fbag.SimulationObjects.ContainsKey(specId)
+    End Function
+
+    ''' <summary>
+    ''' The mode an information carrier actually runs in: its own mode, or the flowsheet option when it is
+    ''' set to GlobalSetting. A carrier has no reference object, so AfterObject and BeforeObject also follow
+    ''' the flowsheet option.
+    ''' </summary>
+    Friend Shared Function EffectiveCarrierMode(fbag As IFlowsheet, carrier As IInformationCarrier) As SpecCalcMode2
+        If carrier IsNot Nothing Then
+            Select Case carrier.CalculationMode
+                Case SpecCalcMode2.AfterSourceObject, SpecCalcMode2.BeforeTargetObject, SpecCalcMode2.BeforeFlowsheet, SpecCalcMode2.AfterFlowsheet
+                    Return carrier.CalculationMode
+            End Select
+        End If
+        Select Case fbag.FlowsheetOptions.InformationCarrierCalculationMode
+            Case SpecCalcMode.BeforeTargetObject : Return SpecCalcMode2.BeforeTargetObject
+            Case SpecCalcMode.BeforeFlowsheet : Return SpecCalcMode2.BeforeFlowsheet
+            Case SpecCalcMode.AfterFlowsheet : Return SpecCalcMode2.AfterFlowsheet
+            Case Else : Return SpecCalcMode2.AfterSourceObject
+        End Select
+    End Function
+
+    ''' <summary>
+    ''' True when the information carrier attached by id runs at the given point. An empty or unknown id never runs.
+    ''' </summary>
+    Friend Shared Function CarrierRunsAt(fbag As IFlowsheet, carrierId As String, mode As SpecCalcMode2) As Boolean
+        If String.IsNullOrEmpty(carrierId) OrElse Not fbag.SimulationObjects.ContainsKey(carrierId) Then Return False
+        Return EffectiveCarrierMode(fbag, TryCast(fbag.SimulationObjects(carrierId), IInformationCarrier)) = mode
+    End Function
+
     Public Shared Sub RegisterCallback(callback As IFlowsheetSolveCallback)
         If _callback Is Nothing Then
             _callback = callback
@@ -81,13 +136,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                                 myUnitOp.Calculated = False
 
                                 If myUnitOp.IsSpecAttached = True Then
-                                    If myUnitOp.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                                    If myUnitOp.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myUnitOp.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                                         fbag.SimulationObjects(myUnitOp.AttachedSpecId).Solve()
                                     End If
                                 End If
 
                                 If myUnitOp.IsInfoCarrierAttached = True Then
-                                    If myUnitOp.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                                    If myUnitOp.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, myUnitOp.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                                         fbag.SimulationObjects(myUnitOp.AttachedInfoCarrierId).Solve()
                                     End If
                                 End If
@@ -120,13 +175,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                                 gobj.Status = Status.Calculated
 
                                 If myUnitOp.IsSpecAttached = True Then
-                                    If myUnitOp.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                                    If myUnitOp.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myUnitOp.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                                         fbag.SimulationObjects(myUnitOp.AttachedSpecId).Solve()
                                     End If
                                 End If
 
                                 If myUnitOp.IsInfoCarrierAttached = True Then
-                                    If myUnitOp.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+                                    If myUnitOp.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, myUnitOp.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                                         fbag.SimulationObjects(myUnitOp.AttachedInfoCarrierId).Solve()
                                     End If
                                 End If
@@ -147,7 +202,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                             End If
                         End If
                     End If
-                    If myObj.IsSpecAttached And myObj.SpecVarType = SpecVarType.Source Then fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
+                    If myObj.IsSpecAttached AndAlso myObj.SpecVarType = SpecVarType.Source AndAlso SpecExists(fbag, myObj.AttachedSpecId) Then fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                 End If
             Case ObjectType.EnergyStream
                 Dim myObj = fbag.SimulationObjects(objArgs.Name)
@@ -161,13 +216,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                             myUnitOp.Calculated = True
 
                             If myUnitOp.IsSpecAttached = True Then
-                                If myUnitOp.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                                If myUnitOp.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myUnitOp.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                                     fbag.SimulationObjects(myUnitOp.AttachedSpecId).Solve()
                                 End If
                             End If
 
                             If myUnitOp.IsInfoCarrierAttached = True Then
-                                If myUnitOp.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                                If myUnitOp.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, myUnitOp.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                                     fbag.SimulationObjects(myUnitOp.AttachedInfoCarrierId).Solve()
                                 End If
                             End If
@@ -188,7 +243,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                             myUnitOp.GraphicObject.Calculated = True
 
                             If myUnitOp.IsSpecAttached = True Then
-                                If myUnitOp.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                                If myUnitOp.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myUnitOp.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                                     fbag.SimulationObjects(myUnitOp.AttachedSpecId).Solve()
                                 End If
                             End If
@@ -201,7 +256,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                             myUnitOp.Calculated = False
                         End If
                     End If
-                    If myObj.IsSpecAttached And myObj.SpecVarType = SpecVarType.Source Then fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
+                    If myObj.IsSpecAttached AndAlso myObj.SpecVarType = SpecVarType.Source AndAlso SpecExists(fbag, myObj.AttachedSpecId) Then fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                 End If
             Case Else
                 If objArgs.Sender = "Adjust" Or objArgs.Sender = "FlowsheetSolver" Then
@@ -210,13 +265,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     myObj.Calculated = False
 
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
 
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
@@ -236,7 +291,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     myObj.GraphicObject.Calculated = True
 
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
@@ -246,7 +301,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     Dim gobj As IGraphicObject = myObj.GraphicObject
 
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
@@ -271,13 +326,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     End If
 
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
 
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
@@ -316,12 +371,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                 Case ObjectType.EnergyStream
                     Dim myObj = fbag.SimulationObjects(objArgs.Name)
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
@@ -333,12 +388,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     Next
                     myObj.Solve()
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
@@ -353,12 +408,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     Dim myObj As ISimulationObject = fbag.SimulationObjects(objArgs.Name)
                     RaiseEvent UnitOpCalculationStarted(fobj, New System.EventArgs(), objArgs)
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
@@ -385,18 +440,18 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     Next
                     myObj.Calculated = True
                     If myObj.IsSpecAttached = True Then
-                        If myObj.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, myObj.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedSpecId).Solve()
                         End If
                     End If
                     If myObj.IsInfoCarrierAttached = True Then
-                        If myObj.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+                        If myObj.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, myObj.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                             fbag.SimulationObjects(myObj.AttachedInfoCarrierId).Solve()
                         End If
                     End If
                     For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is ISpec)
                         Dim spec = DirectCast(obj, ISpec)
-                        If spec.SpecCalculationMode = SpecCalcMode2.BeforeObject And spec.ReferenceObjectID = objArgs.Name Then
+                        If spec.SpecCalculationMode = SpecCalcMode2.AfterObject And spec.ReferenceObjectID = objArgs.Name Then
                             obj.Solve()
                         End If
                     Next
@@ -428,12 +483,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
         ms.GraphicObject.Calculated = False
 
         If ms.IsSpecAttached = True Then
-            If ms.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+            If ms.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, ms.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                 fbag.SimulationObjects(ms.AttachedSpecId).Solve()
             End If
         End If
         If ms.IsInfoCarrierAttached = True Then
-            If ms.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+            If ms.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, ms.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                 fbag.SimulationObjects(ms.AttachedInfoCarrierId).Solve()
             End If
         End If
@@ -452,12 +507,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
         End If
 
         If ms.IsSpecAttached = True Then
-            If ms.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+            If ms.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, ms.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                 fbag.SimulationObjects(ms.AttachedSpecId).Solve()
             End If
         End If
         If ms.IsInfoCarrierAttached = True Then
-            If ms.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+            If ms.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, ms.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                 fbag.SimulationObjects(ms.AttachedInfoCarrierId).Solve()
             End If
         End If
@@ -511,12 +566,12 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
         fgui.ProcessScripts(Scripts.EventType.ObjectCalculationStarted, Scripts.ObjectType.FlowsheetObject, ms.Name)
 
         If ms.IsSpecAttached = True Then
-            If ms.SpecVarType = SpecVarType.Target And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeTargetObject Then
+            If ms.SpecVarType = SpecVarType.Target AndAlso SpecRunsAt(fbag, ms.AttachedSpecId, SpecCalcMode2.BeforeTargetObject) Then
                 fbag.SimulationObjects(ms.AttachedSpecId).Solve()
             End If
         End If
         If ms.IsInfoCarrierAttached = True Then
-            If ms.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeTargetObject Then
+            If ms.InfoCarrierVarType = SpecVarType.Target AndAlso CarrierRunsAt(fbag, ms.AttachedInfoCarrierId, SpecCalcMode2.BeforeTargetObject) Then
                 fbag.SimulationObjects(ms.AttachedInfoCarrierId).Solve()
             End If
         End If
@@ -539,19 +594,19 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
         RaiseEvent MaterialStreamCalculationFinished(fobj, New System.EventArgs(), ms)
 
         If ms.IsSpecAttached = True Then
-            If ms.SpecVarType = SpecVarType.Source And fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterSourceObject Then
+            If ms.SpecVarType = SpecVarType.Source AndAlso SpecRunsAt(fbag, ms.AttachedSpecId, SpecCalcMode2.AfterSourceObject) Then
                 fbag.SimulationObjects(ms.AttachedSpecId).Solve()
             End If
         End If
         If ms.IsInfoCarrierAttached = True Then
-            If ms.InfoCarrierVarType = SpecVarType.Target And fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterSourceObject Then
+            If ms.InfoCarrierVarType = SpecVarType.Source AndAlso CarrierRunsAt(fbag, ms.AttachedInfoCarrierId, SpecCalcMode2.AfterSourceObject) Then
                 fbag.SimulationObjects(ms.AttachedInfoCarrierId).Solve()
             End If
         End If
 
         For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is ISpec)
             Dim spec = DirectCast(obj, ISpec)
-            If spec.SpecCalculationMode = SpecCalcMode2.BeforeObject And spec.ReferenceObjectID = ms.Name Then
+            If spec.SpecCalculationMode = SpecCalcMode2.AfterObject And spec.ReferenceObjectID = ms.Name Then
                 obj.Solve()
             End If
         Next
@@ -1418,12 +1473,14 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
             IObj?.Paragraphs.Add("The solver will now check for Recycles connected to 'tear' Material Streams...")
 
             Dim recycles As New List(Of String)
+            Dim energyrecycles As New List(Of String)
             Dim totalv As Integer = 0
             Dim totalr As Integer = 0
 
             For Each r In objstack
                 If fbag.SimulationObjects.ContainsKey(r) Then
                     Dim robj = fbag.SimulationObjects(r)
+                    If TypeOf robj Is IEnergyRecycle Then energyrecycles.Add(robj.Name)
                     If robj.GraphicObject.ObjectType = ObjectType.OT_Recycle Then
                         recycles.Add(robj.Name)
                         Dim rec As IRecycle = fbag.SimulationObjects(robj.Name)
@@ -1482,23 +1539,13 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
 
                                                       'calc specs
 
-                                                      If fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.BeforeFlowsheet Then
-                                                          For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is ISpec)
-                                                              Dim spec = DirectCast(obj, ISpec)
-                                                              If spec.SpecCalculationMode = SpecCalcMode2.GlobalSetting Or spec.SpecCalculationMode = SpecCalcMode2.BeforeFlowsheet Then
-                                                                  obj.Solve()
-                                                              End If
-                                                          Next
-                                                      End If
+                                                      For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is ISpec)
+                                                          If EffectiveSpecMode(fbag, DirectCast(obj, ISpec)) = SpecCalcMode2.BeforeFlowsheet Then obj.Solve()
+                                                      Next
 
-                                                      If fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeFlowsheet Then
-                                                          For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is IInformationCarrier)
-                                                              Dim carrier = DirectCast(obj, IInformationCarrier)
-                                                              If carrier.CalculationMode = SpecCalcMode2.GlobalSetting Or carrier.CalculationMode = SpecCalcMode2.BeforeFlowsheet Then
-                                                                  obj.Solve()
-                                                              End If
-                                                          Next
-                                                      End If
+                                                      For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is IInformationCarrier)
+                                                          If EffectiveCarrierMode(fbag, DirectCast(obj, IInformationCarrier)) = SpecCalcMode2.BeforeFlowsheet Then obj.Solve()
+                                                      Next
 
                                                       'add the objects to the calculation queue.
 
@@ -1548,23 +1595,20 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
 
                                                       'calc specs
 
-                                                      If fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterFlowsheet Then
+                                                      If fbag.FlowsheetOptions.SpecCalculationMode = SpecCalcMode.AfterFlowsheet Or fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.AfterFlowsheet OrElse
+                                                          fbag.SimulationObjects.Values.Any(Function(o) (TypeOf o Is ISpec AndAlso DirectCast(o, ISpec).SpecCalculationMode = SpecCalcMode2.AfterFlowsheet) OrElse
+                                                              (TypeOf o Is IInformationCarrier AndAlso DirectCast(o, IInformationCarrier).CalculationMode = SpecCalcMode2.AfterFlowsheet)) Then
 
                                                           For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is ISpec)
                                                               Dim spec = DirectCast(obj, ISpec)
-                                                              If spec.SpecCalculationMode = SpecCalcMode2.GlobalSetting Or spec.SpecCalculationMode = SpecCalcMode2.AfterFlowsheet Then
+                                                              If EffectiveSpecMode(fbag, spec) = SpecCalcMode2.AfterFlowsheet Then
                                                                   obj.Solve()
                                                               End If
                                                           Next
 
-                                                          If fbag.FlowsheetOptions.InformationCarrierCalculationMode = SpecCalcMode.BeforeFlowsheet Then
-                                                              For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is IInformationCarrier)
-                                                                  Dim carrier = DirectCast(obj, IInformationCarrier)
-                                                                  If carrier.CalculationMode = SpecCalcMode2.GlobalSetting Or carrier.CalculationMode = SpecCalcMode2.AfterFlowsheet Then
-                                                                      obj.Solve()
-                                                                  End If
-                                                              Next
-                                                          End If
+                                                          For Each obj In fbag.SimulationObjects.Values.Where(Function(o) TypeOf o Is IInformationCarrier)
+                                                              If EffectiveCarrierMode(fbag, DirectCast(obj, IInformationCarrier)) = SpecCalcMode2.AfterFlowsheet Then obj.Solve()
+                                                          Next
 
                                                           'calc again
 
@@ -1608,6 +1652,14 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                                                           If Not converged Then Exit For
                                                       Next
 
+                                                      'an energy recycle closes its loop the same way
+                                                      If converged Then
+                                                          For Each r As String In energyrecycles
+                                                              converged = DirectCast(fbag.SimulationObjects(r), IEnergyRecycle).Converged
+                                                              If Not converged Then Exit For
+                                                          Next
+                                                      End If
+
                                                       'in dynamic mode, recycles are redundant
 
                                                       If fbag.DynamicMode Then converged = True
@@ -1630,7 +1682,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                                                           Next
 
                                                           avgerr *= 100
-                                                          avgerr /= rcount
+                                                          If rcount > 0 Then avgerr /= rcount
 
                                                           fgui.ClearLog()
 
@@ -1945,7 +1997,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                         .ObjectType = ObjectType.MaterialStream
                         .Tag = baseobj.GraphicObject.Tag
                     End With
-                    If baseobj.IsSpecAttached = True And baseobj.SpecVarType = SpecVarType.Source Then
+                    If baseobj.IsSpecAttached = True AndAlso baseobj.SpecVarType = SpecVarType.Source AndAlso SpecExists(fbag, baseobj.AttachedSpecId) Then
                         fbag.SimulationObjects(baseobj.AttachedSpecId).Solve()
                     End If
                     fqueue.CalculationQueue.Enqueue(objargs)
@@ -1960,7 +2012,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                             .ObjectType = ObjectType.MaterialStream
                             .Tag = baseobj.GraphicObject.Tag
                         End With
-                        If baseobj.IsSpecAttached = True And baseobj.SpecVarType = SpecVarType.Source Then
+                        If baseobj.IsSpecAttached = True AndAlso baseobj.SpecVarType = SpecVarType.Source AndAlso SpecExists(fbag, baseobj.AttachedSpecId) Then
                             fbag.SimulationObjects(baseobj.AttachedSpecId).Solve()
                         End If
                         fqueue.CalculationQueue.Enqueue(objargs)
