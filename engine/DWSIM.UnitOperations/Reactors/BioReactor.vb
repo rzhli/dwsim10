@@ -87,6 +87,7 @@ Namespace Reactors
 
         Implements IExternalUnitOperation
 
+        ''' <summary>Gets a value that marks this reactor as a bioprocess unit. The object palettes read this flag by reflection to list it in the Biochemical group.</summary>
         Public ReadOnly Property IsBio As Boolean = True
 
         Public Overrides Property ObjectClass As SimulationObjectClass = SimulationObjectClass.Reactors
@@ -258,6 +259,7 @@ Namespace Reactors
         ''' <summary>Outlet broth temperature (K) computed from the selected thermal mode.</summary>
         Public Property Result_OutletTemperature_K As Double = 0.0
 
+        ''' <summary>The classic (WinForms) editor window open for this reactor, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>
@@ -266,6 +268,7 @@ Namespace Reactors
         <Xml.Serialization.XmlIgnore> <Newtonsoft.Json.JsonIgnore>
         Public Property LastTrajectory As BioReactorTrajectoryResult
 
+        ''' <summary>Gets a value indicating whether this reactor supports dynamic simulation mode. Always <c>False</c>.</summary>
         Public Overrides ReadOnly Property SupportsDynamicMode As Boolean = False
 
         Public Overrides ReadOnly Property EquipmentTypes As List(Of String)
@@ -283,22 +286,30 @@ Namespace Reactors
             Dimensions(0).Value = Volume
         End Sub
 
+        ''' <summary>Initializes a new default instance of the <see cref="Reactor_BioReactor"/> class.</summary>
         Public Sub New()
             MyBase.New()
         End Sub
 
+        ''' <summary>Initializes a new instance of the <see cref="Reactor_BioReactor"/> class with a name and description.</summary>
+        ''' <param name="name">The name of this reactor.</param>
+        ''' <param name="description">A brief description of this reactor.</param>
         Public Sub New(ByVal name As String, ByVal description As String)
             MyBase.New()
             Me.ComponentName = name
             Me.ComponentDescription = description
         End Sub
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through XML serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_BioReactor"/> instance with the same property values.</returns>
         Public Overrides Function CloneXML() As Object
             Dim obj As ICustomXMLSerialization = New Reactor_BioReactor()
             obj.LoadData(Me.SaveData)
             Return obj
         End Function
 
+        ''' <summary>Creates a deep copy of this object by round-tripping through JSON serialization.</summary>
+        ''' <returns>A new <see cref="Reactor_BioReactor"/> instance with the same property values.</returns>
         Public Overrides Function CloneJSON() As Object
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Reactor_BioReactor)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
@@ -1721,24 +1732,36 @@ Namespace Reactors
 
         End Sub
 
+        ''' <summary>Returns the raw bytes of the icon image for this reactor.</summary>
+        ''' <returns>A byte array containing the PNG image data for the icon.</returns>
         Public Overrides Function GetIconBitmapBytes() As Byte()
             Return UnitOperations.BioOpsDrawHelper.RenderIconToPngBytes(64, 64, AddressOf DrawIcon)
         End Function
 
+        ''' <summary>Returns the description string for this reactor type.</summary>
+        ''' <returns>A description string identifying this reactor type.</returns>
         Public Overrides Function GetDisplayDescription() As String
             Return "Microbial bioreactor with Monod-family kinetics"
         End Function
 
+        ''' <summary>Returns the display name for this reactor type.</summary>
+        ''' <returns>The name string for this reactor type.</returns>
         Public Overrides Function GetDisplayName() As String
             Return "BioReactor"
         End Function
 
+        ''' <summary>Gets a value indicating whether this reactor is compatible with mobile interfaces. Always <c>False</c>.</summary>
         Public Overrides ReadOnly Property MobileCompatible As Boolean
             Get
                 Return False
             End Get
         End Property
 
+        ''' <summary>Generates a plain-text results report for this reactor.</summary>
+        ''' <param name="su">The unit system used for formatting output values (not used; values are reported in fixed units).</param>
+        ''' <param name="ci">The culture info used for number formatting.</param>
+        ''' <param name="numberformat">A .NET numeric format string (e.g. "G6") applied to output values.</param>
+        ''' <returns>A formatted multi-line string report.</returns>
         Public Overrides Function GetReport(su As IUnitsOfMeasure, ci As Globalization.CultureInfo, numberformat As String) As String
 
             Dim str As New Text.StringBuilder
@@ -1849,11 +1872,66 @@ Namespace Reactors
             "Outlet Temperature"
         }
 
+        ''' <summary>
+        ''' The inputs the active kinetic model and operating mode do not read. The writable list
+        ''' leaves them out, since Calculate would ignore any value given to them.
+        ''' </summary>
+        Private Function UnusedInputs() As HashSet(Of String)
+
+            Dim unused As New HashSet(Of String)
+
+            'the batch duration is the integration time of the batch and fed-batch modes only
+            If OperatingMode = BioReactorMode.Continuous Then unused.Add("Batch Duration")
+
+            Dim growth As String() = {"Heat per mol O2", "Aerobic", "Biomass Compound", "Oxygen Compound",
+                                      "CO2 Compound", "Nitrogen Source Compound", "Sulfur Source Compound",
+                                      "Max Specific Growth Rate", "Saturation Constant", "Inhibition Constant",
+                                      "Moser Exponent", "Biomass Yield on Substrate", "Product Yield on Substrate",
+                                      "Maintenance Coefficient", "Death Rate Constant",
+                                      "Volumetric Oxygen Transfer Coefficient", "Dissolved Oxygen Saturation",
+                                      "User Kinetics Script Name"}
+            Dim hydrolysis As String() = {"Hemicellulose Compound", "Xylose Compound", "Enzyme Compound",
+                                          "EH Cellulose Rate Constant", "EH Hemicellulose Rate Constant",
+                                          "EH Glucose Inhibition Constant", "EH Xylose Inhibition Constant",
+                                          "EH Enzyme Loading", "EH Heat Per Gram Product"}
+
+            If KineticModel = BioKineticModel.EnzymaticHydrolysis Then
+                'no microbial growth: the hydrolysis path has its own roles and rate constants
+                unused.UnionWith(growth)
+                Return unused
+            End If
+
+            unused.UnionWith(hydrolysis)
+
+            'the metabolic heat follows the oxygen uptake, and the aeration inputs only matter
+            'for an aerobic culture
+            If Not IsAerobic Then
+                unused.UnionWith({"Heat per mol O2", "Oxygen Compound",
+                                  "Volumetric Oxygen Transfer Coefficient", "Dissolved Oxygen Saturation"})
+            End If
+
+            'the growth rate constants each model reads; a user script is handed mu_max, Ks and Ki
+            Select Case KineticModel
+                Case BioKineticModel.Monod, BioKineticModel.Contois
+                    unused.UnionWith({"Inhibition Constant", "Moser Exponent", "User Kinetics Script Name"})
+                Case BioKineticModel.Moser
+                    unused.UnionWith({"Inhibition Constant", "User Kinetics Script Name"})
+                Case BioKineticModel.Haldane
+                    unused.UnionWith({"Moser Exponent", "User Kinetics Script Name"})
+                Case BioKineticModel.UserScript
+                    unused.Add("Moser Exponent")
+            End Select
+
+            Return unused
+
+        End Function
+
         Public Overrides Function GetProperties(proptype As PropertyType) As String()
             Dim baseprops = MyBase.GetProperties(proptype)
             Select Case proptype
                 Case PropertyType.WR
-                    Return _inputProps
+                    Dim unused = UnusedInputs()
+                    Return _inputProps.Where(Function(p) Not unused.Contains(p)).ToArray()
                 Case PropertyType.RO
                     Return _outputProps
                 Case Else

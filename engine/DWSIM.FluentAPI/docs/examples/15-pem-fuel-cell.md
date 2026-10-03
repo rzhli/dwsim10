@@ -1,36 +1,51 @@
-# 15 — PEM Fuel Cell
+# 15 - PEM Fuel Cell
 
 Hydrogen + air → electrical power + water vapour.
+
+The fuel cell runs the Amphlett static model of the OPEM library, ported to
+.NET, so it needs no Python distribution. The builder has no typed setters
+yet; the model inputs live in `InputParameters`, under the OPEM names: `N`
+is the number of cells, `A` the active area in cm² and `i-stop` the current
+in A at which the stack runs. The stack temperature is the mean of the two
+inlet temperatures. The electric power leaves through outlet port 1.
 
 === "Python"
 
     ```python
+    from System import Action
     from DWSIM.Automation.FluentAPI import Flowsheet, PropertyPackages, Q
+    from DWSIM.Automation.FluentAPI.Builders import CompositionBuilder
 
     fs = (Flowsheet.Create("PyPEMFC")
           .WithCompounds("Hydrogen", "Oxygen", "Nitrogen", "Water")
           .WithPropertyPackage(PropertyPackages.PengRobinson))
 
-    h2  = fs.AddMaterialStream("H2-feed").At(Q.Kelvin(343), Q.Bar(2)) \
-            .WithMassFlow(Q.KgPerHour(2)).WithComposition(lambda c: c.Mole("Hydrogen", 1.0))
-    air = fs.AddMaterialStream("air").At(Q.Kelvin(343), Q.Bar(2)) \
-            .WithMassFlow(Q.KgPerHour(20)).WithComposition(lambda c: c
-                .Mole("Oxygen",   0.21).Mole("Nitrogen", 0.79))
+    h2  = (fs.AddMaterialStream("H2-feed").At(Q.Kelvin(343), Q.Bar(2))
+             .WithMassFlow(Q.KgPerHour(2))
+             .WithComposition(Action[CompositionBuilder](lambda c: c.Mole("Hydrogen", 1.0))))
+    air = (fs.AddMaterialStream("air").At(Q.Kelvin(343), Q.Bar(2))
+             .WithMassFlow(Q.KgPerHour(20))
+             .WithComposition(Action[CompositionBuilder](lambda c: c
+                 .Mole("Oxygen", 0.21).Mole("Nitrogen", 0.79))))
     exhaust = fs.AddMaterialStream("exhaust")
     power   = fs.AddEnergyStream("DC-power")
 
-    fc = (fs.AddPEMFuelCell("FC-1")
-            .WithStackArea(0.5)
-            .WithNumberOfCells(120)
-            .WithOperatingTemperature(Q.Kelvin(343))
-            .WithStoichiometricRatioAir(2.0)
-            .ConnectFeed(h2,  0)
-            .ConnectFeed(air, 1)
-            .ConnectProduct(exhaust)
-            .ConnectEnergyProduct(power))
+    fc = fs.AddPEMFuelCell("FC-1")
+    fc.Object.CreateConnectors()    # the canvas creates the ports on first draw
+    (fc.ConnectFeed(h2,  0)
+       .ConnectFeed(air, 1)
+       .ConnectProduct(exhaust, 0)
+       .ConnectEnergyProduct(power, 1))
+    p = fc.Object.InputParameters
+    p["N"].Value      = 120     # cells in the stack
+    p["A"].Value      = 50.6    # active area, cm2
+    p["i-stop"].Value = 40.0    # stack current, A
 
     fs.AutoLayout(); fs.Solve()
-    print(f"DC power = {power.EnergyFlowKW:.2f} kW")
+    r = fc.Object.OutputParameters
+    print(f"Stack voltage = {r['V'].Value:.2f} V")
+    print(f"DC power      = {power.EnergyFlowKW:.2f} kW")
+    print(f"Heat released = {r['Ph'].Value / 1000:.2f} kW")
     ```
 
 === "C#"
@@ -53,19 +68,23 @@ Hydrogen + air → electrical power + water vapour.
     var exhaust = fs.AddMaterialStream("exhaust");
     var power   = fs.AddEnergyStream("DC-power");
 
-    fs.AddPEMFuelCell("FC-1")
-      .WithStackArea(0.5)
-      .WithNumberOfCells(120)
-      .WithOperatingTemperature(343.Kelvin())
-      .WithStoichiometricRatioAir(2.0)
-      .ConnectFeed(h2,  0)
+    var fc = fs.AddPEMFuelCell("FC-1");
+    fc.Object.CreateConnectors();    // the canvas creates the ports on first draw
+    fc.ConnectFeed(h2,  0)
       .ConnectFeed(air, 1)
-      .ConnectProduct(exhaust)
-      .ConnectEnergyProduct(power);
+      .ConnectProduct(exhaust, 0)
+      .ConnectEnergyProduct(power, 1);
+    var p = fc.Object.InputParameters;
+    p["N"].Value      = 120;     // cells in the stack
+    p["A"].Value      = 50.6;    // active area, cm2
+    p["i-stop"].Value = 40.0;    // stack current, A
 
     fs.AutoLayout();
     fs.Solve();
-    System.Console.WriteLine($"DC power = {power.EnergyFlowKW:F2} kW");
+    var r = fc.Object.OutputParameters;
+    System.Console.WriteLine($"Stack voltage = {r["V"].Value:F2} V");
+    System.Console.WriteLine($"DC power      = {power.EnergyFlowKW:F2} kW");
+    System.Console.WriteLine($"Heat released = {r["Ph"].Value / 1000:F2} kW");
     ```
 
 === "VB.NET"
@@ -88,16 +107,32 @@ Hydrogen + air → electrical power + water vapour.
     Dim exhaust = fs.AddMaterialStream("exhaust")
     Dim power   = fs.AddEnergyStream("DC-power")
 
-    fs.AddPEMFuelCell("FC-1") _
-      .WithStackArea(0.5) _
-      .WithNumberOfCells(120) _
-      .WithOperatingTemperature(343.0.Kelvin()) _
-      .WithStoichiometricRatioAir(2.0) _
-      .ConnectFeed(h2,  0) _
+    Dim fc = fs.AddPEMFuelCell("FC-1")
+    fc.Object.CreateConnectors()    ' the canvas creates the ports on first draw
+    fc.ConnectFeed(h2,  0) _
       .ConnectFeed(air, 1) _
-      .ConnectProduct(exhaust) _
-      .ConnectEnergyProduct(power)
+      .ConnectProduct(exhaust, 0) _
+      .ConnectEnergyProduct(power, 1)
+    Dim p = fc.Object.InputParameters
+    p("N").Value = 120          ' cells in the stack
+    p("A").Value = 50.6         ' active area, cm2
+    p("i-stop").Value = 40.0    ' stack current, A
 
     fs.AutoLayout()
     fs.Solve()
+    Dim r = fc.Object.OutputParameters
+    Console.WriteLine($"Stack voltage = {r("V").Value:F2} V")
+    Console.WriteLine($"DC power      = {power.EnergyFlowKW:F2} kW")
+    Console.WriteLine($"Heat released = {r("Ph").Value / 1000:F2} kW")
     ```
+
+Running the example prints:
+
+```text
+Stack voltage = 63.20 V
+DC power      = 2.52 kW
+Heat released = 3.37 kW
+```
+
+At 40 A each of the 120 cells gives 0.53 V, so the stack delivers 2.52 kW of
+electric power and releases 3.37 kW of heat into the exhaust.

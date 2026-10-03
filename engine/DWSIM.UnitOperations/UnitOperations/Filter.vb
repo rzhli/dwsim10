@@ -44,6 +44,7 @@ Namespace UnitOperations
         ''' <summary>Gets or sets the simulation object class for this unit operation.</summary>
         Public Overrides Property ObjectClass As SimulationObjectClass = SimulationObjectClass.Solids
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         Protected m_ei As Double
@@ -128,10 +129,16 @@ Namespace UnitOperations
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Filter)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
 
+        ''' <summary>Gets a value indicating whether this unit operation supports dynamic simulation mode.</summary>
         Public Overrides ReadOnly Property SupportsDynamicMode As Boolean = True
 
+        ''' <summary>Gets a value indicating whether this unit operation exposes properties for dynamic mode.</summary>
         Public Overrides ReadOnly Property HasPropertiesForDynamicMode As Boolean = True
 
+        ''' <summary>
+        ''' Registers the dynamic properties for dynamic simulation mode: cake mass, backwash interval, duration,
+        ''' elapsed time and state, and the solids separation efficiency (fraction, 0-1).
+        ''' </summary>
         Public Overrides Sub CreateDynamicProperties()
 
             AddDynamicProperty("Cake Mass", "Current accumulated cake mass (kg).", 0.0, UnitOfMeasure.mass, 1.0.GetType())
@@ -143,6 +150,10 @@ Namespace UnitOperations
 
         End Sub
 
+        ''' <summary>
+        ''' Runs one dynamic-mode integration step: accumulates captured solids in the cake, handles the backwash cycle,
+        ''' and sets the filtrate flow from the cake and medium resistances and the cake outlet flow.
+        ''' </summary>
         Public Overrides Sub RunDynamicModel()
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -480,7 +491,7 @@ Namespace UnitOperations
                         value = Me.SubmergedAreaFraction
                     Case 7
                         'PROP_FT_7	Total Pressure Drop	
-                        value = SystemsOfUnits.Converter.ConvertFromSI(su.pressure, Me.PressureDrop)
+                        value = SystemsOfUnits.Converter.ConvertFromSI(su.deltaP, Me.PressureDrop)
                 End Select
 
                 Return value
@@ -495,9 +506,23 @@ Namespace UnitOperations
             Dim proplist As New ArrayList
             Dim basecol = MyBase.GetProperties(proptype)
             If basecol.Length > 0 Then proplist.AddRange(basecol)
-            For i = 0 To 7
-                proplist.Add("PROP_FT_" + CStr(i))
-            Next
+            If proptype = PropertyType.WR Then
+                'only the inputs the active calculation mode reads: Design gives the area from the
+                'pressure drop, Simulation the pressure drop from the area. The energy balance is a result.
+                Dim writable As New List(Of Integer) From {2, 3, 4, 5, 6}
+                If CalcMode = CalculationMode.Design Then
+                    writable.Add(7)
+                Else
+                    writable.Insert(0, 1)
+                End If
+                For Each i In writable
+                    proplist.Add("PROP_FT_" + CStr(i))
+                Next
+            Else
+                For i = 0 To 7
+                    proplist.Add("PROP_FT_" + CStr(i))
+                Next
+            End If
             Return proplist.ToArray(GetType(System.String))
             proplist = Nothing
         End Function

@@ -44,13 +44,14 @@ Namespace UnitOperations
         ''' <summary>Gets a value indicating whether this unit operation exposes dedicated properties for dynamic mode.</summary>
         Public Overrides ReadOnly Property HasPropertiesForDynamicMode As Boolean = False
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>Defines the two-phase flow model used when both liquid and vapour phases are present.</summary>
         Public Enum CalcMethod
             ''' <summary>Treats the two-phase mixture as a homogeneous fluid with averaged properties.</summary>
             Homogeneous = 0
-            ''' <summary>Accounts for slip between the liquid and vapour phases using phase-specific velocities.</summary>
+            ''' <summary>Two-phase flow with slip between the phases: Chisholm (1967) two-phase multiplier on the liquid pressure drop.</summary>
             Slip = 1
         End Enum
 
@@ -60,7 +61,7 @@ Namespace UnitOperations
             CornerTaps = 0
             ''' <summary>Pressure taps located 1 inch (25.4 mm) from each face of the orifice plate.</summary>
             FlangeTaps = 1
-            ''' <summary>Pressure taps located at D and D/2 from the orifice plate (radius or D&frac12;D taps).</summary>
+            ''' <summary>Pressure taps located at D and D/2 from the orifice plate (radius or D and D/2 taps).</summary>
             RadiusTaps = 2
         End Enum
 
@@ -151,9 +152,13 @@ Namespace UnitOperations
             End Set
         End Property
 
-        ''' <summary>Gets or sets the diameter ratio β = d/D (orifice diameter / pipe internal diameter).</summary>
+        ''' <summary>
+        ''' Gets the diameter ratio β = d/D (orifice diameter / pipe internal diameter). It follows the two
+        ''' diameters when both are set; the stored value is used only when they are not.
+        ''' </summary>
         Public Property Beta() As Double
             Get
+                If _orificediameter > 0.0 AndAlso _internaldiameter > 0.0 Then Return _orificediameter / _internaldiameter
                 Return _beta
             End Get
             Set(ByVal value As Double)
@@ -254,7 +259,8 @@ Namespace UnitOperations
 
             Dim beta, A1, A2, s2_s1, L1, L2 As Double
 
-            beta = _beta
+            beta = Me.Beta
+            _beta = beta
             A1 = 3.1416 * _internaldiameter ^ 2 / 4
             A2 = 3.1416 * _orificediameter ^ 2 / 4
 
@@ -304,7 +310,17 @@ Namespace UnitOperations
             Cd = c1 + c2 + c3
 
             'DP = (Wi / (_corrfactor * Cd * A2)) ^ 2 * (1 - beta ^ 4) / (2 * rhom)
-            DP = rhom / 2 * (Wi / rhom / (_corrfactor * Cd / (1 - beta ^ 4) ^ 0.5 * A2)) ^ 2
+            If _calcmethod = CalcMethod.Slip AndAlso wv > 0.0 AndAlso wl > 0.0 AndAlso rhov > 0.0 AndAlso rhol > 0.0 Then
+                ' Chisholm (1967): the liquid flowing alone times the two-phase multiplier
+                ' 1 + C/X + 1/X^2, C = (1/K)(rho_l/rho_g)^0.5 + K(rho_g/rho_l)^0.5 with the slip ratio
+                ' K = (rho_l/rho_g)^0.25 (K = 1 would be the homogeneous model)
+                Dim DP_L = rhol / 2 * (Wi * wl / rhol / (_corrfactor * Cd / (1 - beta ^ 4) ^ 0.5 * A2)) ^ 2
+                Dim X = (wl / wv) * (rhov / rhol) ^ 0.5
+                Dim Cch = (rhol / rhov) ^ 0.25 + (rhov / rhol) ^ 0.25
+                DP = DP_L * (1 + Cch / X + 1 / X ^ 2)
+            Else
+                DP = rhom / 2 * (Wi / rhom / (_corrfactor * Cd / (1 - beta ^ 4) ^ 0.5 * A2)) ^ 2
+            End If
             DP = DP + (rhom * 9.8 * (s2_s1))
 
             _orificeDP = DP

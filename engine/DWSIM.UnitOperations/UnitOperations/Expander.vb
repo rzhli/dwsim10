@@ -90,6 +90,7 @@ Namespace UnitOperations
         End Sub
 
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <XML.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>
@@ -462,6 +463,11 @@ Namespace UnitOperations
 
         End Function
 
+        ''' <summary>
+        ''' Creates an empty set of performance curves for one rotational speed: head ("HEAD"), efficiency ("EFF")
+        ''' and power ("POWER").
+        ''' </summary>
+        ''' <returns>A dictionary of new, empty curves keyed by "HEAD", "EFF" and "POWER".</returns>
         Public Function CreateCurves() As Dictionary(Of String, PumpOps.Curve)
 
             Dim dict As New Dictionary(Of String, PumpOps.Curve)
@@ -511,6 +517,10 @@ Namespace UnitOperations
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Expander)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
 
+        ''' <summary>
+        ''' Registers the dynamic properties for dynamic simulation mode: flow conductance, casing volume, minimum pressure,
+        ''' holdup initialization and reset options, rotor inertia, current and target speeds (RPM) and generator torque.
+        ''' </summary>
         Public Overrides Sub CreateDynamicProperties()
 
             AddDynamicProperty("Flow Conductance", "Flow conductance (inverse of resistance).", 1, UnitOfMeasure.conductance, 1.0.GetType())
@@ -527,6 +537,12 @@ Namespace UnitOperations
 
         Private prevM_dyn, currentM_dyn As Double
 
+        ''' <summary>
+        ''' Runs one dynamic-mode integration step. The rotor speed moves towards the target speed at a rate set by the
+        ''' generator torque and inertia, the casing holdup is integrated and its pressure updated, and the outlet takes
+        ''' the holdup pressure minus the pressure drop (from the curve map in Curves mode, otherwise from the flow
+        ''' conductance), limited below by the minimum pressure.
+        ''' </summary>
         Public Overrides Sub RunDynamicModel()
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -1454,15 +1470,35 @@ Namespace UnitOperations
                     proplist.Add("RotationSpeed")
                     proplist.Add("PressureRatio")
                 Case PropertyType.WR
-                    For i = 0 To 1
-                        proplist.Add("PROP_TU_" + CStr(i))
-                    Next
-                    proplist.Add("PROP_TU_3")
-                    proplist.Add("PROP_TU_4")
-                    proplist.Add("AdiabaticHead")
-                    proplist.Add("PolytropicHead")
-                    proplist.Add("RotationSpeed")
-                    proplist.Add("PressureRatio")
+                    'only the inputs the active calculation mode reads; Calculate overwrites the others.
+                    'the efficiency of the selected process path is read in every mode (the adiabatic
+                    'one is recalculated from the polytropic one on the polytropic path), except in
+                    'Curves mode when an efficiency curve supplies it.
+                    Dim polytropic As Boolean = (ProcessPath = ProcessPathType.Polytropic)
+                    Dim efficiency As String = If(polytropic, "PolytropicEfficiency", "PROP_TU_1")
+                    Select Case CalcMode
+                        Case CalculationMode.OutletPressure
+                            proplist.Add(efficiency)
+                            proplist.Add("PROP_TU_4")
+                        Case CalculationMode.Delta_P
+                            proplist.Add("PROP_TU_0")
+                            proplist.Add(efficiency)
+                        Case CalculationMode.PressureRatio
+                            proplist.Add(efficiency)
+                            proplist.Add("PressureRatio")
+                        Case CalculationMode.PowerGenerated
+                            proplist.Add(efficiency)
+                            proplist.Add("PROP_TU_3")
+                        Case CalculationMode.Head
+                            proplist.Add(efficiency)
+                            proplist.Add(If(polytropic, "PolytropicHead", "AdiabaticHead"))
+                        Case CalculationMode.Curves
+                            'the head (or the power) comes from the curves at the rotation speed
+                            Dim effcurve As Boolean = Curves IsNot Nothing AndAlso
+                                Curves.Values.Any(Function(c) c.ContainsKey("EFF") AndAlso c("EFF").Enabled AndAlso c("EFF").x.Count > 0)
+                            If Not effcurve Then proplist.Add(efficiency)
+                            proplist.Add("RotationSpeed")
+                    End Select
                 Case PropertyType.ALL
                     For i = 0 To 4
                         proplist.Add("PROP_TU_" + CStr(i))

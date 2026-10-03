@@ -45,6 +45,7 @@ Namespace UnitOperations
         ''' <summary>Gets a value indicating whether this unit operation exposes properties for dynamic mode.</summary>
         Public Overrides ReadOnly Property HasPropertiesForDynamicMode As Boolean = True
 
+        ''' <summary>The classic (WinForms) editor window open for this unit operation, if any. Not saved with the flowsheet.</summary>
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public f As Object
 
         ''' <summary>Gets the list of equipment sub-types available for this compressor.</summary>
@@ -386,6 +387,11 @@ Namespace UnitOperations
 
         End Function
 
+        ''' <summary>
+        ''' Creates an empty set of performance curves for one rotational speed: head ("HEAD"), efficiency ("EFF")
+        ''' and power ("POWER").
+        ''' </summary>
+        ''' <returns>A dictionary of new, empty curves keyed by "HEAD", "EFF" and "POWER".</returns>
         Public Function CreateCurves() As Dictionary(Of String, PumpOps.Curve)
 
             Dim dict As New Dictionary(Of String, PumpOps.Curve)
@@ -427,6 +433,10 @@ Namespace UnitOperations
             Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Compressor)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
         End Function
 
+        ''' <summary>
+        ''' Registers the dynamic properties for dynamic simulation mode: flow conductance, casing volume and holdup options,
+        ''' minimum pressure, rotor inertia, current, target and rated speeds (RPM), motor torque, and the surge limit and alarm.
+        ''' </summary>
         Public Overrides Sub CreateDynamicProperties()
 
             AddDynamicProperty("Flow Conductance", "Flow conductance (inverse of resistance).", 1, UnitOfMeasure.conductance, 1.0.GetType())
@@ -466,7 +476,8 @@ Namespace UnitOperations
             Dim rho = ims.Phases(0).Properties.density.GetValueOrDefault
 
             Dim head As Double = Double.NaN
-            Dim eff As Double = AdiabaticEfficiency / 100.0
+            ' the efficiency that goes with the head of the selected process path
+            Dim eff As Double = If(ProcessPath = ProcessPathType.Polytropic, PolytropicEfficiency, AdiabaticEfficiency) / 100.0
 
             If CalcMode = CalculationMode.Curves AndAlso rho > 0.0 AndAlso Wi > 0.0 Then
                 Try
@@ -555,6 +566,13 @@ Namespace UnitOperations
 
         End Sub
 
+        ''' <summary>
+        ''' Runs one dynamic-mode integration step. The rotor speed moves towards the target speed at a rate set by the
+        ''' motor torque and inertia. By default the compressor acts as a pressure-flow element and sets the outlet to the
+        ''' inlet pressure plus the pressure rise at the current flow and speed; with "Integrate Casing Holdup" enabled it
+        ''' integrates the casing volume as a capacity. The pressure rise comes from the curve map in Curves mode, or from
+        ''' the flow conductance scaled by the square of the speed ratio. The surge alarm is updated at the end.
+        ''' </summary>
         Public Overrides Sub RunDynamicModel()
 
             Dim integratorID = FlowSheet.DynamicsManager.ScheduleList(FlowSheet.DynamicsManager.CurrentSchedule).CurrentIntegrator
@@ -1567,15 +1585,38 @@ Namespace UnitOperations
                     proplist.Add("RotationSpeed")
                     proplist.Add("PressureRatio")
                 Case PropertyType.WR
-                    For i = 0 To 1
-                        proplist.Add("PROP_CO_" + CStr(i))
-                    Next
-                    proplist.Add("PROP_CO_3")
-                    proplist.Add("PROP_CO_4")
-                    proplist.Add("AdiabaticHead")
-                    proplist.Add("PolytropicHead")
-                    proplist.Add("RotationSpeed")
-                    proplist.Add("PressureRatio")
+                    'only the inputs the active calculation mode reads; Calculate overwrites the others.
+                    'the efficiency of the selected process path is read in every mode (the adiabatic
+                    'one is recalculated from the polytropic one on the polytropic path), except in
+                    'Curves mode when an efficiency curve supplies it.
+                    Dim polytropic As Boolean = (ProcessPath = ProcessPathType.Polytropic)
+                    Dim efficiency As String = If(polytropic, "PolytropicEfficiency", "PROP_CO_1")
+                    Select Case CalcMode
+                        Case CalculationMode.OutletPressure
+                            proplist.Add(efficiency)
+                            proplist.Add("PROP_CO_4")
+                        Case CalculationMode.Delta_P
+                            proplist.Add("PROP_CO_0")
+                            proplist.Add(efficiency)
+                        Case CalculationMode.PressureRatio
+                            proplist.Add(efficiency)
+                            proplist.Add("PressureRatio")
+                        Case CalculationMode.PowerRequired
+                            proplist.Add(efficiency)
+                            proplist.Add("PROP_CO_3")
+                        Case CalculationMode.EnergyStream
+                            'the power comes from the energy stream
+                            proplist.Add(efficiency)
+                        Case CalculationMode.Head
+                            proplist.Add(efficiency)
+                            proplist.Add(If(polytropic, "PolytropicHead", "AdiabaticHead"))
+                        Case CalculationMode.Curves
+                            'the head (or the power) comes from the curves at the rotation speed
+                            Dim effcurve As Boolean = Curves IsNot Nothing AndAlso
+                                Curves.Values.Any(Function(c) c.ContainsKey("EFF") AndAlso c("EFF").Enabled AndAlso c("EFF").x.Count > 0)
+                            If Not effcurve Then proplist.Add(efficiency)
+                            proplist.Add("RotationSpeed")
+                    End Select
                 Case PropertyType.ALL
                     For i = 0 To 4
                         proplist.Add("PROP_CO_" + CStr(i))
