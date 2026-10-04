@@ -115,54 +115,73 @@ namespace DWSIM.UI.Desktop.Editors
                 cname = (isInput ? "In" : "Out") + (isEnergy ? " (Energy)" : "");
             string label = cname;
 
+            IGraphicObject CurrentPartner() => !connector.IsAttached ? null : isInput
+                ? connector.AttachedConnector?.AttachedFrom
+                : connector.AttachedConnector?.AttachedTo;
+
+            void ConnectPartner(IGraphicObject partner)
+            {
+                if (isInput)
+                    fs.ConnectObjects(partner, simobj.GraphicObject, 0,
+                        simobj.GraphicObject.InputConnectors.IndexOf(connector));
+                else
+                    // The dedicated energy connector is outside OutputConnectors; its index is -1.
+                    fs.ConnectObjects(simobj.GraphicObject, partner,
+                        simobj.GraphicObject.OutputConnectors.IndexOf(connector), 0);
+            }
+
+            bool updatingSelection = false;
             panel.CreateAndAddDropDownRow(label, entries, selectedIdx, (dd, e) =>
             {
-                if (dd.SelectedIndex < 0) return;
+                if (!panel.IsArmed || updatingSelection || dd.SelectedIndex < 0) return;
                 var newTag = (string)dd.SelectedItem;
+                var previousPartner = CurrentPartner();
+                if (newTag == previousPartner?.Tag || (newTag == "(disconnect)" && previousPartner == null)) return;
 
-                // 1. Disconnect current attachment first (if any).
-                if (connector.IsAttached && connector.AttachedConnector != null)
+                try
                 {
-                    var partner = isInput
-                        ? connector.AttachedConnector.AttachedFrom
-                        : connector.AttachedConnector.AttachedTo;
-                    if (partner != null)
+                    var partner = newTag == "(disconnect)" ? null : fs.GraphicObjects.Values
+                        .FirstOrDefault(g => g.Tag == newTag && g.ObjectType ==
+                            (isEnergy ? ObjectType.EnergyStream : ObjectType.MaterialStream));
+                    if (newTag != "(disconnect)")
+                    {
+                        if (partner == null) throw new InvalidOperationException("The selected stream is no longer available.");
+                        var ports = isInput ? partner.OutputConnectors : partner.InputConnectors;
+                        if (ports.Count == 0 || ports[0].IsAttached)
+                            throw new InvalidOperationException("The selected stream is already connected.");
+                    }
+
+                    if (previousPartner != null)
                     {
                         if (isInput)
-                            fs.DisconnectObjects(partner, simobj.GraphicObject);
+                            fs.DisconnectObjects(previousPartner, simobj.GraphicObject);
                         else
-                            fs.DisconnectObjects(simobj.GraphicObject, partner);
+                            fs.DisconnectObjects(simobj.GraphicObject, previousPartner);
+                    }
+
+                    if (partner != null) ConnectPartner(partner);
+                }
+                catch (Exception ex)
+                {
+                    fs.ShowMessage("Could not change the connection: " + ex.Message,
+                        IFlowsheet.MessageType.GeneralError);
+                    if (previousPartner != null && !connector.IsAttached)
+                    {
+                        try { ConnectPartner(previousPartner); }
+                        catch (Exception restoreError)
+                        {
+                            fs.ShowMessage("Could not restore the previous connection: " + restoreError.Message,
+                                IFlowsheet.MessageType.GeneralError);
+                        }
                     }
                 }
-
-                if (newTag == "(disconnect)")
+                finally
                 {
+                    updatingSelection = true;
+                    dd.SelectedIndex = Math.Max(0, entries.IndexOf(CurrentPartner()?.Tag ?? "(disconnect)"));
+                    updatingSelection = false;
                     fs.UpdateInterface();
-                    return;
                 }
-
-                // 2. Resolve the new partner graphic object by tag.
-                var partnerObj = fs.GraphicObjects.Values.FirstOrDefault(g => g.Tag == newTag);
-                if (partnerObj == null) return;
-
-                int fromIdx, toIdx;
-                if (isInput)
-                {
-                    // partner is a stream feeding us: stream's output 0 -> our connector index
-                    fromIdx = 0;
-                    toIdx = simobj.GraphicObject.InputConnectors.IndexOf(connector);
-                    fs.ConnectObjects(partnerObj, simobj.GraphicObject, fromIdx, toIdx);
-                }
-                else
-                {
-                    // we're feeding the partner: our connector index -> stream's input 0
-                    fromIdx = simobj.GraphicObject.OutputConnectors.IndexOf(connector);
-                    if (fromIdx < 0 && connector == simobj.GraphicObject.EnergyConnector) fromIdx = 0;
-                    toIdx = 0;
-                    fs.ConnectObjects(simobj.GraphicObject, partnerObj, fromIdx, toIdx);
-                }
-
-                fs.UpdateInterface();
             });
         }
 

@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using Avalonia.Controls;
@@ -40,7 +39,6 @@ namespace DWSIM.UI.Desktop.Editors
             public bool SkipForMixture;
         }
 
-        private readonly ObservableCollection<Row> _rows = new();
         private readonly IUnitsOfMeasure _su;
         private readonly string _nf;
         /// <summary>
@@ -59,7 +57,6 @@ namespace DWSIM.UI.Desktop.Editors
             AutoGenerateColumns = false;
             CanUserSortColumns = false;
             IsReadOnly = true;
-            ItemsSource = _rows;
 
             // the fill weights of the WinForms property grids
             AddColumn("Property", nameof(Row.Property), 60);
@@ -80,8 +77,12 @@ namespace DWSIM.UI.Desktop.Editors
         /// <summary>Fills the grid from a phase. Call again after a solve.</summary>
         public void Populate(IPhase? phase)
         {
-            _rows.Clear();
-            if (phase == null) return;
+            var rows = new List<Row>();
+            if (phase == null)
+            {
+                ItemsSource = rows;
+                return;
+            }
 
             var isMixture = phase.Name == "Mixture";
 
@@ -98,7 +99,7 @@ namespace DWSIM.UI.Desktop.Editors
                 var units = d.Units(_su);
                 var value = string.IsNullOrEmpty(units) ? si.Value : cv.ConvertFromSI(units, si.Value);
 
-                _rows.Add(new Row
+                rows.Add(new Row
                 {
                     Property = d.Label,
                     Value = value.ToString(_nf, CultureInfo.CurrentCulture),
@@ -106,10 +107,9 @@ namespace DWSIM.UI.Desktop.Editors
                 });
             }
 
-            // the WinForms grid sorts itself by property name once it is filled
-            var sorted = _rows.OrderBy(x => x.Property, StringComparer.CurrentCultureIgnoreCase).ToList();
-            _rows.Clear();
-            foreach (var row in sorted) _rows.Add(row);
+            // Publish a single sorted snapshot instead of Clear/Add/Clear/Add notifications
+            // for every property in every phase on each solver refresh.
+            ItemsSource = rows.OrderBy(x => x.Property, StringComparer.CurrentCultureIgnoreCase).ToList();
         }
 
         private static readonly Definition[] Definitions =

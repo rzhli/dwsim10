@@ -178,7 +178,7 @@ namespace DWSIM.Drawing.SkiaSharp.GraphicObjects.Charts
                                 {
                                     bmpcanvas.Clear(GetBackColor());
                                     bmpcanvas.Scale(2.0f);
-                                    renderer.SetTarget(bmpcanvas);
+                                    renderer.SetTarget(bmpcanvas, RegularTypeFace, BoldTypeFace);
                                     model.Update(true);
                                     model.Render(renderer, Width, Height);
                                     var paint = GetPaint(GetForeColor());

@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using Avalonia.Controls;
@@ -50,7 +49,6 @@ namespace DWSIM.UI.Desktop.Editors
             public string Value { get; set; } = "";
         }
 
-        private readonly ObservableCollection<Row> _rows = new ObservableCollection<Row>();
         private readonly IUnitsOfMeasure _su;
         private readonly string _nf;
         private readonly DataGridTextColumn _valueColumn;
@@ -73,7 +71,6 @@ namespace DWSIM.UI.Desktop.Editors
             AutoGenerateColumns = false;
             CanUserSortColumns = false;
             IsReadOnly = true;
-            ItemsSource = _rows;
 
             Columns.Add(new DataGridTextColumn
             {
@@ -109,12 +106,16 @@ namespace DWSIM.UI.Desktop.Editors
         public void Populate(IPhase phase)
         {
             _phase = phase;
-            _rows.Clear();
+            var rows = new List<Row>();
 
             var units = UnitsOf(_property);
             _valueColumn.Header = string.IsNullOrEmpty(units) ? "Property" : "Property (" + units + ")";
 
-            if (phase?.Compounds == null) return;
+            if (phase?.Compounds == null)
+            {
+                ItemsSource = rows;
+                return;
+            }
 
             foreach (var compound in phase.Compounds.Values.OrderBy(x => x.Name))
             {
@@ -126,12 +127,14 @@ namespace DWSIM.UI.Desktop.Editors
 
                 var value = string.IsNullOrEmpty(units) ? si.Value : cv.ConvertFromSI(units, si.Value);
 
-                _rows.Add(new Row
+                rows.Add(new Row
                 {
                     Compound = compound.Name,
                     Value = value.ToString(_nf, CultureInfo.CurrentCulture)
                 });
             }
+
+            ItemsSource = rows;
         }
 
         private static double? ValueOf(ICompound c, PropertyKind kind)

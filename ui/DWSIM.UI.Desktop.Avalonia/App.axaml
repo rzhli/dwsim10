@@ -127,6 +127,11 @@
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
     </Style>
 
+    <!-- Reaction mode choices use the same scaled text size as their parameter labels. -->
+    <Style Selector=".reactionEditor RadioButton">
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
+    </Style>
+
     <!-- The pruned custom TabControl template stretched its selected content to fill; Semi's
          default leaves it at desired size, so fill-content (e.g. the About license box) collapses.
          Restore stretch so a TextBox in a fill slot takes the remaining height. -->

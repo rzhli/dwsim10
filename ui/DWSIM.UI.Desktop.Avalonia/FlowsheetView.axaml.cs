@@ -807,8 +807,8 @@ public partial class FlowsheetView : UserControl
         fs.OnUpdateInterface = () =>
         {
             Canvas.Refresh();
-            // open object editors hold live grids; this is the engine's post-solve signal
-            DWSIM.UI.Desktop.Editors.MaterialStreamTabbedEditor.RefreshAll();
+            // Refresh only live editors belonging to this simulation.
+            DWSIM.UI.Desktop.Editors.MaterialStreamTabbedEditor.RefreshAll(fs);
             _watchPanel.RefreshValues();
         };
         fs.OnUpdateOpenEditForms = RefreshSelectedObjectEditor;
@@ -971,8 +971,8 @@ public partial class FlowsheetView : UserControl
         fs.OnUpdateInterface = () =>
         {
             Canvas.Refresh();
-            // open object editors hold live grids; this is the engine's post-solve signal
-            DWSIM.UI.Desktop.Editors.MaterialStreamTabbedEditor.RefreshAll();
+            // Refresh only live editors belonging to this simulation.
+            DWSIM.UI.Desktop.Editors.MaterialStreamTabbedEditor.RefreshAll(fs);
             _watchPanel.RefreshValues();
         };
         fs.OnUpdateOpenEditForms = RefreshSelectedObjectEditor;
@@ -1119,6 +1119,8 @@ public partial class FlowsheetView : UserControl
         await SaveSimulationAsync(path);
     }
 
+    private bool _solveInProgress;
+
     private Task SolveAsync() => SolveAsync(customOrder: false);
 
     private async Task SolveAsync(bool customOrder)
@@ -1129,6 +1131,13 @@ public partial class FlowsheetView : UserControl
             return;
         }
 
+        if (_solveInProgress || DWSIM.GlobalSettings.Settings.CalculatorBusy)
+        {
+            AppendLog("A calculation is already running. Stop it before starting another.");
+            return;
+        }
+
+        _solveInProgress = true;
         SetStatus(customOrder ? "Solving (custom order)..." : "Solving...");
         AppendLog(customOrder ? "Solve started (custom calculation order)." : "Solve started.");
         DWSIM.GlobalSettings.Settings.CalculatorStopRequested = false;
@@ -1163,6 +1172,7 @@ public partial class FlowsheetView : UserControl
         }
         finally
         {
+            _solveInProgress = false;
             dlg.Finish();
             Canvas.Refresh();
             UpdateResultsPanel();
@@ -2231,6 +2241,12 @@ public partial class FlowsheetView : UserControl
         BtnStop.Click += (_, _) =>
         {
             DWSIM.GlobalSettings.Settings.CalculatorStopRequested = true;
+            // Some engine loops listen only to the token, not the legacy stop flag.
+            if (DWSIM.GlobalSettings.Settings.CalculatorBusy)
+            {
+                try { DWSIM.GlobalSettings.Settings.TaskCancellationTokenSource?.Cancel(); }
+                catch (ObjectDisposedException) { } // the solve finished concurrently
+            }
             SetStatus("Stop requested.");
             AppendLog("Stop requested.");
         };

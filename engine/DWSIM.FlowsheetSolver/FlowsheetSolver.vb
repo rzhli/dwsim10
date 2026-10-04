@@ -1480,8 +1480,10 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
             For Each r In objstack
                 If fbag.SimulationObjects.ContainsKey(r) Then
                     Dim robj = fbag.SimulationObjects(r)
-                    If TypeOf robj Is IEnergyRecycle Then energyrecycles.Add(robj.Name)
-                    If robj.GraphicObject.ObjectType = ObjectType.OT_Recycle Then
+                    ' Inactive recycles never execute, so their Converged flag cannot change.
+                    ' Including them here would repeat the entire flowsheet until timeout.
+                    If robj.GraphicObject.Active AndAlso TypeOf robj Is IEnergyRecycle Then energyrecycles.Add(robj.Name)
+                    If robj.GraphicObject.Active AndAlso robj.GraphicObject.ObjectType = ObjectType.OT_Recycle Then
                         recycles.Add(robj.Name)
                         Dim rec As IRecycle = fbag.SimulationObjects(robj.Name)
                         If rec.AccelerationMethod = AccelMethod.GlobalBroyden Then
@@ -1535,6 +1537,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
 
                                                   While Not converged
 
+                                                      CheckCalculatorStatus()
                                                       fgui.ClearLog()
 
                                                       'calc specs

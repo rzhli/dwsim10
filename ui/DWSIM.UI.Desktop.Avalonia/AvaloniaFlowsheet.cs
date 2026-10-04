@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Avalonia.Threading;
 using DWSIM.Interfaces;
 
@@ -12,6 +13,8 @@ namespace DWSIM.UI.Desktop.Avalonia;
 internal sealed class AvaloniaFlowsheet : DWSIM.FlowsheetBase.FlowsheetBase
 {
     private Action<string, IFlowsheet.MessageType>? _listener;
+    private int _interfaceUpdatePending;
+    private int _editorUpdatePending;
 
     /// <summary>Called when the engine emits a log/status message.</summary>
     public Action<string>? OnMessage { get; set; }
@@ -101,8 +104,15 @@ internal sealed class AvaloniaFlowsheet : DWSIM.FlowsheetBase.FlowsheetBase
         _listener?.Invoke(text, mtype);
     }
 
-    public override void UpdateOpenEditForms() =>
-        Dispatcher.UIThread.Post(() => OnUpdateOpenEditForms?.Invoke());
+    public override void UpdateOpenEditForms()
+    {
+        if (Interlocked.Exchange(ref _editorUpdatePending, 1) != 0) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            Interlocked.Exchange(ref _editorUpdatePending, 0);
+            OnUpdateOpenEditForms?.Invoke();
+        }, DispatcherPriority.Background);
+    }
 
     public override void CloseOpenEditForms() =>
         Dispatcher.UIThread.Post(() => OnCloseOpenEditForms?.Invoke());
@@ -113,11 +123,19 @@ internal sealed class AvaloniaFlowsheet : DWSIM.FlowsheetBase.FlowsheetBase
     public override void SetMessageListener(Action<string, IFlowsheet.MessageType> act) =>
         _listener = act;
 
-    public override void UpdateInformation() =>
-        Dispatcher.UIThread.Post(() => OnUpdateInterface?.Invoke());
+    public override void UpdateInformation() => UpdateInterface();
 
-    public override void UpdateInterface() =>
-        Dispatcher.UIThread.Post(() => OnUpdateInterface?.Invoke());
+    public override void UpdateInterface()
+    {
+        // Solver iterations may outpace rendering by orders of magnitude. Refresh the latest
+        // state once, not every intermediate state, and let input (Stop/Close) run first.
+        if (Interlocked.Exchange(ref _interfaceUpdatePending, 1) != 0) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            Interlocked.Exchange(ref _interfaceUpdatePending, 0);
+            OnUpdateInterface?.Invoke();
+        }, DispatcherPriority.Background);
+    }
 
     public override object GetApplicationObject() => null!;
 }

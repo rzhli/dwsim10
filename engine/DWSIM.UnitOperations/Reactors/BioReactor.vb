@@ -1367,8 +1367,8 @@ Namespace Reactors
             ' Energy stream - publish the duty computed by the thermal mode.
             ' DWSIM EnergyFlow convention: kW added to the unit (positive = heating).
             DeltaQ = Result_Q_duty_kW
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                With GetInletEnergyStream(1)
+            If GetEnergyStream() IsNot Nothing Then
+                With GetEnergyStream()
                     .EnergyFlow = Result_Q_duty_kW
                     .GraphicObject.Calculated = True
                 End With
@@ -1701,8 +1701,8 @@ Namespace Reactors
             End If
 
             DeltaQ = Result_Q_duty_kW
-            If GetInletEnergyStream(1) IsNot Nothing Then
-                With GetInletEnergyStream(1)
+            If GetEnergyStream() IsNot Nothing Then
+                With GetEnergyStream()
                     .EnergyFlow = Result_Q_duty_kW
                     .GraphicObject.Calculated = True
                 End With
@@ -2112,6 +2112,9 @@ Namespace Reactors
 
         Private Sub PopulateEditorPanelAvalonia(container As AvaloniaEditorPanel)
 
+            ' The host's OnAfterEdit callback queues one asynchronous calculation for this object.
+            ' Calling RequestCalculation() in a row callback instead blocks the UI with a full
+            ' flowsheet solve, before OnAfterEdit can run. Row callbacks only commit parameters.
             Dim su = FlowSheet.FlowsheetOptions.SelectedUnitSystem
             Dim nf = FlowSheet.FlowsheetOptions.NumberFormat
             Dim compIds = FlowSheet.SelectedCompounds.Values.Select(Function(c) c.Name).ToList()
@@ -2122,30 +2125,30 @@ Namespace Reactors
                                               New List(Of String)({"Monod", "Contois", "Moser", "Haldane", "User Script", "Enzymatic Hydrolysis"}),
                                               CInt(KineticModel),
                                               Sub(dd, e)
+                                                  If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
                                                   KineticModel = CType(dd.SelectedIndex, BioKineticModel)
-                                                  FlowSheet.RequestCalculation()
                                               End Sub)
 
             container.CreateAndAddDropDownRow("Operating Mode",
                                               New List(Of String)({"Continuous", "Batch", "Fed-Batch"}),
                                               CInt(OperatingMode),
                                               Sub(dd, e)
+                                                  If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
                                                   OperatingMode = CType(dd.SelectedIndex, BioReactorMode)
-                                                  FlowSheet.RequestCalculation()
                                               End Sub)
 
             container.CreateAndAddDropDownRow("Thermal Mode",
                                               New List(Of String)({"Isothermal", "Adiabatic", "Defined Outlet Temperature"}),
                                               CInt(ThermalMode),
                                               Sub(dd, e)
+                                                  If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
                                                   ThermalMode = CType(dd.SelectedIndex, BioReactorThermalMode)
-                                                  FlowSheet.RequestCalculation()
                                               End Sub)
 
             container.CreateAndAddCheckBoxRow("Aerobic", IsAerobic,
                                               Sub(cb, e)
+                                                  If Not container.IsArmed Then Return
                                                   IsAerobic = cb.IsChecked.GetValueOrDefault()
-                                                  FlowSheet.RequestCalculation()
                                               End Sub)
 
             container.CreateAndAddTextBoxRow(nf, String.Format("Reactor Volume ({0})", su.volume),
@@ -2153,7 +2156,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      Volume = tb.Text.ParseExpressionToDouble().ConvertToSI(su.volume)
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2161,7 +2163,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      BatchDuration = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2171,7 +2172,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      MuMax_h = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2179,7 +2179,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      Ks_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2187,7 +2186,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      Ki_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2195,7 +2193,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      MoserN = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2203,7 +2200,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      YieldXS = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2211,7 +2207,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      YieldPS = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2219,7 +2214,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      Maintenance_gSg_cellh = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2227,7 +2221,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      DeathRate_h = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2237,7 +2230,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      KLa_h = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2245,7 +2237,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      CO2sat_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2253,7 +2244,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      HeatPerMolO2_JmolO2 = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2263,7 +2253,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      EH_k1_Lgh = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2271,7 +2260,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      EH_k2_Lgh = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2279,7 +2267,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      EH_KG_glucose_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2287,7 +2274,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      EH_KX_xylose_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2295,7 +2281,6 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      EH_EnzymeLoading_gL = tb.Text.ParseExpressionToDouble()
-                                                     FlowSheet.RequestCalculation()
                                                  End If
                                              End Sub)
 
@@ -2308,8 +2293,8 @@ Namespace Reactors
                                                       New List(Of String)(New String() {"(none)"}.Concat(compIds)),
                                                       If(idx < 0, 0, idx + 1),
                                                       Sub(dd, e)
+                                                          If Not container.IsArmed OrElse dd.SelectedIndex < 0 OrElse dd.SelectedIndex > compIds.Count Then Return
                                                           setter(If(dd.SelectedIndex > 0, compIds(dd.SelectedIndex - 1), ""))
-                                                          FlowSheet.RequestCalculation()
                                                       End Sub)
                 End Sub
 

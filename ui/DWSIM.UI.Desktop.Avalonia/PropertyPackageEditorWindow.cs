@@ -874,6 +874,20 @@ public class PropertyPackageEditorWindow : Window
         ddEOS.IsEnabled = _pp.PackageType == PackageType.EOS;
         panel.Children.Add(ddEOS);
 
+        var cbSolidCp = MakeCheckBox("Use Solid Heat Capacity for Enthalpy and Entropy",
+            _pp.SolidPhaseEnthalpy_UsesCp,
+            v => _pp.SolidPhaseEnthalpy_UsesCp = v);
+        // These models implement the Cp-based solid enthalpy/entropy path. PR/LK overrides it.
+        cbSolidCp.IsEnabled = _pp is ActivityCoefficientPropertyPackage or RaoultPropertyPackage
+            or SRKPropertyPackage or PengRobinson1978PropertyPackage or PRSV2PropertyPackage
+            || (_pp is PengRobinsonPropertyPackage && _pp is not PengRobinsonLKPropertyPackage);
+        ToolTip.SetTip(cbSolidCp, cbSolidCp.IsEnabled
+            ? "Calculate solid-phase enthalpy and entropy from solid heat-capacity data. " +
+              "Requires valid solid heat-capacity data for each solid compound. " +
+              "Configure solid-phase equilibrium separately under Equilibrium Calculations and Advanced Settings."
+            : "This property package does not support solid enthalpy and entropy from heat-capacity data.");
+        panel.Children.Add(cbSolidCp);
+
         // Other
         panel.Children.Add(MakeHeader("Other"));
 

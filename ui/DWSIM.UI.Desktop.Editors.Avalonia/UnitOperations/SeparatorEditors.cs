@@ -671,7 +671,13 @@ namespace DWSIM.UI.Desktop.Editors
             return new DataGridTextColumn
             {
                 Header = header,
-                Binding = new Binding(path) { Mode = readOnly ? BindingMode.OneWay : BindingMode.TwoWay },
+                Binding = new Binding(path)
+                {
+                    Mode = readOnly ? BindingMode.OneWay : BindingMode.TwoWay,
+                    // Commit when cell editing ends, not on each keystroke: numeric setters
+                    // reformat the value and would otherwise eat decimal points ("0." -> "0").
+                    UpdateSourceTrigger = UpdateSourceTrigger.LostFocus
+                },
                 IsReadOnly = readOnly,
                 Width = new DataGridLength(width, DataGridLengthUnitType.Star)
             };

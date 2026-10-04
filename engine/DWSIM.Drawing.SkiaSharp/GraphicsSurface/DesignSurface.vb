@@ -1424,7 +1424,6 @@ Public Class GraphicsSurface
                                     If Not InConSlot.IsAttached And InConSlot.Type = ConType.ConIn Then
                                         EndPos.X = InConSlot.Position.X
                                         EndPos.Y = InConSlot.Position.Y
-                                        InConSlot.IsAttached = True
                                         con2OK = True
                                         Exit For
                                     End If
@@ -1434,7 +1433,6 @@ Public Class GraphicsSurface
                                     InConSlot = gObjTo.InputConnectors(tidx)
                                     EndPos.X = InConSlot.Position.X
                                     EndPos.Y = InConSlot.Position.Y
-                                    InConSlot.IsAttached = True
                                     con2OK = True
                                 End If
                             End If
@@ -1444,7 +1442,6 @@ Public Class GraphicsSurface
                                     If Not InConSlot.IsAttached And InConSlot.Type = ConType.ConEn Then
                                         EndPos.X = InConSlot.Position.X
                                         EndPos.Y = InConSlot.Position.Y
-                                        InConSlot.IsAttached = True
                                         con2OK = True
                                         Exit For
                                     End If
@@ -1454,7 +1451,6 @@ Public Class GraphicsSurface
                                     InConSlot = gObjTo.InputConnectors(tidx)
                                     EndPos.X = InConSlot.Position.X
                                     EndPos.Y = InConSlot.Position.Y
-                                    InConSlot.IsAttached = True
                                     con2OK = True
                                 End If
                             End If
@@ -1468,7 +1464,6 @@ Public Class GraphicsSurface
                                 If Not OutConSlot.IsAttached Then
                                     StartPos.X = OutConSlot.Position.X
                                     StartPos.Y = OutConSlot.Position.Y
-                                    OutConSlot.IsAttached = True
                                     If con2OK Then con1OK = True
                                     Exit For
                                 End If
@@ -1478,7 +1473,6 @@ Public Class GraphicsSurface
                                 OutConSlot = gObjFrom.OutputConnectors(fidx)
                                 StartPos.X = OutConSlot.Position.X
                                 StartPos.Y = OutConSlot.Position.Y
-                                OutConSlot.IsAttached = True
                                 If con2OK Then con1OK = True
                             End If
                         End If
@@ -1491,19 +1485,20 @@ Public Class GraphicsSurface
                             Case Else
                                 Throw New Exception("This connection is not allowed.")
                         End Select
-100:                    If gObjFrom.ObjectType <> ObjectType.CapeOpenUO And gObjFrom.ObjectType <> ObjectType.CustomUO And gObjFrom.ObjectType <> ObjectType.DistillationColumn _
+100:                    If (fidx = -1 AndAlso gObjFrom.EnergyConnector.Active) OrElse
+                        (gObjFrom.ObjectType <> ObjectType.CapeOpenUO And gObjFrom.ObjectType <> ObjectType.CustomUO And gObjFrom.ObjectType <> ObjectType.DistillationColumn _
                         And gObjFrom.ObjectType <> ObjectType.AbsorptionColumn And gObjFrom.ObjectType <> ObjectType.OT_EnergyRecycle And gObjFrom.ObjectType <> ObjectType.External _
                                                     And gObjFrom.ObjectType <> ObjectType.RefluxedAbsorber And gObjFrom.ObjectType <> ObjectType.ReboiledAbsorber _
-                                                    And gObjFrom.ObjectType <> ObjectType.RCT_Conversion And gObjFrom.ObjectType <> ObjectType.Vessel Then
-                            If Not gObjFrom.EnergyConnector.IsAttached Then
+                                                    And gObjFrom.ObjectType <> ObjectType.RCT_Conversion And gObjFrom.ObjectType <> ObjectType.Vessel) Then
+                            ' External units may expose a dedicated Q port as well as material outputs.
+                            ' A -1 source index addresses that port, including when loading a flowsheet.
+                            If Not gObjFrom.EnergyConnector.IsAttached AndAlso Not gObjTo.InputConnectors(0).IsAttached Then
                                 StartPos.X = gObjFrom.EnergyConnector.Position.X
                                 StartPos.Y = gObjFrom.EnergyConnector.Position.Y
-                                gObjFrom.EnergyConnector.IsAttached = True
                                 con1OK = True
                                 OutConSlot = gObjFrom.EnergyConnector
                                 EndPos.X = gObjTo.InputConnectors(0).Position.X
                                 EndPos.Y = gObjTo.InputConnectors(0).Position.Y
-                                gObjTo.InputConnectors(0).IsAttached = True
                                 con2OK = True
                                 InConSlot = gObjTo.InputConnectors(0)
                             End If
@@ -1513,7 +1508,6 @@ Public Class GraphicsSurface
                                     If Not InConSlot.IsAttached And InConSlot.Type = ConType.ConIn Then
                                         EndPos.X = InConSlot.Position.X
                                         EndPos.Y = InConSlot.Position.Y
-                                        InConSlot.IsAttached = True
                                         con2OK = True
                                         Exit For
                                     End If
@@ -1523,7 +1517,6 @@ Public Class GraphicsSurface
                                     InConSlot = gObjTo.InputConnectors(tidx)
                                     EndPos.X = InConSlot.Position.X
                                     EndPos.Y = InConSlot.Position.Y
-                                    InConSlot.IsAttached = True
                                     con2OK = True
                                 End If
                             End If
@@ -1532,17 +1525,15 @@ Public Class GraphicsSurface
                                     If Not OutConSlot.IsAttached And OutConSlot.Type = ConType.ConEn Then
                                         StartPos.X = OutConSlot.Position.X
                                         StartPos.Y = OutConSlot.Position.Y
-                                        OutConSlot.IsAttached = True
                                         If con2OK Then con1OK = True
                                         Exit For
                                     End If
                                 Next
                             Else
-                                If Not gObjFrom.OutputConnectors(fidx).IsAttached Then
+                                If Not gObjFrom.OutputConnectors(fidx).IsAttached AndAlso gObjFrom.OutputConnectors(fidx).Type = ConType.ConEn Then
                                     OutConSlot = gObjFrom.OutputConnectors(fidx)
                                     StartPos.X = OutConSlot.Position.X
                                     StartPos.Y = OutConSlot.Position.Y
-                                    OutConSlot.IsAttached = True
                                     If con2OK Then con1OK = True
                                 End If
                             End If
@@ -1557,6 +1548,10 @@ Public Class GraphicsSurface
                 Exit Sub
             End If
             If con1OK = True And con2OK = True Then
+                ' Commit attachment flags only after both ends have passed validation.
+                ' A rejected connection must leave the free ports available for another attempt.
+                OutConSlot.IsAttached = True
+                InConSlot.IsAttached = True
                 'desenhar conector
                 Dim myCon As New ConnectorGraphic(StartPos.X, StartPos.Y, EndPos.X, EndPos.Y)
                 OutConSlot.AttachedConnector = myCon

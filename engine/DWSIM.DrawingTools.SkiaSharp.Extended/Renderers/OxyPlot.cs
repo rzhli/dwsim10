@@ -58,6 +58,10 @@ namespace DWSIM.Drawing.SkiaSharp.Renderers
         /// </summary>
         private SKCanvas canvas;
 
+        // Borrowed from the flowsheet; its embedded fonts also work without system fonts.
+        private SKTypeface regularTypeface;
+        private SKTypeface boldTypeface;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="SKCanvasRenderContext" /> class.
         /// </summary>
@@ -82,9 +86,11 @@ namespace DWSIM.Drawing.SkiaSharp.Renderers
         /// Sets the target.
         /// </summary>
         /// <param name="c">The canvas.</param>
-        public void SetTarget(SKCanvas c)
+        public void SetTarget(SKCanvas c, SKTypeface regularTypeface = null, SKTypeface boldTypeface = null)
         {
             this.canvas = c;
+            this.regularTypeface = regularTypeface;
+            this.boldTypeface = boldTypeface;
         }
 
         /// <summary>
@@ -108,19 +114,15 @@ namespace DWSIM.Drawing.SkiaSharp.Renderers
             this.paint.PathEffect = null;
             this.paint.MaskFilter = null;
             this.paint.HintingLevel = SKPaintHinting.Normal;
-            switch (GlobalSettings.Settings.RunningPlatform())
-            {
-                case GlobalSettings.Settings.Platform.Windows:
-                    this.paint.Typeface = SKTypeface.FromFamilyName("Segoe UI", SKTypefaceStyle.Normal);
-                    break;
-                case GlobalSettings.Settings.Platform.Linux:
-                    this.paint.Typeface = SKTypeface.FromFamilyName("Ubuntu", SKTypefaceStyle.Normal);
-                    break;
-                case GlobalSettings.Settings.Platform.Mac:
-                    this.paint.Typeface = SKTypeface.FromFamilyName("Helvetica Neue", SKTypefaceStyle.Normal);
-                    break;
-            }
             this.paint.Color = GraphicsSurface.ForegroundColor;
+        }
+
+        private void SetFont(double fontSize, double fontWeight)
+        {
+            // Use the same face for measuring and drawing, including bold plot titles.
+            this.paint.Typeface = (fontWeight >= 600 ? this.boldTypeface : null)
+                ?? this.regularTypeface ?? SKTypeface.Default;
+            this.paint.TextSize = this.Convert(fontSize);
         }
 
         /// <summary>
@@ -314,7 +316,7 @@ namespace DWSIM.Drawing.SkiaSharp.Renderers
         {
             this.Reset();
             {
-                this.paint.TextSize = this.Convert(fontSize);
+                this.SetFont(fontSize, fontWeight);
                 this.SetFill(fill);
 
                 float width;
@@ -388,7 +390,7 @@ namespace DWSIM.Drawing.SkiaSharp.Renderers
             this.Reset();
             {
                 this.paint.IsAntialias = true;
-                this.paint.TextSize = this.Convert(fontSize);
+                this.SetFont(fontSize, fontWeight);
                 float lineHeight, delta;
                 this.GetFontMetrics(this.paint, out lineHeight, out delta);
                 var textWidth = this.paint.MeasureText(text);

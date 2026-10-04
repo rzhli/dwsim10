@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
@@ -72,7 +71,7 @@ namespace DWSIM.UI.Desktop.Editors
             }
         }
 
-        private readonly ObservableCollection<Row> _rows = new ObservableCollection<Row>();
+        private List<Row> _rows = new List<Row>();
         private readonly IUnitsOfMeasure _su;
         private readonly string _nf;
 
@@ -201,17 +200,21 @@ namespace DWSIM.UI.Desktop.Editors
         {
             _stream = stream;
             _phase = phase;
-            _rows.Clear();
+            var rows = new List<Row>();
 
             if (stream != null && phase != null && phase.Compounds != null)
             {
                 try
                 {
                     var amounts = CompoundAmounts.Read(stream, phase, _basis, _su, _percentage);
-                    foreach (var item in amounts) _rows.Add(new Row(item.Key, item.Value, _nf));
+                    foreach (var item in amounts) rows.Add(new Row(item.Key, item.Value, _nf));
                 }
                 catch (Exception) { }
             }
+
+            // Swap the complete snapshot once; individual row edits still notify via INotifyPropertyChanged.
+            _rows = rows;
+            ItemsSource = _rows;
 
             // The Total label is this grid's only Edited subscriber; raise it here so the total
             // reflects the loaded amounts immediately, not only after the first edit.

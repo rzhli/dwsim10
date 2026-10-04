@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Avalonia.Layout;
 using Avalonia.Media;
 using DWSIM.Interfaces;
@@ -31,34 +33,50 @@ namespace DWSIM.UI.Desktop.Editors
     {
 
         /// <summary>
-        /// Refresh action of every editor built so far, keyed by the control that hosts it, held
-        /// weakly so a closed editor does not keep the stream alive. <see cref="RefreshAll"/>
-        /// drives them from the host's UpdateInterface, which is what fires after a solve.
+        /// The refresh closure captures the grids (and thus their parent editor). It must not be
+        /// held strongly by a static registry: a weak host paired with a strong Action still
+        /// retains every editor ever opened. ConditionalWeakTable allows that reference cycle
+        /// to be collected together with the host.
         /// </summary>
-        private static readonly List<(WeakReference Host, Action Refresh)> Registry =
-            new List<(WeakReference, Action)>();
-
-        /// <summary>Repopulates every live editor. Safe to call from any thread the UI owns.</summary>
-        public static void RefreshAll()
+        private sealed class EditorRefresh
         {
+            public IFlowsheet Flowsheet;
+            public Action Refresh;
+        }
+
+        private static readonly ConditionalWeakTable<Control, EditorRefresh> RefreshActions = new();
+        private static readonly List<WeakReference<Control>> Registry = new();
+
+        /// <summary>Refreshes only attached, visible editors of this flowsheet, on the UI thread.</summary>
+        public static void RefreshAll(IFlowsheet flowsheet)
+        {
+            List<Action> actions = new();
             lock (Registry)
             {
-                Registry.RemoveAll(x => !x.Host.IsAlive);
-
-                foreach (var item in Registry.ToList())
+                Registry.RemoveAll(x => !x.TryGetTarget(out _));
+                foreach (var item in Registry)
                 {
-                    try { item.Refresh(); }
-                    catch (Exception) { }
+                    if (item.TryGetTarget(out var host) && host.GetVisualRoot() != null &&
+                        host.IsEffectivelyVisible && RefreshActions.TryGetValue(host, out var entry) &&
+                        ReferenceEquals(entry.Flowsheet, flowsheet))
+                        actions.Add(entry.Refresh);
                 }
+            }
+
+            foreach (var refresh in actions)
+            {
+                try { refresh(); }
+                catch (Exception) { }
             }
         }
 
-        private static void Register(Control host, Action refresh)
+        private static void Register(Control host, IFlowsheet flowsheet, Action refresh)
         {
             lock (Registry)
             {
-                Registry.RemoveAll(x => !x.Host.IsAlive);
-                Registry.Add((new WeakReference(host), refresh));
+                Registry.RemoveAll(x => !x.TryGetTarget(out _));
+                RefreshActions.Add(host, new EditorRefresh { Flowsheet = flowsheet, Refresh = refresh });
+                Registry.Add(new WeakReference<Control>(host));
             }
         }
 
@@ -354,7 +372,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             // the host calls RefreshAll from UpdateInterface, which is what fires after a solve;
             // the visual-tree hook covers the editor being brought back to the front
-            Register(root, refresh);
+            Register(root, flowsheet, refresh);
             root.AttachedToVisualTree += (s, e) => refresh();
 
             return root;

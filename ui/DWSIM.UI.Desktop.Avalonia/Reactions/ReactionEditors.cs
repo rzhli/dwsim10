@@ -63,6 +63,7 @@ namespace DWSIM.UI.Desktop.Avalonia.Reactions
 
         protected void BuildUI(string title)
         {
+            Classes.Add("reactionEditor");
             Title = title;
             Width = 780;
             Height = 720;

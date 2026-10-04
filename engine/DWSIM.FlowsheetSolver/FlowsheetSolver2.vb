@@ -734,8 +734,9 @@ Imports DWSIM.SharedClasses
         For Each r In objstack
             If fbag.SimulationObjects.ContainsKey(r) Then
                 Dim robj = fbag.SimulationObjects(r)
-                If TypeOf robj Is IEnergyRecycle Then energyrecycles.Add(robj.Name)
-                If robj.GraphicObject.ObjectType = ObjectType.OT_Recycle Then
+                ' An inactive recycle cannot update its convergence flag.
+                If robj.GraphicObject.Active AndAlso TypeOf robj Is IEnergyRecycle Then energyrecycles.Add(robj.Name)
+                If robj.GraphicObject.Active AndAlso robj.GraphicObject.ObjectType = ObjectType.OT_Recycle Then
                     recycles.Add(robj.Name)
                     Dim rec As IRecycle = fbag.SimulationObjects(robj.Name)
                     If rec.AccelerationMethod = AccelMethod.GlobalBroyden Then
@@ -782,6 +783,8 @@ Imports DWSIM.SharedClasses
                                       Dim icount As Integer = 0
 
                                       While Not converged
+
+                                          ThisCancellationToken.ThrowIfCancellationRequested()
 
                                           fgui.ClearLog()
 
