@@ -135,7 +135,11 @@ Namespace SpecialOps
         ''' </summary>
         Public Property CumulativeError As Double = 0.0
 
-        ''' <summary>Proportional contribution of the last step: Kp * SetpointWeightP * CurrentError.</summary>
+        ''' <summary>
+        ''' Proportional contribution of the last step: Kp * SetpointWeightP * CurrentError. In the series form
+        ''' (<see cref="PIDForm"/> = 2) it carries the interaction factor, Kp * (1 + Td / Ti) * SetpointWeightP *
+        ''' CurrentError.
+        ''' </summary>
         Public Property PTerm As Double = 0.0
 
         ''' <summary>
@@ -145,9 +149,9 @@ Namespace SpecialOps
         Public Property ITerm As Double = 0.0
 
         ''' <summary>
-        ''' Derivative of the last step, in 1/s: the rate of change of the normalized error, or of the negative
-        ''' normalized process variable when <see cref="UseDerivativeOnPV"/> is set, after the optional
-        ''' derivative filter.
+        ''' Derivative of the last step, in 1/s: the rate of change of the normalized derivative error (PV -
+        ''' <see cref="SetpointWeightD"/> * SP) / <see cref="BaseSP"/>, or of the negative normalized process
+        ''' variable when <see cref="UseDerivativeOnPV"/> is set, after the optional derivative filter.
         ''' </summary>
         Public Property DTerm As Double = 0.0
 
@@ -229,11 +233,25 @@ Namespace SpecialOps
         Public Property SPValue As Double = 0.0
 
         ''' <summary>
-        ''' Manipulated variable value written to the manipulated object at the end of each step, in SI units.
-        ''' In manual mode it holds the operator's value. In automatic mode <see cref="UpdateVars"/> first
-        ''' refreshes it from the manipulated object in the manipulated variable's units.
+        ''' Manipulated variable value, always in SI units: the value written to the manipulated object at the
+        ''' end of each step. In manual mode it holds the operator's value. In automatic mode <see
+        ''' cref="UpdateVars"/> refreshes it from the manipulated object and the calculation replaces it with
+        ''' <see cref="OutputAbs"/> converted to SI. <see cref="MVValueDisplay"/> gives it in the manipulated
+        ''' variable's units.
         ''' </summary>
         Public Property MVValue As Double = 0.0
+
+        ''' <summary>
+        ''' <see cref="MVValue"/> converted from SI to the manipulated variable's units (the units of <see
+        ''' cref="ManipulatedObjectData"/>, the same as <see cref="OutputAbs"/>, <see cref="PVValue"/> and <see
+        ''' cref="SPValue"/> use). Read-only; not saved.
+        ''' </summary>
+        <Xml.Serialization.XmlIgnore> <Newtonsoft.Json.JsonIgnore> Public ReadOnly Property MVValueDisplay As Double
+            Get
+                If ManipulatedObjectData Is Nothing Then Return MVValue
+                Return SystemsOfUnits.Converter.ConvertFromSI(ManipulatedObjectData.Units, MVValue)
+            End Get
+        End Property
 
         ''' <summary>
         ''' Coefficient alpha of the first-order derivative filter, DTerm = alpha * DTerm_previous + (1 - alpha)
@@ -254,15 +272,21 @@ Namespace SpecialOps
         Public Property SetpointWeightP As Double = 1.0
 
         ''' <summary>
-        ''' Setpoint weight (gamma) of the derivative term. Stored and shown in the editors; the current
-        ''' calculation does not use it. Default 1.
+        ''' Setpoint weight (gamma) of the derivative term on error: the derivative acts on (PV - gamma * SP) /
+        ''' <see cref="BaseSP"/>. At 1 (default) it is the derivative of the error, at 0 the derivative of the
+        ''' process variable alone, with no kick when the setpoint moves. Not used when <see
+        ''' cref="UseDerivativeOnPV"/> is set.
         ''' </summary>
         Public Property SetpointWeightD As Double = 1.0
 
         ''' <summary>
-        ''' PID algorithm form: 0 = parallel, Output = PTerm + Ki * ITerm + Kd * DTerm; 1 = ISA (standard); 2 =
-        ''' series. Any value other than 0 is calculated with the ISA form, Kp * (beta * e + ITerm / Ti + Td *
-        ''' DTerm) with Ti = Kp / Ki and Td = Kd / Kp. Default 0.
+        ''' PID algorithm form, with Ti = Kp / Ki and Td = Kd / Kp. 0 = parallel (default): Output = PTerm + Ki *
+        ''' ITerm + Kd * DTerm. 1 = ISA (standard, non-interacting): Output = Kp * (beta * e + ITerm / Ti + Td *
+        ''' DTerm). 2 = series (interacting), Kp * (1 + 1 / (Ti s)) * (1 + Td s): Output = Kp * ((1 + Td / Ti) *
+        ''' beta * e + ITerm / Ti + Td * DTerm), the same as the ISA form with Kp * (1 + Td / Ti), Ti + Td and Ti
+        ''' * Td / (Ti + Td). Any other value is calculated with the ISA form.
+        ''' Since Ti and Td are taken from Ki and Kd, the ISA output equals the parallel one and both are
+        ''' calculated as PTerm + Ki * ITerm + Kd * DTerm, which stays finite at Kp = 0.
         ''' </summary>
         Public Property PIDForm As Integer = 0
 
@@ -271,6 +295,9 @@ Namespace SpecialOps
         Private LastPV As Double = 0.0
 
         Private WasManualOverride As Boolean = False
+
+        'setpoint of the previous step, for the derivative setpoint weight
+        Private LastSetPoint As Nullable(Of Double) = Nothing
 
         ''' <summary>
         ''' Position of this controller in the order the dynamic integrator runs the PID controllers, in
@@ -299,27 +326,35 @@ Namespace SpecialOps
         End Property
 
         ''' <summary>
-        ''' Feedforward gain, in manipulated variable units per disturbance unit, applied to the change of the
-        ''' disturbance since the previous step and added to the manipulated variable value. Zero (default)
-        ''' disables feedforward.
+        ''' Feedforward gain, in manipulated variable units per disturbance unit, applied to the deviation of the
+        ''' disturbance from its first reading after a reset, after the lead-lag of <see cref="FeedforwardLeadTime"/>
+        ''' and <see cref="FeedforwardLagTime"/>, and added to the manipulated variable value for as long as the
+        ''' deviation lasts. Zero (default) disables feedforward.
         ''' </summary>
         Public Property FeedforwardGain As Double = 0.0
 
         ''' <summary>
-        ''' Feedforward lead time, in s. Stored and shown in the editors; the current calculation does not use
-        ''' it. Default 0.
+        ''' Lead time constant, in s, of the feedforward lead-lag (FeedforwardLeadTime s + 1) /
+        ''' (<see cref="FeedforwardLagTime"/> s + 1) applied to the disturbance deviation before the feedforward
+        ''' gain. Zero or less (default 0) leaves the plain lag.
         ''' </summary>
         Public Property FeedforwardLeadTime As Double = 0.0
 
         ''' <summary>
-        ''' Time constant, in s, of the first-order lag filter applied to the disturbance change before the
-        ''' feedforward gain. Zero or less disables the filter. Default 1.
+        ''' Lag time constant, in s, of the feedforward lead-lag applied to the disturbance deviation before the
+        ''' feedforward gain. Zero or less disables the lag. Default 1.
         ''' </summary>
         Public Property FeedforwardLagTime As Double = 1.0
 
         Private FeedforwardFilterState As Double = 0.0
 
-        Private LastDisturbanceValue As Double = 0.0
+        'disturbance deviation of the previous step, for the lead without a lag
+        Private LastFeedforwardInput As Double = 0.0
+
+        'disturbance reading the feedforward deviation is measured from
+        Private FeedforwardReference As Double = 0.0
+
+        Private FeedforwardInitialized As Boolean = False
 
         ''' <summary>
         ''' Gets or sets the controller setpoint, in the controlled variable's units. Same value as <see
@@ -913,7 +948,13 @@ Namespace SpecialOps
 
             FilteredDerivative = 0.0
             LastPV = 0.0
+            LastSetPoint = Nothing
             WasManualOverride = False
+
+            FeedforwardFilterState = 0.0
+            LastFeedforwardInput = 0.0
+            FeedforwardReference = 0.0
+            FeedforwardInitialized = False
 
             PVHistory.Clear()
             MVHistory.Clear()
@@ -995,7 +1036,8 @@ Namespace SpecialOps
 
         ''' <summary>
         ''' Reads the setpoint, the process variable and, in automatic mode, the manipulated variable from the
-        ''' flowsheet into <see cref="SPValue"/>, <see cref="PVValue"/> and <see cref="MVValue"/>, and resolves
+        ''' flowsheet into <see cref="SPValue"/>, <see cref="PVValue"/> (both in display units) and <see
+        ''' cref="MVValue"/> (in SI), and resolves
         ''' <see cref="ManipulatedObject"/>. Leaves the values unchanged when the controller is not fully
         ''' configured.
         ''' </summary>
@@ -1031,15 +1073,14 @@ Namespace SpecialOps
 
             Dim CurrentValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ControlledObjectData.Units, controlled.GetPropertyValue(ControlledObjectData.PropertyName))
 
-            Dim CurrentManipulatedValue = SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(ManipulatedObjectData.Units, manipulated.GetPropertyValue(ManipulatedObjectData.PropertyName))
-
             SPValue = AdjustValue
 
             PVValue = CurrentValue
 
             ' In manual the MV is what the operator asked for, not what the valve reports: refreshing it
             ' from the manipulated object here threw the operator's value away before Calculate could use it.
-            If Not ManualOverride Then MVValue = CurrentManipulatedValue
+            ' MVValue is in SI, as the manipulated object reports it and as Calculate writes it back.
+            If Not ManualOverride Then MVValue = CDbl(manipulated.GetPropertyValue(ManipulatedObjectData.PropertyName))
 
         End Sub
 
@@ -1103,16 +1144,34 @@ Namespace SpecialOps
 
             Dim beta = SetpointWeightP
 
-            PTerm = Kp * beta * CurrentError
+            'integral and derivative times of the ISA and series forms
+            Dim Ti As Double = If(Ki > 0, Kp / Ki, 1.0E+20)
+            Dim Td As Double = If(Kp > 0, Kd / Kp, 0.0)
+
+            'series (interacting) form: Kp (1 + 1/(Ti s)) (1 + Td s) = Kp [(1 + Td/Ti) + 1/(Ti s) + Td s], so the
+            'proportional action carries the interaction factor 1 + Td/Ti and the I and D actions are those of
+            'the ISA form with the same Kp, Ti and Td
+            Dim seriesFactor As Double = 1.0
+            If PIDForm = 2 AndAlso Kp > 0 AndAlso Ki > 0 Then seriesFactor = 1.0 + Td / Ti
+
+            PTerm = Kp * seriesFactor * beta * CurrentError
 
             Dim rawDerivative As Double = 0.0
 
             If UseDerivativeOnPV Then
-                If prevPV <> 0.0 Then rawDerivative = -(LastPV - prevPV) / timestep
+                'the error is (PV - SP) / BaseSP, so on a constant setpoint its change is the change of PV / BaseSP
+                If prevPV <> 0.0 Then rawDerivative = (LastPV - prevPV) / timestep
             Else
                 Dim delta_error = CurrentError - LastError
+                'derivative setpoint weight gamma: the derivative acts on (PV - gamma SP) / BaseSP, which is the
+                'error plus (1 - gamma) SP / BaseSP, so its change adds (1 - gamma) times the setpoint change
+                If SetpointWeightD <> 1.0 AndAlso LastSetPoint.HasValue Then
+                    delta_error += (1.0 - SetpointWeightD) * (AdjustValue - LastSetPoint.Value) / BaseSP
+                End If
                 If Math.Abs(LastError) > 0.0 Then rawDerivative = delta_error / timestep
             End If
+
+            LastSetPoint = AdjustValue
 
             Dim alpha = DerivativeFilterCoefficient
             If alpha > 0.0 AndAlso alpha < 1.0 Then
@@ -1165,13 +1224,10 @@ Namespace SpecialOps
                 ' so it must not be folded into the dimensionless controller output here
                 Dim bias As Double = If(ManipulatedVariableSpan > 0.0, 0.0, Offset / BaseSP)
 
-                If PIDForm = 0 Then
-                    Output = PTerm + Ki * ITerm + Kd * DTerm + bias
-                Else
-                    Dim Ti As Double = If(Ki > 0, Kp / Ki, 1.0E+20)
-                    Dim Td As Double = If(Kp > 0, Kd / Kp, 0.0)
-                    Output = Kp * (beta * CurrentError + ITerm / Ti + Td * DTerm) + bias
-                End If
+                'with Ti = Kp / Ki and Td = Kd / Kp, the ISA form Kp (beta e + ITerm / Ti + Td DTerm) is
+                'PTerm + Ki ITerm + Kd DTerm, which stays finite at Kp = 0; the series form differs only by the
+                'interaction factor already in PTerm
+                Output = PTerm + Ki * ITerm + Kd * DTerm + bias
 
                 Dim ffOutput As Double = 0.0
 
@@ -1184,16 +1240,32 @@ Namespace SpecialOps
                                 m_DisturbanceObjectData.Units,
                                 dvObj.GetPropertyValue(m_DisturbanceObjectData.PropertyName))
 
-                            Dim dvChange = dvVal - LastDisturbanceValue
-                            LastDisturbanceValue = dvVal
+                            'the first reading is the reference, so the feedforward starts at zero; it then holds
+                            'gain times the deviation from it, as the PID output is positional
+                            If Not FeedforwardInitialized Then
+                                FeedforwardReference = dvVal
+                                FeedforwardInitialized = True
+                            End If
+                            Dim dvDeviation = dvVal - FeedforwardReference
 
                             If FeedforwardLagTime > 0 Then
                                 Dim alphaFF = Math.Exp(-timestep / FeedforwardLagTime)
-                                FeedforwardFilterState = alphaFF * FeedforwardFilterState + (1.0 - alphaFF) * dvChange
-                                ffOutput = FeedforwardGain * FeedforwardFilterState
+                                FeedforwardFilterState = alphaFF * FeedforwardFilterState + (1.0 - alphaFF) * dvDeviation
+                                If FeedforwardLeadTime > 0 Then
+                                    'lead-lag (Tlead s + 1)/(Tlag s + 1) = Tlead/Tlag + (1 - Tlead/Tlag)/(Tlag s + 1):
+                                    'a direct share of the input plus the rest through the same lag
+                                    Dim leadRatio = FeedforwardLeadTime / FeedforwardLagTime
+                                    ffOutput = FeedforwardGain * (leadRatio * dvDeviation + (1.0 - leadRatio) * FeedforwardFilterState)
+                                Else
+                                    ffOutput = FeedforwardGain * FeedforwardFilterState
+                                End If
+                            ElseIf FeedforwardLeadTime > 0 Then
+                                'lead without a lag, Tlead s + 1, with a backward difference
+                                ffOutput = FeedforwardGain * (dvDeviation + FeedforwardLeadTime * (dvDeviation - LastFeedforwardInput) / timestep)
                             Else
-                                ffOutput = FeedforwardGain * dvChange
+                                ffOutput = FeedforwardGain * dvDeviation
                             End If
+                            LastFeedforwardInput = dvDeviation
                         End If
                     Catch
                     End Try

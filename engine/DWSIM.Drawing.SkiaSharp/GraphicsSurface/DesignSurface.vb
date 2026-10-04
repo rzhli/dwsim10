@@ -1477,6 +1477,7 @@ Public Class GraphicsSurface
                             End If
                         End If
                     Else
+                        Dim useEnergyConnector As Boolean
                         Select Case gObjFrom.ObjectType
                             Case ObjectType.Cooler, ObjectType.Heater, ObjectType.Pipe, ObjectType.Expander, ObjectType.ShortcutColumn, ObjectType.DistillationColumn, ObjectType.AbsorptionColumn,
                             ObjectType.ReboiledAbsorber, ObjectType.RefluxedAbsorber, ObjectType.OT_EnergyRecycle, ObjectType.ComponentSeparator, ObjectType.SolidSeparator,
@@ -1485,13 +1486,18 @@ Public Class GraphicsSurface
                             Case Else
                                 Throw New Exception("This connection is not allowed.")
                         End Select
-100:                    If (fidx = -1 AndAlso gObjFrom.EnergyConnector.Active) OrElse
-                        (gObjFrom.ObjectType <> ObjectType.CapeOpenUO And gObjFrom.ObjectType <> ObjectType.CustomUO And gObjFrom.ObjectType <> ObjectType.DistillationColumn _
-                        And gObjFrom.ObjectType <> ObjectType.AbsorptionColumn And gObjFrom.ObjectType <> ObjectType.OT_EnergyRecycle And gObjFrom.ObjectType <> ObjectType.External _
+100:                    If fidx = -1 AndAlso gObjFrom.EnergyConnector.Active Then
+                            ' The local connection editor and saved flowsheets use -1 for the dedicated Q port.
+                            useEnergyConnector = True
+                        ElseIf gObjFrom.ObjectType = ObjectType.External Then
+                            useEnergyConnector = ExternalUsesEnergyConnector(gObjFrom, fidx)
+                        Else
+                            useEnergyConnector = gObjFrom.ObjectType <> ObjectType.CapeOpenUO And gObjFrom.ObjectType <> ObjectType.CustomUO And gObjFrom.ObjectType <> ObjectType.DistillationColumn _
+                                                    And gObjFrom.ObjectType <> ObjectType.AbsorptionColumn And gObjFrom.ObjectType <> ObjectType.OT_EnergyRecycle _
                                                     And gObjFrom.ObjectType <> ObjectType.RefluxedAbsorber And gObjFrom.ObjectType <> ObjectType.ReboiledAbsorber _
-                                                    And gObjFrom.ObjectType <> ObjectType.RCT_Conversion And gObjFrom.ObjectType <> ObjectType.Vessel) Then
-                            ' External units may expose a dedicated Q port as well as material outputs.
-                            ' A -1 source index addresses that port, including when loading a flowsheet.
+                                                    And gObjFrom.ObjectType <> ObjectType.RCT_Conversion And gObjFrom.ObjectType <> ObjectType.Vessel
+                        End If
+                        If useEnergyConnector Then
                             If Not gObjFrom.EnergyConnector.IsAttached AndAlso Not gObjTo.InputConnectors(0).IsAttached Then
                                 StartPos.X = gObjFrom.EnergyConnector.Position.X
                                 StartPos.Y = gObjFrom.EnergyConnector.Position.Y
@@ -1595,6 +1601,27 @@ Public Class GraphicsSurface
         End If
 
     End Sub
+
+    ''' <summary>
+    ''' An external unit operation declares its duty port either as a ConEn outlet or as the EnergyConnector.
+    ''' The EnergyConnector takes the energy stream when it is active and free, unless the outlet index names
+    ''' a ConEn outlet, or no index is given and a ConEn outlet is free.
+    ''' </summary>
+    Private Shared Function ExternalUsesEnergyConnector(gObjFrom As GraphicObject, fidx As Integer) As Boolean
+
+        Dim ec = gObjFrom.EnergyConnector
+        If ec Is Nothing OrElse Not ec.Active OrElse ec.IsAttached Then Return False
+
+        If fidx >= 0 Then
+            Return Not (fidx < gObjFrom.OutputConnectors.Count AndAlso gObjFrom.OutputConnectors(fidx).Type = ConType.ConEn)
+        End If
+
+        For Each oc In gObjFrom.OutputConnectors
+            If oc.Type = ConType.ConEn AndAlso Not oc.IsAttached Then Return False
+        Next
+        Return True
+
+    End Function
 
     Public Sub DisconnectObject(ByVal gObjFrom As GraphicObject, ByVal gObjTo As GraphicObject, Optional ByVal triggercalc As Boolean = False)
 
