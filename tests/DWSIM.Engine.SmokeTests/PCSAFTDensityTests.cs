@@ -156,42 +156,74 @@ namespace DWSIM.Engine.SmokeTests
             var lnphi = pp.DW_CalcLnFugCoeff(new[] { 0.5, 0.5 }, 298.15, 101325.0,
                 DWSIM.Thermodynamics.PropertyPackages.State.Liquid);
             TestContext.WriteLine($"lnphi water={lnphi[0]:R}  ethanol={lnphi[1]:R}");
-            // Values include water-ethanol cross-association AND the shipped water/ethanol kij = 0.06.
-            // Before the max() off-by-one fix the unlike-pair association strength was read off the
-            // (always zero) matrix diagonal, so cross-association was silently absent and these were
-            // -2.01189 / -1.72609; with cross-association alive and kij = 0 they are -3.07407 / -2.73131.
-            Assert.That(lnphi[0], Is.EqualTo(-2.7369900645199534).Within(1e-9), "water lnphi (2B cross-association + kij)");
-            Assert.That(lnphi[1], Is.EqualTo(-2.626709161126869).Within(1e-9), "ethanol lnphi (2B cross-association + kij)");
+            // Values include water-ethanol cross-association between donor and acceptor sites only AND the
+            // shipped water/ethanol kij = -0.035, with the association chemical potential taken from the
+            // Helmholtz energy (two associating compounds). With every site pair bonding across the two
+            // compounds and kij = 0.06 they were -2.81353 / -2.55125; the earlier closed-form chemical
+            // potential gave -2.73699 / -2.62671, which fail the Gibbs-Duhem check; before the max()
+            // off-by-one fix cross-association was silently absent and they were -2.01189 / -1.72609.
+            Assert.That(lnphi[0], Is.EqualTo(-2.9534153645478556).Within(1e-9), "water lnphi (2B cross-association + kij)");
+            Assert.That(lnphi[1], Is.EqualTo(-2.341988539133337).Within(1e-9), "ethanol lnphi (2B cross-association + kij)");
         }
 
         /// <summary>
-        /// The shipped water-alcohol kij rows (pcsaft_ip.dat) must load and restore the positive deviation
-        /// that live cross-association otherwise over-suppresses. Without a kij the arithmetic-mean cross
-        /// association drags the alcohol's activity below one (wrong sign); the fitted kij brings the
-        /// alcohol infinite-dilution activity coefficient back near the DECHEMA/Gmehling value. Proxy for
-        /// gamma^inf is the activity coefficient at x_alcohol = 0.01, 323.15 K, 1 atm liquid.
+        /// Bubble points of water + alcohol against measured isobaric data, with the shipped water/alcohol
+        /// kij (pcsaft_ip.dat) loaded the normal way. Ethanol + water at 101.3 kPa: Kamihama et al.,
+        /// J. Chem. Eng. Data 57 (2012) 339, doi:10.1021/je2008704. Water + methanol at 37.5 kPa (binary data,
+        /// no salt): Yang et al., J. Chem. Eng. Data 57 (2012) 2696, doi:10.1021/je300613v. Both from the
+        /// NIST TRC ThermoML archive. The tolerances (4 K in T, 0.06 in vapour mole fraction) cover the
+        /// largest deviation of the model over the whole data sets, so a point outside them signals a change
+        /// in the association term or in the kij.
         /// </summary>
         [Test]
-        public void WaterAlcoholKijRestoresPositiveDeviation()
+        public void WaterAlcoholBubblePointsAgainstMeasuredData()
+        {
+            // alcohol DB name, P (Pa), x_water, measured T (K), measured y_water
+            var cases = new (string a, double P, double xw, double T, double yw)[]
+            {
+                ("Ethanol", 101300.0, 1.0 - 0.090, 359.70, 1.0 - 0.441),
+                ("Ethanol", 101300.0, 1.0 - 0.570, 352.39, 1.0 - 0.688),
+                ("Ethanol", 101300.0, 1.0 - 0.901, 351.26, 1.0 - 0.900),
+                ("Methanol", 37500.0, 0.181, 316.24, 0.078),
+                ("Methanol", 37500.0, 0.550, 322.68, 0.231),
+                ("Methanol", 37500.0, 0.926, 337.78, 0.596),
+            };
+            var flash = new DWSIM.Thermodynamics.PropertyPackages.Auxiliary.FlashAlgorithms.NestedLoops();
+            foreach (var c in cases)
+            {
+                var pp = Package(fs => { fs.AddCompound("Water"); fs.AddCompound(c.a); });
+                var r = (object[])flash.Flash_PV(new[] { c.xw, 1.0 - c.xw }, c.P, 0.0, c.T, pp);
+                double T = Convert.ToDouble(r[4]);
+                double yw = ((double[])r[3])[0];
+                TestContext.WriteLine($"Water/{c.a} {c.P / 1000:F1} kPa x_w={c.xw:F3}: T={T:F2} K (exp {c.T:F2}), y_w={yw:F3} (exp {c.yw:F3})");
+                Assert.That(T, Is.EqualTo(c.T).Within(4.0), $"{c.a}: bubble temperature at x_w = {c.xw:F3}");
+                Assert.That(yw, Is.EqualTo(c.yw).Within(0.06), $"{c.a}: vapour composition at x_w = {c.xw:F3}");
+            }
+        }
+
+        /// <summary>
+        /// Water and the short alcohols mix in all proportions, so the liquid must be stable everywhere:
+        /// d ln a_alcohol / d x_alcohol > 0 at 298.15 K and 1 atm across the whole composition range. A
+        /// negative slope means the model splits the liquid into two phases, which is what a water/alcohol
+        /// kij that is too large does once the association chemical potential is consistent.
+        /// </summary>
+        [Test]
+        public void WaterShortAlcoholsAreMiscibleAt298K()
         {
             var st = DWSIM.Thermodynamics.PropertyPackages.State.Liquid;
-            double T = 323.15;
-            // alcohol DB name, experimental gamma_alcohol^inf in water, accepted band
-            var cases = new (string a, double gExp, double lo, double hi)[]
+            foreach (var a in new[] { "Methanol", "Ethanol", "1-propanol" })
             {
-                ("Methanol", 1.8, 1.4, 2.3),
-                ("Ethanol", 5.0, 4.0, 6.5),
-                ("1-propanol", 14.0, 11.0, 18.0),
-            };
-            foreach (var (a, gExp, lo, hi) in cases)
-            {
-                // Package built the normal way, so the kij comes from the shipped pcsaft_ip.dat, not injected.
                 var pp = Package(fs => { fs.AddCompound("Water"); fs.AddCompound(a); });
-                double lnApure = pp.DW_CalcLnFugCoeff(new[] { 0.0, 1.0 }, T, 101325.0, st)[1];
-                double gA = Math.Exp(pp.DW_CalcLnFugCoeff(new[] { 0.99, 0.01 }, T, 101325.0, st)[1] - lnApure);
-                TestContext.WriteLine($"Water/{a}: gamma^inf={gA:F2} (exp ~{gExp}, band {lo}-{hi})");
-                Assert.That(gA, Is.GreaterThan(1.0), $"{a}: kij must restore a positive deviation (gamma^inf > 1)");
-                Assert.That(gA, Is.InRange(lo, hi), $"{a}: gamma^inf must be near the experimental value");
+                double prev = double.NaN, minSlope = double.MaxValue;
+                for (int i = 1; i <= 49; i++)
+                {
+                    double xa = 0.02 * i;
+                    double lna = Math.Log(xa) + pp.DW_CalcLnFugCoeff(new[] { 1.0 - xa, xa }, 298.15, 101325.0, st)[1];
+                    if (!double.IsNaN(prev)) minSlope = Math.Min(minSlope, (lna - prev) / 0.02);
+                    prev = lna;
+                }
+                TestContext.WriteLine($"Water/{a}: min d ln a/dx = {minSlope:F3}");
+                Assert.That(minSlope, Is.GreaterThan(0.0), $"{a}: water + {a} must not split into two liquids at 298.15 K");
             }
         }
 
