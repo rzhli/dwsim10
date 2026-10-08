@@ -34,17 +34,17 @@ The degree of AI involvement is governed by a single integer parameter called th
 
 Levels 1–3 are recommended for most applications: the ANN accelerates convergence without sacrificing physical accuracy, because the iterative solver still enforces the rigorous thermodynamic model when possible. Levels 4 and 5 trade accuracy for speed and are intended for preliminary screening studies.
 
-#### Solution Provider Cascade
+#### Solution Provider Cascade {#sec:convenhancer_cascade}
 
 When ACE is asked for an estimate or solution it queries a chain of *solution providers* in priority order. The first provider that returns a non-null result is accepted; subsequent providers are not called. The default priority order is:
 
-1.  **Online Server** – retrieves a prediction from the cloud model server (requires internet access and authentication).
+1.  **Online Server**: retrieves a prediction from the cloud model server (requires internet access and authentication).
 
-2.  **Local ANN** – evaluates a locally stored TensorFlow model trained on data collected on the current machine.
+2.  **Local ANN**: evaluates a locally stored TensorFlow model trained on data collected on the current machine.
 
-3.  **NeqSim** – delegates the calculation to the NeqSim  thermodynamics library.
+3.  **NeqSim**: delegates the calculation to the NeqSim  thermodynamics library.
 
-4.  **ThermoPack** – delegates to the ThermoPack  equation-of-state library.
+4.  **ThermoPack**: delegates to the ThermoPack  equation-of-state library.
 
 Each provider can be independently enabled or disabled in the settings form. If all enabled providers return null, the standard solver proceeds without an initial estimate.
 
@@ -276,7 +276,7 @@ When ACE needs to run inference it queries the local model store and selects the
 
 - Among all qualifying models, the one with the lowest test-set MSE is selected.
 
-If no qualifying model exists, the provider returns null and the next provider in the cascade is queried (Section ).
+If no qualifying model exists, the provider returns null and the next provider in the cascade is queried (Section [3.4](#sec:convenhancer_cascade)).
 
 Compound names are sorted alphabetically before constructing both the training feature vector and the inference input vector, ensuring that a model is agnostic to the component ordering used in the flowsheet.
 
@@ -354,7 +354,7 @@ where `<type>` is the operation type (e.g. `PT`), `<package>` is the property p
 
 4.  **Single-phase outputs not modelled**: the networks predict per-component flows in up to three phases (V, L1, L2). Single-phase limiting cases (pure vapour or pure liquid) are handled by the material-balance correction, but the network is not explicitly trained to recognise phase boundaries.
 
-5.  **Three-phase systems**: the current trainer generates a second liquid phase output, but convergence of three-phase equilibria by the iterative solver – even with an improved estimate – remains challenging for near-critical or highly non-ideal mixtures.
+5.  **Three-phase systems**: the current trainer generates a second liquid phase output, but convergence of three-phase equilibria by the iterative solver, even with an improved estimate, remains challenging for near-critical or highly non-ideal mixtures.
 
 6.  **TensorFlow session overhead**: the first inference call after start-up incurs an additional latency while the TensorFlow computational graph is deserialised and loaded; subsequent calls use a cached session.
 
