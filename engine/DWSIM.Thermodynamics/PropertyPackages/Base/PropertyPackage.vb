@@ -2804,6 +2804,37 @@ Namespace PropertyPackages
             Return CalculateEquilibrium(calctype, val1, val2, RET_VMOL(Phase.Mixture), Nothing, initialestimate)
         End Function
 
+        ''' <summary>
+        ''' Throws when the phases of a PT flash result do not add up to the feed: such a result is no
+        ''' equilibrium state, and passing it on puts streams with a broken mass balance in the flowsheet.
+        ''' </summary>
+        ''' <remarks>
+        ''' Applies to the packages whose flash returns mole fractions on the feed basis (equations of state,
+        ''' corresponding states, Chao-Seader, activity coefficient and vapour pressure models). The tolerance is
+        ''' far above the convergence error of a flash (1E-5 or less) and far below a broken result.
+        ''' </remarks>
+        Private Sub CheckPTResultBalance(Vz As Double(), result As Object, T As Double, P As Double)
+            If Not (PackageType = PackageType.EOS OrElse PackageType = PackageType.CorrespondingStates OrElse PackageType = PackageType.ChaoSeader OrElse
+                    PackageType = PackageType.ActivityCoefficient OrElse PackageType = PackageType.VaporPressure) Then Exit Sub
+            Dim res As Object() = TryCast(result, Object())
+            If res Is Nothing OrElse res.Length < 9 Then Exit Sub
+            Dim phases = New Integer()() {New Integer() {0, 2}, New Integer() {1, 3}, New Integer() {5, 6}, New Integer() {7, 8}}
+            Dim maxdev As Double = 0.0
+            For i As Integer = 0 To Vz.Length - 1
+                Dim s As Double = 0.0
+                For Each ph In phases
+                    Dim f As Double = Convert.ToDouble(res(ph(0)))
+                    Dim w As Double() = TryCast(res(ph(1)), Double())
+                    If f <> 0.0 AndAlso w IsNot Nothing AndAlso w.Length = Vz.Length Then s += f * w(i)
+                Next
+                maxdev = Math.Max(maxdev, Math.Abs(s - Vz(i)))
+            Next
+            If maxdev > 0.001 OrElse Double.IsNaN(maxdev) Then
+                Throw New Exception(String.Format("{0}: the PT flash at T = {1} K and P = {2} Pa returned phases that do not add up to the feed (largest mole fraction error {3}).",
+                                                  ComponentName, T, P, maxdev.ToString("G3")))
+            End If
+        End Sub
+
         Public Overridable Sub DW_CalcEquilibrium(ByVal spec1 As FlashSpec, ByVal spec2 As FlashSpec)
 
             Dim IObj As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
@@ -2883,6 +2914,8 @@ Namespace PropertyPackages
                             IObj?.Paragraphs.Add("Calling PT Flash calculation routine...")
 
                             result = Me.FlashBase.Flash_PT(RET_VMOL(Phase.Mixture), P, T, Me)
+
+                            CheckPTResultBalance(RET_VMOL(Phase.Mixture), result, T, P)
 
                             xl = result(0)
                             xv = result(1)
@@ -10729,6 +10762,14 @@ Final3:
 
         End Function
 
+        ''' <summary>
+        ''' Binary interaction parameters at the given temperature (K) and pressure (Pa). Packages whose kij
+        ''' depend on T or P override this; the others return RET_VKij().
+        ''' </summary>
+        Public Overridable Function RET_VKijAt(T As Double, P As Double) As Double(,)
+            Return RET_VKij()
+        End Function
+
         Public Function RET_VCSACIDS()
 
             Dim val(Me.CurrentMaterialStream.Phases(0).Compounds.Count - 1) As String
@@ -14583,6 +14624,12 @@ Final3:
                     'pp.m_pr.InteractionParameters.Clear()
                     For Each xel As XElement In (From xel2 As XElement In data Select xel2 Where xel2.Name = "InteractionParameters").FirstOrDefault.Elements.ToList
                         Dim ip As New Auxiliary.PRSV2_IPData() With {.id1 = xel.@Compound1, .id2 = xel.@Compound2, .kij = Double.Parse(xel.@Value, ci)}
+                        If xel.@kji IsNot Nothing Then
+                            ip.kji = Double.Parse(xel.@kji, ci)
+                        Else
+                            ' written before kji was saved: keep the one the package already holds for the pair
+                            ip.kji = pp.RET_KIJ2(xel.@Compound1, xel.@Compound2)
+                        End If
                         Dim dic As New Dictionary(Of String, Auxiliary.PRSV2_IPData)
                         dic.Add(xel.@Compound2, ip)
                         If Not pp.m_pr.InteractionParameters.ContainsKey(xel.@Compound1) Then
@@ -15053,8 +15100,10 @@ Final3:
 
             If CurrentMaterialStream Is Nothing Then Return True
 
-            Return CurrentMaterialStream.Phases(0).Compounds.ContainsKey(compound1) AndAlso
-                   CurrentMaterialStream.Phases(0).Compounds.ContainsKey(compound2)
+            ' the PRSV2 packages key their parameters in lower case
+            Dim names = CurrentMaterialStream.Phases(0).Compounds.Keys
+            Return names.Any(Function(n) String.Equals(n, compound1, StringComparison.OrdinalIgnoreCase)) AndAlso
+                   names.Any(Function(n) String.Equals(n, compound2, StringComparison.OrdinalIgnoreCase))
 
         End Function
 
@@ -15163,7 +15212,8 @@ Final3:
                                 If ShouldPersist(kvp.Key, kvp2.Key) Then
                                     .Item(.Count - 1).Add(New XElement("InteractionParameter", New XAttribute("Compound1", kvp.Key),
                                                                     New XAttribute("Compound2", kvp2.Key),
-                                                                    New XAttribute("Value", kvp2.Value.kij.ToString(ci))))
+                                                                    New XAttribute("Value", kvp2.Value.kij.ToString(ci)),
+                                                                    New XAttribute("kji", kvp2.Value.kji.ToString(ci))))
                                 End If
                             Next
                         Next

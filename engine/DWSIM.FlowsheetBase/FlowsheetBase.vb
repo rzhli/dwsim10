@@ -3514,7 +3514,7 @@ Imports DWSIM.ExtensionMethods
                                                                                    FlowsheetSurface.DrawingObjects Where go.Name = objToID).SingleOrDefault
                                         If objTo Is Nothing Then obj = (From go As IGraphicObject In
                                                                                     FlowsheetSurface.DrawingObjects Where go.Name = xel2.@AttachedToObjID).SingleOrDefault
-                                        If Not obj Is Nothing And Not objTo Is Nothing Then FlowsheetSurface.ConnectObject(CType(obj, GraphicObject), CType(objTo, GraphicObject), -1, CInt(xel2.@AttachedToConnIndex))
+                                        If Not obj Is Nothing And Not objTo Is Nothing Then RestoreEnergyConnectorLink(obj, objTo, Sub() FlowsheetSurface.ConnectObject(CType(obj, GraphicObject), CType(objTo, GraphicObject), -1, CInt(xel2.@AttachedToConnIndex)))
                                     End If
                                 End If
                             Next
@@ -3525,6 +3525,18 @@ Imports DWSIM.ExtensionMethods
                 excs.Add(New Exception("Error Loading Flowsheet Object Connection Information", ex))
             End Try
         Next
+
+    End Sub
+
+    ''' <summary>
+    ''' Restores the link from a unit operation's EnergyConnector to an energy stream through
+    ''' <see cref="GraphicsSurface.RestoreEnergyConnectorLink"/>; a link the unit no longer accepts is skipped
+    ''' with a warning and the load goes on.
+    ''' </summary>
+    Private Sub RestoreEnergyConnectorLink(obj As IGraphicObject, objTo As IGraphicObject, connect As Action)
+
+        Dim warning = GraphicsSurface.RestoreEnergyConnectorLink(obj, objTo, connect)
+        If warning IsNot Nothing Then ShowMessage(warning, IFlowsheet.MessageType.Warning)
 
     End Sub
 
@@ -4205,6 +4217,19 @@ Label_00CC:
         For Each pp In plist
             AvailablePropPacks.Add(DirectCast(pp, CapeOpen.ICapeIdentification).ComponentName, pp)
         Next
+
+        'Reaktoro (Aqueous Electrolytes) lives in an assembly this one does not reference: load it by name,
+        'skip it if it is missing.
+        Try
+            Dim rkType = Type.GetType("DWSIM.Thermodynamics.ReaktoroPropertyPackage.ReaktoroPropertyPackage, DWSIM.Thermodynamics.ReaktoroPropertyPackage", False)
+            If rkType IsNot Nothing Then
+                Dim rkpp = DirectCast(Activator.CreateInstance(rkType), IPropertyPackage)
+                Dim rkname = DirectCast(rkpp, CapeOpen.ICapeIdentification).ComponentName
+                If Not AvailablePropPacks.ContainsKey(rkname) Then AvailablePropPacks.Add(rkname, rkpp)
+            End If
+        Catch ex As Exception
+            Logging.Logger.LogError("Property Package Loading (Reaktoro)", ex)
+        End Try
 
         Dim otherpps = SharedClasses.Utility.LoadAdditionalPropertyPackages()
 
@@ -5659,7 +5684,7 @@ Label_00CC:
                                                         obj = (From go As GraphicObject In GraphicObjects.Values Where go.Name = xel2.@AttachedToObjID).SingleOrDefault
                                                     End If
                                                     If Not obj Is Nothing And Not objTo Is Nothing Then
-                                                        ConnectObject(obj, objTo, -1, xel2.@AttachedToConnIndex)
+                                                        RestoreEnergyConnectorLink(obj, objTo, Sub() ConnectObject(obj, objTo, -1, xel2.@AttachedToConnIndex))
                                                     End If
                                                 End If
                                             End If

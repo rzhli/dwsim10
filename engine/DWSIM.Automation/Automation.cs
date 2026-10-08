@@ -286,6 +286,18 @@ namespace DWSIM.Automation
                 AvailablePropertyPackages.Add(((ICapeIdentification)pp).ComponentName, pp);
             }
 
+            // Reaktoro (Aqueous Electrolytes)
+            try
+            {
+                var rkpp = new global::DWSIM.Thermodynamics.ReaktoroPropertyPackage.ReaktoroPropertyPackage();
+                if (!AvailablePropertyPackages.ContainsKey(rkpp.ComponentName))
+                    AvailablePropertyPackages.Add(rkpp.ComponentName, rkpp);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error adding the Reaktoro property package: " + ex.Message);
+            }
+
             var otherpps = SharedClasses.Utility.LoadAdditionalPropertyPackages();
 
             foreach (var pp in otherpps)
@@ -391,7 +403,6 @@ namespace DWSIM.Automation
             var directories = new List<string>
             {
                 Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "avalonia"),
                 Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "extenders"),
                 Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "ppacks"),
                 Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "unitops"),
@@ -401,6 +412,11 @@ namespace DWSIM.Automation
                 Directory.GetCurrentDirectory(),
                 Path.Combine(Directory.GetCurrentDirectory(), "extenders")
             };
+
+            // the avalonia folder holds .NET 8+ builds; a .NET Framework process that loaded them
+            // would bind their dependencies to the framework facades and fail
+            if (Environment.Version.Major >= 5)
+                directories.Insert(1, Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "avalonia"));
 
             foreach (var dir in directories)
             {

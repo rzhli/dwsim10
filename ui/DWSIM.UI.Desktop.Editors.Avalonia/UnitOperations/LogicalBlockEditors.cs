@@ -18,6 +18,30 @@ namespace DWSIM.UI.Desktop.Editors
 {
 
     /// <summary>
+    /// The caption of a property in the pickers of the steady-state tools (Adjust, Spec, Sensitivity
+    /// Analysis, Optimizer). A property the object only uses in dynamic simulations, one it added
+    /// with AddDynamicProperty, gets " (dynamics only)" after its name. The property ID is untouched.
+    /// </summary>
+    public static class SteadyStatePropertyCaption
+    {
+
+        public const string DynamicsOnlySuffix = " (dynamics only)";
+
+        public static string For(ISimulationObject obj, string propertyId, string caption)
+        {
+            if (string.IsNullOrEmpty(caption)) caption = propertyId;
+            try
+            {
+                if (obj != null && !string.IsNullOrEmpty(propertyId) && obj.IsDynamicProperty(propertyId))
+                    return caption + DynamicsOnlySuffix;
+            }
+            catch (Exception) { }
+            return caption;
+        }
+
+    }
+
+    /// <summary>
     /// The variable a logical block points at: an object, one of its properties and the value it
     /// currently holds, which is the block both the Adjust and the Spec editors repeat.
     /// </summary>
@@ -67,6 +91,10 @@ namespace DWSIM.UI.Desktop.Editors
             var tags = objects.Select(x => x.GraphicObject.Tag).ToList();
             var kind = writable ? PropertyType.WR : PropertyType.ALL;
 
+            // Adjust and Spec solve in steady state, so they mark the dynamics-only properties;
+            // the controllers that share this picker run in dynamics and list them plainly
+            var steadyState = block is Adjust || block is Spec;
+
             // the property codes, in picker order, and the readable names shown in their place
             var properties = new List<string>();
             var propertyNames = new List<string>();
@@ -103,7 +131,8 @@ namespace DWSIM.UI.Desktop.Editors
                     var name = flowsheet.GetTranslatedString(p);
                     string unit = null;
                     try { unit = obj.GetPropertyUnit(p, su); } catch (Exception) { }
-                    propertyNames.Add(string.IsNullOrEmpty(unit) ? name : name + " (" + unit + ")");
+                    var caption = string.IsNullOrEmpty(unit) ? name : name + " (" + unit + ")";
+                    propertyNames.Add(steadyState ? SteadyStatePropertyCaption.For(obj, p, caption) : caption);
                 }
             }
 

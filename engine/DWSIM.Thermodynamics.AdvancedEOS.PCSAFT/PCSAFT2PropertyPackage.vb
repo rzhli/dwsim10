@@ -49,6 +49,9 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
         Public compound2 As String = ""
         Public casno2 As String = ""
         Public kij As Double = 0.0#
+        ' Optional linear temperature dependence: kij(T) = kij + kij_T * (T - 298.15 K). Zero, the default and
+        ' the value of every pcsaft_ip.dat row without a sixth column, keeps the constant kij.
+        <FieldOptional()> <FieldNullValue(0.0#)> Public kij_T As Double = 0.0#
 
         Public Function Clone() As Object Implements System.ICloneable.Clone
 
@@ -59,6 +62,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 .casno1 = Me.casno1
                 .casno2 = Me.casno2
                 .kij = Me.kij
+                .kij_T = Me.kij_T
             End With
             Return newclass
         End Function
@@ -718,7 +722,13 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             ' corrected to constant pressure. Central differencing matters where the change in one
             ' component's lnphi from another's mole number is tiny, e.g. the solvent's dependence on a
             ' trace polymer, which a one-sided difference resolves poorly.
-            Dim delta As Double = 0.000001
+            ' With two or more associating compounds the association chemical potential is itself a numerical
+            ' derivative (mu_AssNumeric), so the composition step is larger to keep its round-off out of D.
+            Dim nAssocComp As Integer = 0
+            For Each ccp In DW_GetConstantProperties()
+                If IsAssociating(ccp.CAS_Number) Then nAssocComp += 1
+            Next
+            Dim delta As Double = If(nAssocComp >= 2, 0.0001, 0.000001)
             For j = 0 To n
                 Dim useCentral As Boolean = Vx(j) > 2.0 * delta
                 Dim nplus(n), nminus(n) As Double
@@ -888,9 +898,44 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             Return K
         End Function
 
+        ''' <summary>
+        ''' The associationparams string of a two-site-type (donor/acceptor) compound with association volume
+        ''' <paramref name="kappa"/> and energy <paramref name="eps"/> (K), in the form the parameter tables use.
+        ''' </summary>
+        Public Shared Function AssociationMatrices(kappa As Double, eps As Double) As String
+            Dim ci = Globalization.CultureInfo.InvariantCulture
+            Dim k As String = kappa.ToString(ci), e As String = eps.ToString(ci)
+            Return "2" & Environment.NewLine & $"[0 {k}; {k} 0]" & Environment.NewLine & $"[0 {e}; {e} 0]"
+        End Function
+
+        ''' <summary>
+        ''' Largest entry of the association volume and energy matrices of an associationparams string
+        ''' ("n", "[kappa matrix]", "[epsilon matrix]"); zero when the string defines no association.
+        ''' </summary>
+        Public Shared Sub AssociationFromMatrices(assocparam As String, ByRef kappa As Double, ByRef eps As Double)
+            kappa = 0.0 : eps = 0.0
+            If String.IsNullOrWhiteSpace(assocparam) Then Return
+            Dim lines = assocparam.Split(New String() {vbCrLf, vbLf, vbCr}, StringSplitOptions.RemoveEmptyEntries)
+            If lines.Length < 3 Then Return
+            kappa = MatrixMax(lines(1))
+            eps = MatrixMax(lines(2))
+        End Sub
+
+        Private Shared Function MatrixMax(m As String) As Double
+            Dim mx As Double = 0.0, v As Double
+            For Each item In m.Trim().Trim("["c, "]"c).Split(New Char() {";"c, " "c}, StringSplitOptions.RemoveEmptyEntries)
+                If Double.TryParse(item, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture, v) Then mx = Math.Max(mx, v)
+            Next
+            Return mx
+        End Function
+
+        ' Read from the association matrices, the data the calculation itself uses, so a compound whose
+        ' association was entered in an editor (which writes only the matrices) is seen as associating too.
         Private Function IsAssociating(cas As String) As Boolean
-            Return CompoundParameters.ContainsKey(cas) AndAlso
-                   CompoundParameters(cas).kAiBi > 0.0 AndAlso CompoundParameters(cas).epsilon2 > 0.0
+            If Not CompoundParameters.ContainsKey(cas) Then Return False
+            Dim kappa, eps As Double
+            AssociationFromMatrices(CompoundParameters(cas).associationparams, kappa, eps)
+            Return kappa > 0.0 AndAlso eps > 0.0
         End Function
 
         ' The Lee-Kesler caloric route uses Tc/Pc/omega corresponding states: it cannot represent the
@@ -1315,7 +1360,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                 For Each kvp2 As KeyValuePair(Of String, PCSIP) In kvp.Value
                     If (Not (Me.CurrentMaterialStream) Is Nothing) Then
                         If (casnos.Contains(kvp.Key) And casnos.Contains(kvp2.Key)) Then
-                            data((data.Count - 1)).Add(New XElement("InteractionParameter", New XAttribute("Compound1", kvp2.Value.compound1), New XAttribute("Compound2", kvp2.Value.compound2), New XAttribute("CAS1", kvp.Key), New XAttribute("CAS2", kvp2.Key), New XAttribute("Value", kvp2.Value.kij.ToString(ci))))
+                            data((data.Count - 1)).Add(New XElement("InteractionParameter", New XAttribute("Compound1", kvp2.Value.compound1), New XAttribute("Compound2", kvp2.Value.compound2), New XAttribute("CAS1", kvp.Key), New XAttribute("CAS2", kvp2.Key), New XAttribute("Value", kvp2.Value.kij.ToString(ci)), If(kvp2.Value.kij_T <> 0.0, New XAttribute("ValueT", kvp2.Value.kij_T.ToString(ci)), Nothing)))
                         End If
                     End If
                 Next
@@ -1325,7 +1370,7 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
             For Each kvp As KeyValuePair(Of String, PCSParam) In CompoundParameters
                 If (Not (Me.CurrentMaterialStream) Is Nothing) Then
                     If casnos.Contains(kvp.Key) Then
-                        data((data.Count - 1)).Add(New XElement("CompoundParameterSet", New XAttribute("Compound", kvp.Value.compound), New XAttribute("CAS_ID", kvp.Value.casno), New XAttribute("MW", kvp.Value.mw.ToString(ci)), New XAttribute("m", kvp.Value.m.ToString(ci)), New XAttribute("sigma", kvp.Value.sigma.ToString(ci)), New XAttribute("epsilon_k", kvp.Value.epsilon.ToString(ci)), New XAttribute("assocparam", kvp.Value.associationparams.Replace(System.Environment.NewLine, "|")), New XAttribute("m_over_M", kvp.Value.m_over_M.ToString(ci)), New XAttribute("scheme", If(kvp.Value.scheme, "")), New XAttribute("copolymer", If(kvp.Value.copolymer, "")), New XAttribute("coseq", If(kvp.Value.coseq, ""))))
+                        data((data.Count - 1)).Add(New XElement("CompoundParameterSet", New XAttribute("Compound", kvp.Value.compound), New XAttribute("CAS_ID", kvp.Value.casno), New XAttribute("MW", kvp.Value.mw.ToString(ci)), New XAttribute("m", kvp.Value.m.ToString(ci)), New XAttribute("sigma", kvp.Value.sigma.ToString(ci)), New XAttribute("epsilon_k", kvp.Value.epsilon.ToString(ci)), New XAttribute("assocparam", kvp.Value.associationparams.Replace(System.Environment.NewLine, "|")), New XAttribute("kAiBi", kvp.Value.kAiBi.ToString(ci)), New XAttribute("epsilon_AiBi", kvp.Value.epsilon2.ToString(ci)), New XAttribute("m_over_M", kvp.Value.m_over_M.ToString(ci)), New XAttribute("scheme", If(kvp.Value.scheme, "")), New XAttribute("copolymer", If(kvp.Value.copolymer, "")), New XAttribute("coseq", If(kvp.Value.coseq, ""))))
                     End If
                 End If
             Next
@@ -1359,10 +1404,12 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                     .casno1 = xel.Attribute("CAS1").Value
                     .casno2 = xel.Attribute("CAS2").Value
                     .kij = Double.Parse(xel.Attribute("Value").Value, ci)
+                    Dim aT = xel.Attribute("ValueT") : If aT IsNot Nothing Then .kij_T = Double.Parse(aT.Value, ci)
                 End With
 
+                ' The inner dictionary is keyed by the second compound (CAS2), as in ReadParameters.
                 Dim dic As Dictionary(Of String, PCSIP) = New Dictionary(Of String, PCSIP)
-                dic.Add(xel.Attribute("CAS1").Value, ip)
+                dic.Add(xel.Attribute("CAS2").Value, ip)
 
                 If Not Me.InteractionParameters.ContainsKey(xel.Attribute("CAS1").Value) Then
                     Me.InteractionParameters.Add(xel.Attribute("CAS1").Value, dic)
@@ -1385,6 +1432,15 @@ Namespace DWSIM.Thermodynamics.AdvancedEOS
                     .sigma = Double.Parse(xel.Attribute("sigma").Value, ci)
                     .epsilon = Double.Parse(xel.Attribute("epsilon_k").Value, ci)
                     .associationparams = xel.Attribute("assocparam").Value.Replace("|", System.Environment.NewLine)
+                    ' The association strength and energy follow the association matrices, which an editor may
+                    ' have changed without updating them; files saved without matrices keep the stored values.
+                    If Not String.IsNullOrWhiteSpace(.associationparams) Then
+                        AssociationFromMatrices(.associationparams, .kAiBi, .epsilon2)
+                    Else
+                        Dim aK = xel.Attribute("kAiBi"), aE = xel.Attribute("epsilon_AiBi")
+                        If aK IsNot Nothing Then .kAiBi = Double.Parse(aK.Value, ci)
+                        If aE IsNot Nothing Then .epsilon2 = Double.Parse(aE.Value, ci)
+                    End If
                     ' Newer fields (absent in files saved before they existed): polymer m/M, association
                     ' scheme, and the copolymer definition, so a copolymer round-trips through a save.
                     Dim aMoM = xel.Attribute("m_over_M") : If aMoM IsNot Nothing Then .m_over_M = Double.Parse(aMoM.Value, ci)

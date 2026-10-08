@@ -166,11 +166,6 @@ Namespace UnitOperations
             Return obj
         End Function
 
-        ''' <summary>Creates a deep copy via JSON serialization.</summary>
-        Public Overrides Function CloneJSON() As Object
-            Return Newtonsoft.Json.JsonConvert.DeserializeObject(Of Flowsheet)(Newtonsoft.Json.JsonConvert.SerializeObject(Me))
-        End Function
-
         ''' <summary>Initialises compound mappings between parent and sub-flowsheet using name matching.</summary>
         Public Sub InitializeMappings()
 
@@ -742,7 +737,13 @@ Label_00CC:
                                                                                         fs.GraphicObjects.Values Where go.Name = objToID).SingleOrDefault
                                         If objTo Is Nothing Then obj = (From go As GraphicObject In
                                                                                         fs.GraphicObjects.Values Where go.Name = xel2.@AttachedToObjID).SingleOrDefault
-                                        If Not obj Is Nothing And Not objTo Is Nothing Then fs.ConnectObjects(obj, objTo, -1, xel2.@AttachedToConnIndex)
+                                        If Not obj Is Nothing And Not objTo Is Nothing Then
+                                            Dim warning = Drawing.SkiaSharp.GraphicsSurface.RestoreEnergyConnectorLink(obj, objTo, Sub() fs.ConnectObjects(obj, objTo, -1, xel2.@AttachedToConnIndex))
+                                            If warning IsNot Nothing Then
+                                                Dim target = If(mainfs, fs)
+                                                target.ShowMessage(warning, IFlowsheet.MessageType.Warning)
+                                            End If
+                                        End If
                                     End If
                                 End If
                             Next

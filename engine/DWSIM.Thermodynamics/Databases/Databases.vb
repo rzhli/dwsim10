@@ -237,7 +237,8 @@ Namespace Databases
                         Case "ChaoSeaderAcentricFactor"
                             cp.Chao_Seader_Acentricity = Double.Parse(node2.Attributes("value").Value, nf)
                         Case "ChaoSeaderSolubilityParameter"
-                            cp.Chao_Seader_Solubility_Parameter = Double.Parse(node2.Attributes("value").Value, nf) * 0.238846 / 1000000.0
+                            '(J/m3)^0.5 to (cal/cm3)^0.5, the unit of dwsim.xml, of the petroleum characterization and of the compound editor
+                            cp.Chao_Seader_Solubility_Parameter = Double.Parse(node2.Attributes("value").Value, nf) * Math.Sqrt(0.238846 / 1000000.0)
                         Case "ChaoSeaderLiquidVolume"
                             cp.Chao_Seader_Liquid_Molar_Volume = Double.Parse(node2.Attributes("value").Value, nf) * 1000
                         Case "CAS"
@@ -1884,6 +1885,13 @@ Namespace Databases
                                 .Ion_CpAq_c = Double.Parse(node2.InnerText, nf)
                         End Select
                     Next
+
+                    ' The formula comes before the charge in the file, so its elements were
+                    ' counted before the charge was known; count them again now that it is.
+                    Try
+                        .UpdateElements()
+                    Catch ex As Exception
+                    End Try
 
                     .ID = i
                     .IsHYPO = False

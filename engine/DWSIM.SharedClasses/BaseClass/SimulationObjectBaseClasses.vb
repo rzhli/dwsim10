@@ -297,7 +297,7 @@ Namespace UnitOperations
 
             If col1.ContainsKey(pname) Then col1.Remove(pname)
             If col2.ContainsKey(pname) Then col2.Remove(pname)
-            If col1.ContainsKey(pname) Then col3.Remove(pname)
+            If col3.ContainsKey(pname) Then col3.Remove(pname)
             If col4.ContainsKey(pname) Then col4.Remove(pname)
 
         End Sub
@@ -1045,7 +1045,14 @@ Namespace UnitOperations
 
         Public MustOverride Function CloneXML() As Object Implements ISimulationObject.CloneXML
 
-        Public MustOverride Function CloneJSON() As Object Implements ISimulationObject.CloneJSON
+        ''' <summary>
+        ''' Returns a deep copy of this object made through the XML serialization, the same copy <see cref="CloneXML"/> returns.
+        ''' The name is kept for compatibility.
+        ''' </summary>
+        ''' <returns>The copy returned by <see cref="CloneXML"/>.</returns>
+        Public Overridable Function CloneJSON() As Object Implements ISimulationObject.CloneJSON
+            Return CloneXML()
+        End Function
 
         Public MustOverride ReadOnly Property MobileCompatible As Boolean Implements ISimulationObject.MobileCompatible
 

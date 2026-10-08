@@ -43,6 +43,8 @@ namespace DWSIM.FluentAPI.Tests
 
         [Test] public void AMixerBalancesMassAndEnergy() => MixerTest.Run();
 
+        [Test] public void AFeedTakesCompoundFlowsByMassAndByMoles() => CompoundFlowsTest.Run();
+
         [Test] public void ABroydenRecycleConvergesLikeSubstitution() => RecycleBroydenTest.Run();
 
         [Test] public void ABroydenRecycleLeavesASubstitutionRecycleToConverge() => RecycleBroydenTest.RunBesideSubstitution();
@@ -92,6 +94,11 @@ namespace DWSIM.FluentAPI.Tests
         [Test] public void AnAdiabaticCstrHoldsItsSteadyState() => CstrDynamicsTest.Run();
         [Test] public void AJacketedCstrHoldsItsSteadyState() => CstrDynamicsTest.RunJacket();
         [Test] public void ACstrDrawnEmptyStaysWhereItWas() => CstrDynamicsTest.RunDrain();
+        [Test] public void AnMpcMovesTheSameWithUnmodelledDisturbances() => MpcFeedforwardTest.RunCompatibility();
+        [Test] public void AnMpcFeedforwardOnOneTankFollowsTheRampEstimate() => MpcFeedforwardTest.RunSingleTank();
+        [Test] public void AnMpcFeedforwardHoldsTheLevelBehindALag() => MpcFeedforwardTest.RunTwoTanks();
+        [Test] public void AnMpcKeepsItsDisturbanceModelsOnSaveAndLoad() => MpcFeedforwardTest.RunSaveAndLoad();
+        [Test] public void AnMpcSkipsVariablesItCannotRead() => MpcFeedforwardTest.RunMissingObjects();
         [Test, Category(Slow)] public void ADynamicColumnRidesAFeedStep() => DynamicsColumnCaseTest.Run();
         [Test, Category(Slow)] public void AColumnStartsUpFromEmpty() => DynamicsColumnStartupCaseTest.Run();
         [Test, Category(Slow)] public void AColumnShutsDown() => DynamicsColumnShutdownCaseTest.Run();

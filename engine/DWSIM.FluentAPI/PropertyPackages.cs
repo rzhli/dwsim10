@@ -86,8 +86,6 @@ namespace DWSIM.Automation.FluentAPI
             public const string Glycol = "Glycol (NRTL)";
             /// <summary>H2O-HCl Pitzer model for hydrogen-chloride aqueous systems.</summary>
             public const string HCl = "H2O-HCl (Pitzer)";
-            /// <summary>Kent-Eisenberg model for amine-CO2-H2S equilibrium (gas-treating units).</summary>
-            public const string KentEisenberg = "Kent-Eisenberg";
             /// <summary>Sour-water stripper model - H2O / NH3 / H2S / CO2 weak-electrolyte equilibrium.</summary>
             public const string SourWater = "Sour Water";
 
@@ -114,21 +112,26 @@ namespace DWSIM.Automation.FluentAPI
             /// <summary>ThermoPack SRK with cubic-plus-association term (water/alcohols).</summary>
             public const string SRKCPA = "SRK-CPA";
 
-            /// <summary>CCUS Carbon Capture - eNRTL for CO2 capture with MEA, DEA, MDEA, PZ, AMP.</summary>
+            /// <summary>CCUS Carbon Capture - eNRTL with chemical equilibrium for CO2 capture with MEA, DEA, MDEA, PZ and MDEA + PZ.</summary>
             public const string CarbonCapture = "CO2 Capture (eNRTL)";
             /// <summary>CCUS CO2 Transport - Span-Wagner EOS for pure CO2, PR for CO2-rich mixtures.</summary>
             public const string CO2Transport = "CO2 Transport (Span-Wagner/PR)";
             /// <summary>CCUS CO2 Storage - eNRTL/Duan-Sun for CO2 geological storage in saline aquifers.</summary>
             public const string CO2Storage = "CO2 Storage (eNRTL/Duan-Sun)";
 
+            /// <summary>Ionic liquids as physical solvents - PC-SAFT with fitted parameters for 29 ionic liquids and their
+            /// binary parameters with CO2, CH4, N2, H2, H2S and water.</summary>
+            public const string IonicLiquids = "Ionic Liquids (PC-SAFT)";
+
             /// <summary>Every Plus property-package name as a flat list (electrolyte + ThermoPack suites).</summary>
             public static IReadOnlyList<string> All => new[]
             {
                 ElectrolyteNRTL, ExtendedUNIQUAC, ReaktoroAqueous, Glycol, HCl,
-                KentEisenberg, SourWater,
+                SourWater,
                 MBWR19, MBWR32, NISTMEOS, PatelTeja, PCPSAFT, PRCPA,
                 SAFTVRMie, SAFTVRQMie, SchmidtWensel, SPCSAFT, SRKCPA,
-                CarbonCapture, CO2Transport, CO2Storage
+                CarbonCapture, CO2Transport, CO2Storage,
+                IonicLiquids
             };
         }
 

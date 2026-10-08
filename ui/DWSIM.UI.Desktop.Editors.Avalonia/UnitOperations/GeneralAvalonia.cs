@@ -207,6 +207,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             var tags = objs.Select(x => x.GraphicObject.Tag).ToList();
             var props = new List<string>();
+            var captions = new List<string>();
             global::Avalonia.Controls.ComboBox propDD = null;
             global::Avalonia.Controls.TextBlock valueLabel = null;
 
@@ -216,9 +217,11 @@ namespace DWSIM.UI.Desktop.Editors
             void ReloadProps()
             {
                 props.Clear();
+                captions.Clear();
                 var o = objs.ElementAtOrDefault(objDD.SelectedIndex);
                 if (o == null) return;
                 props.AddRange((o.GetProperties(PropertyType.ALL) ?? Array.Empty<string>()).OrderBy(x => x));
+                captions.AddRange(props.Select(p => SteadyStatePropertyCaption.For(o, p, p)));
             }
             ReloadProps();
 
@@ -246,7 +249,7 @@ namespace DWSIM.UI.Desktop.Editors
                 catch { valueLabel.Text = "—"; }
             }
 
-            propDD = panel.CreateAndAddDropDownRow("Property", props.ToList(),
+            propDD = panel.CreateAndAddDropDownRow("Property", captions.ToList(),
                 Math.Max(0, props.IndexOf(info.PropertyName ?? "")), (dd, e) => Store());
 
             valueLabel = panel.CreateAndAddTwoLabelsRow("Current Value", "—");
@@ -254,7 +257,7 @@ namespace DWSIM.UI.Desktop.Editors
             objDD.SelectionChanged += (s, e) =>
             {
                 ReloadProps();
-                propDD.SetOptions(props);
+                propDD.SetOptions(captions);
                 if (props.Count > 0) propDD.SelectedIndex = 0;
             };
 
