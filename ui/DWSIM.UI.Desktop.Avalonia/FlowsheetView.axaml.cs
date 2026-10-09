@@ -1206,11 +1206,26 @@ public partial class FlowsheetView : UserControl
         {
             SyncSurfaceSize();
             var restoreTheme = FlowsheetObjectIcons.BeginDraw(_flowsheet);
+            // the padlocks of locked objects show on screen only, never in exported images
+            surface.DrawLockMarkers = true;
             try { surface.UpdateSurface(surf); }
-            finally { FlowsheetObjectIcons.EndDraw(_flowsheet, restoreTheme); }
+            finally
+            {
+                surface.DrawLockMarkers = false;
+                FlowsheetObjectIcons.EndDraw(_flowsheet, restoreTheme);
+            }
         };
 
-        InputPressCallback = (x, y) => surface.InputPress(x, y);
+        // the layout is recorded once per drag, just before the first move, so a drag is one undo step
+        var pointerDown = false;
+        var dragRecorded = false;
+
+        InputPressCallback = (x, y) =>
+        {
+            pointerDown = true;
+            dragRecorded = false;
+            surface.InputPress(x, y);
+        };
 
         Canvas.InputContextMenuCallback = (x, y) =>
         {
@@ -1220,15 +1235,24 @@ public partial class FlowsheetView : UserControl
 
         InputReleaseCallback = () =>
         {
+            pointerDown = false;
             surface.InputRelease();
             LastClickedObjectName = surface.SelectedObject?.Name;
         };
 
         InputMoveCallback = (x, y) =>
         {
+            if (pointerDown && !dragRecorded && !surface.ControlPanelMode && surface.SelectedObject != null &&
+                surface.SelectedObjects.Values.Any(o => !surface.IsPositionLocked(o)))
+            {
+                dragRecorded = true;
+                try { _flowsheet?.RegisterSnapshot(DWSIM.Interfaces.Enums.SnapshotType.ObjectLayout); } catch { }
+            }
             surface.InputMove(x, y);
             Canvas.Refresh();
         };
+
+        ChkLockLayout.IsChecked = surface.LockLayout;
 
         WheelCallback = (delta, px, py, cw, ch) =>
         {
@@ -1753,6 +1777,17 @@ public partial class FlowsheetView : UserControl
         {
             if (_surface != null)
                 _surface.MultiSelectMode = ChkMultiSelect.IsChecked.GetValueOrDefault();
+        };
+
+        // stored in the flowsheet options, so it is saved with the file
+        ChkLockLayout.IsCheckedChanged += (_, _) =>
+        {
+            if (_surface == null) return;
+            var locked = ChkLockLayout.IsChecked.GetValueOrDefault();
+            if (_surface.LockLayout == locked) return;
+            _surface.LockLayout = locked;
+            Canvas.Refresh();
+            AppendLog(locked ? "Layout locked: objects cannot be moved." : "Layout unlocked.");
         };
 
         // Alignment buttons
@@ -2695,8 +2730,8 @@ public partial class FlowsheetView : UserControl
             openProp.Click += (_, _) => OpenEditorFor(obj.Name);
             ctx.Items.Add(openProp);
 
-            var appearance = new MenuItem { Header = "Appearance...", Icon = IconHelper.MIcon("\U0001F3A8") }; // palette
-            appearance.Click += (_, _) => { if (simObj != null) ShowAppearanceEditor(simObj); };
+            var appearance = new MenuItem { Header = "Edit Appearance...", Icon = IconHelper.MIcon("\U0001F3A8") }; // palette
+            appearance.Click += (_, _) => ShowAppearanceEditor(obj);
             ctx.Items.Add(appearance);
 
             // Rotate/flip straight from the menu, without opening the Appearance window. These act on
@@ -2768,6 +2803,18 @@ public partial class FlowsheetView : UserControl
             transform.Items.Add(flipH);
             transform.Items.Add(flipV);
             ctx.Items.Add(transform);
+
+            // position lock of the selected objects: checked when every one of them is locked
+            var lockTargets = ObjectsForCommand(obj);
+            var lockPosition = new MenuItem
+            {
+                Header = "Lock Position",
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = lockTargets.Count > 0 && lockTargets.All(o => o.PositionLocked)
+            };
+            ToolTip.SetTip(lockPosition, "Keep the selected objects where they are. Dragging, aligning, snapping and the automatic layouts leave them in place.");
+            lockPosition.Click += (_, _) => SetPositionLock(lockTargets, !lockTargets.All(o => o.PositionLocked));
+            ctx.Items.Add(lockPosition);
 
             var copyData = new MenuItem { Header = "Copy Data to Clipboard", Icon = IconHelper.MIcon("\U0001F4CB") }; // clipboard
             copyData.Click += async (_, _) =>
@@ -2895,6 +2942,8 @@ public partial class FlowsheetView : UserControl
                     var cloned = (Interfaces.ISimulationObject)simObj.CloneXML();
                     cloned.Name = Guid.NewGuid().ToString();
                     cloned.GraphicObject.Tag = obj.Tag + " (Clone)";
+                    // a copy starts free to move
+                    cloned.GraphicObject.PositionLocked = false;
                     cloned.GraphicObject.X += 50;
                     cloned.GraphicObject.Y += 50;
                     _flowsheet.AddGraphicObject(cloned.GraphicObject);
@@ -3016,6 +3065,7 @@ public partial class FlowsheetView : UserControl
             var autoLayout = new MenuItem { Header = "Perform Auto-Layout", Icon = IconHelper.MIcon("\U0001F4D0") }; // ruler
             autoLayout.Click += (_, _) =>
             {
+                if (LayoutIsLocked()) return;
                 try
                 {
                     _surface?.AutoArrange();
@@ -3033,6 +3083,7 @@ public partial class FlowsheetView : UserControl
                 var ortho = new MenuItem { Header = wrap ? "Orthogonal Layout (Wrapped Rows)" : "Orthogonal Layout", Icon = IconHelper.MIcon("\U0001F4D0") };
                 ortho.Click += (_, _) =>
                 {
+                    if (LayoutIsLocked()) return;
                     try
                     {
                         _surface?.OrthogonalArrange(wrap);
@@ -3057,6 +3108,18 @@ public partial class FlowsheetView : UserControl
                 catch (Exception ex) { AppendLog($"Restore layout error: {ex.Message}"); }
             };
             ctx.Items.Add(restoreLayout);
+
+            ctx.Items.Add(new Separator());
+
+            var lockLayout = new MenuItem
+            {
+                Header = "Lock Layout",
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = _surface?.LockLayout ?? false
+            };
+            ToolTip.SetTip(lockLayout, "Keep every object where it is. Panning and zooming still work.");
+            lockLayout.Click += (_, _) => ChkLockLayout.IsChecked = !(_surface?.LockLayout ?? false);
+            ctx.Items.Add(lockLayout);
         }
 
         Canvas.ContextMenu = ctx;
@@ -3563,53 +3626,55 @@ public partial class FlowsheetView : UserControl
     }
 
     /// <summary>
-    /// The material stream editor asks the host to open the property package editor, which is
-    /// what the cog button next to the picker does in the WinForms form.
+    /// The objects a context-menu command acts on: the whole selection when the clicked object is part
+    /// of it, otherwise the clicked object alone.
     /// </summary>
-    /// <summary>
-    /// The appearance settings of a flowsheet object, reached from the object's context menu as
-    /// the WinForms UI does, not from its editor.
-    /// </summary>
-    private void ShowAppearanceEditor(DWSIM.Interfaces.ISimulationObject simobj)
+    private List<DWSIM.Interfaces.IGraphicObject> ObjectsForCommand(DWSIM.Interfaces.IGraphicObject clicked)
     {
-        var panel = DWSIM.UI.Desktop.Editors.AvaloniaEditorFactory.BuildAppearanceEditor(simobj);
+        var list = new List<DWSIM.Interfaces.IGraphicObject>();
+        if (_surface != null && clicked != null && _surface.SelectedObjects.ContainsKey(clicked.Name))
+            list.AddRange(_surface.SelectedObjects.Values.Where(o => o != null && !o.IsConnector));
+        else if (clicked != null)
+            list.Add(clicked);
+        return list;
+    }
 
-        var close = new Button { Content = "Close", MinWidth = 90, IsCancel = true };
-        close.Classes.Add("dialog");
+    /// <summary>True (after telling the user) when the whole layout is locked and nothing can be arranged.</summary>
+    private bool LayoutIsLocked()
+    {
+        if (_surface?.LockLayout != true) return false;
+        AppendLog("The flowsheet layout is locked. Turn off Lock Layout on the drawing toolbar to arrange the objects.");
+        return true;
+    }
 
-        var bottom = new StackPanel
-        {
-            Orientation = global::Avalonia.Layout.Orientation.Horizontal,
-            HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Right,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
-        bottom.Children.Add(close);
+    /// <summary>Locks or unlocks the position of the objects, as one undo step.</summary>
+    private void SetPositionLock(List<DWSIM.Interfaces.IGraphicObject> objects, bool locked)
+    {
+        if (objects.Count == 0) return;
+        try { _flowsheet?.RegisterSnapshot(DWSIM.Interfaces.Enums.SnapshotType.ObjectLayout); } catch { }
+        foreach (var o in objects) o.PositionLocked = locked;
+        Canvas.Refresh();
+        AppendLog(objects.Count == 1
+            ? $"{objects[0].Tag}: position {(locked ? "locked" : "unlocked")}."
+            : $"{objects.Count} objects: position {(locked ? "locked" : "unlocked")}.");
+    }
 
-        var root = new DockPanel { Margin = new Thickness(8) };
-        DockPanel.SetDock(bottom, global::Avalonia.Controls.Dock.Bottom);
-        root.Children.Add(bottom);
-        root.Children.Add(new ScrollViewer { Content = panel });
-
-        var window = new Window
-        {
-            Title = "Appearance - " + (simobj.GraphicObject?.Tag ?? simobj.Name),
-            Width = 460,
-            // Height follows the content (capped so it never runs off screen) instead of a fixed
-            // 560 px that clipped the bottom Close button once the UI was scaled up. The body
-            // already scrolls inside its ScrollViewer, and the window stays resizable.
-            SizeToContent = SizeToContent.Height,
-            MaxHeight = 800,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = root
-        };
-        IconHelper.ApplyWindowIcon(window);
-
-        close.Click += (_, _) => window.Close();
-        window.Closed += (_, _) => Canvas.Refresh();
-
+    /// <summary>
+    /// The Edit Appearance window for the clicked object, or for the whole selection when the clicked
+    /// object is part of it. Works for annotations (text, rectangles, tables) as well.
+    /// </summary>
+    private void ShowAppearanceEditor(DWSIM.Interfaces.IGraphicObject clicked)
+    {
+        var objects = ObjectsForCommand(clicked);
+        if (objects.Count == 0 || _flowsheet == null) return;
+        var window = new AppearanceEditorWindow(_flowsheet, _surface, objects, () => Canvas.Refresh());
         window.Show(HostWindow);
     }
 
+    /// <summary>
+    /// The material stream editor asks the host to open the property package editor, which is
+    /// what the cog button next to the picker does in the WinForms form.
+    /// </summary>
     private void WirePropertyPackageConfigurator()
     {
         DWSIM.UI.Desktop.Editors.MaterialStreamTabbedEditor.ConfigurePropertyPackage = (fs, pp) =>

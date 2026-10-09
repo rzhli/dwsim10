@@ -89,7 +89,8 @@ Imports DWSIM.ExtensionMethods
     ''' <summary>Gets or sets the list of exceptions raised during the last calculation pass.</summary>
     Public Property ErrorMessages As List(Of Exception) Implements IFlowsheet.ErrorMessages
 
-    Private FlowsheetSurface As New GraphicsSurface
+    ' the surface reads Lock Layout from the options even when no view has set its Flowsheet
+    Private FlowsheetSurface As New GraphicsSurface With {.OptionsProvider = Function() FlowsheetOptions}
 
     ''' <summary>Collection of sensitivity analysis cases defined for this flowsheet.</summary>
     Public SensAnalysisCollection As New List(Of Optimization.SensitivityAnalysisCase)
@@ -3403,6 +3404,8 @@ Imports DWSIM.ExtensionMethods
                     obj.X += shift
                     obj.Y += shift
                     If pkey <> "" Then
+                        ' a pasted copy starts free to move
+                        obj.PositionLocked = False
                         objcount = (From go As IGraphicObject In FlowsheetSurface.DrawingObjects Select go Where go.Tag.Equals(obj.Tag)).Count
                         If objcount > 0 Then obj.Tag += "_copy"
                     End If
@@ -3418,7 +3421,7 @@ Imports DWSIM.ExtensionMethods
                         obj.CreateConnectors(xel.Element("InputConnectors").Elements.Count, xel.Element("OutputConnectors").Elements.Count)
                         obj.PositionConnectors()
                     ElseIf TypeOf obj Is ExternalUnitOperationGraphic Then
-                        Dim euo = ExternalUnitOperations.Values.Where(Function(x) x.Description = obj.Description).FirstOrDefault
+                        Dim euo = SharedClasses.Utility.FindExternalUnitOperation(ExternalUnitOperations.Values, obj.Description)
                         If euo IsNot Nothing Then
                             obj.Owner = euo
                             DirectCast(euo, Interfaces.ISimulationObject).GraphicObject = obj
@@ -5599,7 +5602,7 @@ Label_00CC:
                                     obj.CreateConnectors(xel.Element("InputConnectors").Elements.Count, xel.Element("OutputConnectors").Elements.Count)
                                     obj.PositionConnectors()
                                 ElseIf TypeOf obj Is Shapes.ExternalUnitOperationGraphic Then
-                                    Dim euo = AvailableExternalUnitOperations.Values.Where(Function(x) x.Description = obj.Description).FirstOrDefault
+                                    Dim euo = SharedClasses.Utility.FindExternalUnitOperation(AvailableExternalUnitOperations.Values, obj.Description)
                                     If euo IsNot Nothing Then
                                         obj.Owner = euo
                                         DirectCast(euo, Interfaces.ISimulationObject).GraphicObject = obj
