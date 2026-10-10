@@ -780,7 +780,7 @@ namespace DWSIM.UI.Desktop.Editors
                 results: panel =>
                 {
                     panel.CreateAndAddTwoLabelsRow("Converged", recycle.Converged ? "Yes" : "No");
-                    panel.CreateAndAddTwoLabelsRow("Iterations Taken", recycle.IterationsTaken.ToString());
+                    panel.CreateAndAddResultRow("Iterations Taken", recycle.IterationsTaken.ToString());
                 },
                 propertyPackage: false,
                 extras: new[]
@@ -882,7 +882,7 @@ namespace DWSIM.UI.Desktop.Editors
                 },
                 results: panel =>
                 {
-                    panel.CreateAndAddTwoLabelsRow("Iterations Taken", recycle.IterationsTaken.ToString());
+                    panel.CreateAndAddResultRow("Iterations Taken", recycle.IterationsTaken.ToString());
                 },
                 propertyPackage: false,
                 extras: new[]
