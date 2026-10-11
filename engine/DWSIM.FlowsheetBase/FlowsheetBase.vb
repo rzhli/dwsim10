@@ -3189,7 +3189,10 @@ Imports DWSIM.ExtensionMethods
         xel = xdoc.Element("DWSIM_Simulation_Data").Element("GraphicObjects")
 
         For Each go As GraphicObject In FlowsheetSurface.DrawingObjects
-            If Not go.IsConnector Then xel.Add(New XElement("GraphicObject", go.SaveData().ToArray()))
+            ' Hover tables have no persisted owner and must not become invisible overlays on reload.
+            If Not go.IsConnector AndAlso go.ObjectType <> ObjectType.GO_FloatingTable Then
+                xel.Add(New XElement("GraphicObject", go.SaveData().ToArray()))
+            End If
         Next
 
         xdoc.Element("DWSIM_Simulation_Data").Add(New XElement("PropertyPackages"))
@@ -3388,6 +3391,8 @@ Imports DWSIM.ExtensionMethods
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("OT_Reciclo", "OT_Recycle")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("GO_Texto", "GO_Text")
                 xel.Element("ObjectType").Value = xel.Element("ObjectType").Value.Replace("GO_Figura", "GO_Image")
+                ' Older files can contain a saved tooltip covering real equipment. Discard it on load/paste.
+                If xel.Element("ObjectType").Value = ObjectType.GO_FloatingTable.ToString() Then Continue For
                 Dim obj As GraphicObject = Nothing
                 Dim t As Type = Type.GetType(xel.Element("Type").Value, False)
                 If Not t Is Nothing Then obj = CType(Activator.CreateInstance(t), GraphicObject)
@@ -3921,11 +3926,7 @@ Imports DWSIM.ExtensionMethods
                 Else
                     ShowMessage("Running script '" & scr.Title & "' for event '" & scr.LinkedEventType.ToString & "'", IFlowsheet.MessageType.Information)
                 End If
-                If scr.PythonInterpreter = Enums.Scripts.Interpreter.IronPython Then
-                    RunScript_IronPython(scr.ScriptText)
-                Else
-                    RunScript_PythonNET(scr.ScriptText)
-                End If
+                ExecuteScript(scr, Function() Settings.CalculatorStopRequested, Nothing)
             End If
         Next
 
@@ -4385,14 +4386,45 @@ Label_00CC:
 
     Public Property WatchItems As List(Of IWatchItem) = New List(Of IWatchItem) Implements IFlowsheet.WatchItems
 
+    Private ReadOnly _juliaScriptRunner As SharedClasses.Scripting.JuliaScriptRunner =
+        SharedClasses.Scripting.JuliaScriptRunner.ForFlowsheet(Me)
+
+    ''' <summary>Releases the persistent Julia session when a host closes this flowsheet.</summary>
+    Public Sub ReleaseScriptResources()
+        _juliaScriptRunner.Dispose()
+    End Sub
+
     Public Sub RunScript(ScriptID As String)
+        RunScript(ScriptID, Threading.CancellationToken.None)
+    End Sub
+
+    ''' <summary>Runs a script with cancellation and a live output callback for external Julia execution.</summary>
+    Public Sub RunScript(ScriptID As String, cancellationToken As Threading.CancellationToken,
+                         Optional onOutput As Action(Of String) = Nothing)
         Dim script = Scripts(ScriptID)
-        PythonPreprocessor?.Invoke(script.ScriptText)
-        If script.PythonInterpreter = Enums.Scripts.Interpreter.IronPython Then
-            RunScript_IronPython(script.ScriptText)
-        Else
-            RunScript_PythonNET(script.ScriptText)
-        End If
+        If script.PythonInterpreter <> Enums.Scripts.Interpreter.Julia Then PythonPreprocessor?.Invoke(script.ScriptText)
+        ExecuteScript(script, Function() cancellationToken.IsCancellationRequested, onOutput)
+    End Sub
+
+    Private Sub ExecuteScript(script As IScript, shouldStop As Func(Of Boolean), onOutput As Action(Of String))
+        Select Case script.PythonInterpreter
+            Case Enums.Scripts.Interpreter.IronPython
+                RunScript_IronPython(script.ScriptText)
+            Case Enums.Scripts.Interpreter.Python_NET
+                RunScript_PythonNET(script.ScriptText)
+            Case Enums.Scripts.Interpreter.Julia
+                Dim workingDirectory = Environment.CurrentDirectory
+                If Not String.IsNullOrWhiteSpace(FilePath) Then
+                    workingDirectory = Path.GetDirectoryName(Path.GetFullPath(FilePath))
+                End If
+                _juliaScriptRunner.Run(script, workingDirectory,
+                    Sub(line)
+                        onOutput?.Invoke(line)
+                        ShowMessage(line, IFlowsheet.MessageType.Information)
+                    End Sub, shouldStop)
+            Case Else
+                Throw New NotSupportedException("Unsupported script interpreter: " & script.PythonInterpreter.ToString())
+        End Select
     End Sub
 
     Public Async Sub RunScriptAsync(ScriptID As String)
@@ -5195,7 +5227,11 @@ Label_00CC:
 
     Public Sub ReleaseResources() Implements IFlowsheet.ReleaseResources
 
-        Me.ProcessScripts(Enums.Scripts.EventType.SimulationClosed, Enums.Scripts.ObjectType.Simulation, "")
+        Try
+            Me.ProcessScripts(Enums.Scripts.EventType.SimulationClosed, Enums.Scripts.ObjectType.Simulation, "")
+        Finally
+            ReleaseScriptResources()
+        End Try
 
         'dispose objects
 

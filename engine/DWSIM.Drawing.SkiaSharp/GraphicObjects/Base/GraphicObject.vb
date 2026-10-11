@@ -297,10 +297,13 @@ Namespace GraphicObjects
         End Property
 
         Public Overridable Overloads Function HitTest(ByVal pt As SKPoint) As Boolean
+            ' Hover tables are transient overlays, not selectable flowsheet objects.
+            If ObjectType = Enums.GraphicObjects.ObjectType.GO_FloatingTable Then Return False
             Return pt.X >= X And pt.Y >= Y And pt.X <= X + Width And pt.Y <= Y + Height
         End Function
 
         Public Overridable Function IsInRect(ByVal rect As SKRect) As Boolean
+            If ObjectType = Enums.GraphicObjects.ObjectType.GO_FloatingTable Then Return False
             Return rect.Contains(New SKRect(X, Y, X + Width, Y + Height))
         End Function
 
@@ -497,6 +500,7 @@ Namespace GraphicObjects
 
         Public Function HitTest1(zoomedSelection As Object) As Boolean Implements IGraphicObject.HitTest
 
+            If ObjectType = Enums.GraphicObjects.ObjectType.GO_FloatingTable Then Return False
             Dim rect As SKRect = DirectCast(zoomedSelection, SKRect)
 
             Return rect.Left <= X And rect.Top <= Y And rect.Right >= X + Width And rect.Bottom >= Y + Height

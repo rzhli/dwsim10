@@ -246,16 +246,19 @@ public sealed class SpreadsheetPanel
     public List<string[]> GetFormatFromRange(string range)
     {
         var list = new List<string[]>();
-        var rdata = Grid.Worksheets[0].GetRangeData(new RangePosition(range));
+        var worksheet = Grid.Worksheets[0];
+        var position = new RangePosition(range);
+        var rdata = worksheet.GetRangeData(position);
         for (var i = 0; i < rdata.GetLength(0); i++)
         {
             var row = new List<string>();
             for (var j = 0; j < rdata.GetLength(1); j++)
             {
-                var format = Grid.Worksheets[0].Cells[i, j].DataFormat;
-                if (format == CellDataFormatFlag.Number)
+                // Range data is relative to its origin; cell formats use absolute coordinates.
+                var cell = worksheet.Cells[position.Row + i, position.Col + j];
+                if (cell.DataFormat == CellDataFormatFlag.Number &&
+                    cell.DataFormatArgs is NumberDataFormatter.NumberFormatArgs args)
                 {
-                    var args = (NumberDataFormatter.NumberFormatArgs)Grid.Worksheets[0].Cells[i, j].DataFormatArgs;
                     row.Add("N" + args.DecimalPlaces);
                 }
                 else
