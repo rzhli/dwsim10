@@ -196,6 +196,7 @@
         <Button Name="BtnLoadSolution"   Classes="toolbar" ToolTip.Tip="Restore Selected" Content="♻" FontSize="{DynamicResource ToolbarIconSize}" />
         <Button Name="BtnDeleteSolution" Classes="toolbar" ToolTip.Tip="Remove Selected"  Content="🗑" FontSize="{DynamicResource ToolbarIconSize}" />
 
+
       </StackPanel>
     </Border>
 

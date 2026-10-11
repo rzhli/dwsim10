@@ -27,6 +27,7 @@ public sealed class FlowsheetDockFactory : Factory
     private readonly Control _materialStreamsContent;
     private readonly Control _spreadsheetContent;
     private readonly Control _dynamicsManagerContent;
+    private readonly Control _scriptManagerContent;
     private readonly Control _integratorContent;
     private readonly Control _watchContent;
 
@@ -47,6 +48,7 @@ public sealed class FlowsheetDockFactory : Factory
     public Document? MaterialStreamsDocument { get; private set; }
     public Document? SpreadsheetDocument { get; private set; }
     public Document? DynamicsManagerDocument { get; private set; }
+    public Document? ScriptManagerDocument { get; private set; }
 
     public FlowsheetDockFactory(
         Control editorContent,
@@ -57,6 +59,7 @@ public sealed class FlowsheetDockFactory : Factory
         Control materialStreamsContent,
         Control spreadsheetContent,
         Control dynamicsManagerContent,
+        Control scriptManagerContent,
         Control integratorContent,
         Control watchContent)
     {
@@ -68,6 +71,7 @@ public sealed class FlowsheetDockFactory : Factory
         _materialStreamsContent = materialStreamsContent;
         _spreadsheetContent = spreadsheetContent;
         _dynamicsManagerContent = dynamicsManagerContent;
+        _scriptManagerContent = scriptManagerContent;
         _integratorContent = integratorContent;
         _watchContent = watchContent;
 
@@ -83,6 +87,7 @@ public sealed class FlowsheetDockFactory : Factory
             ["MaterialStreams"] = materialStreamsContent,
             ["Spreadsheet"] = spreadsheetContent,
             ["DynamicsManager"] = dynamicsManagerContent,
+            ["ScriptManager"] = scriptManagerContent,
             ["Integrator"] = integratorContent,
             ["Watch"] = watchContent
         };
@@ -159,6 +164,16 @@ public sealed class FlowsheetDockFactory : Factory
             CanFloat = false
         };
 
+        ScriptManagerDocument = new Document
+        {
+            Id = "ScriptManager",
+            Title = "Script Manager",
+            Content = _scriptManagerContent,
+            CanClose = false,
+            CanPin = false,
+            CanFloat = false
+        };
+
         // --- Right: Object palette ---
         PaletteTool = new Tool
         {
@@ -210,6 +225,8 @@ public sealed class FlowsheetDockFactory : Factory
         {
             Id = "LeftDock",
             Title = "Left",
+            MinWidth = 0,
+            IsCollapsable = false,
             Alignment = Alignment.Left,
             Proportion = 0.20,
             VisibleDockables = CreateList<IDockable>(EditorTool),
@@ -227,7 +244,8 @@ public sealed class FlowsheetDockFactory : Factory
                 ResultsDocument,
                 MaterialStreamsDocument,
                 SpreadsheetDocument,
-                DynamicsManagerDocument),
+                DynamicsManagerDocument,
+                ScriptManagerDocument),
             ActiveDockable = CanvasDocument
         };
 
@@ -235,6 +253,8 @@ public sealed class FlowsheetDockFactory : Factory
         {
             Id = "RightDock",
             Title = "Right",
+            MinWidth = 0,
+            IsCollapsable = false,
             Alignment = Alignment.Right,
             Proportion = 0.15,
             VisibleDockables = CreateList<IDockable>(PaletteTool),
@@ -245,6 +265,8 @@ public sealed class FlowsheetDockFactory : Factory
         {
             Id = "BottomDock",
             Title = "Bottom",
+            MinHeight = 0,
+            IsCollapsable = false,
             Alignment = Alignment.Bottom,
             Proportion = 0.22,
             VisibleDockables = CreateList<IDockable>(LogTool, IntegratorTool, WatchTool),

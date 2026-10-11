@@ -1,12 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
+using System.Xml;
 using Avalonia.Controls;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
+using AvaloniaEdit.Highlighting.Xshd;
 using DWSIM.Interfaces;
 using DWSIM.Interfaces.Enums;
+using DWSIM.UI.Shared.Avalonia;
 
 namespace DWSIM.UI.Desktop.Avalonia;
 
@@ -15,7 +19,7 @@ namespace DWSIM.UI.Desktop.Avalonia;
 /// the editor and its output on the right, and the event each script is linked to below the
 /// toolbar. Scripts live in the flowsheet, so they are saved with it.
 /// </summary>
-public partial class ScriptEditorWindow : Window
+public partial class ScriptEditorWindow : UserControl
 {
 
     /// <summary>Runs the given script; the host owns the interpreter and the output.</summary>
@@ -29,6 +33,7 @@ public partial class ScriptEditorWindow : Window
     private IFlowsheet? _flowsheet;
     private IScript? _current;
     private bool _loading;
+    private readonly IHighlightingDefinition _juliaHighlighting;
 
     private readonly ObservableCollection<ScriptItem> _items = new();
 
@@ -112,9 +117,27 @@ public partial class ScriptEditorWindow : Window
     public ScriptEditorWindow()
     {
         InitializeComponent();
-        IconHelper.ApplyWindowIcon(this);
+        ConfigureLayout();
+        using var resource = typeof(ScriptEditorWindow).Assembly.GetManifestResourceStream(
+            "DWSIM.UI.Desktop.Avalonia.Assets.Julia.xshd")!;
+        using var reader = XmlReader.Create(resource);
+        _juliaHighlighting = HighlightingLoader.Load(reader, HighlightingManager.Instance);
         ConfigureEditor();
+        ApplyZedEditorPreferences();
         WireControls();
+    }
+
+    private void ConfigureLayout()
+    {
+        // Let the selected text and scaled theme chrome determine each picker's width.
+        Resources["ScriptControlHeight"] = UiScale.Size(20);
+        Resources["ScriptControlPadding"] = new global::Avalonia.Thickness(UiScale.Size(6), UiScale.Size(1));
+        MinWidth = 0;
+        MinHeight = 0;
+        TbTitle.MinWidth = UiScale.Size(70);
+        TbTitle.MaxWidth = UiScale.Size(220);
+        foreach (var picker in new[] { CbInterpreter, CbLanguage, CbFont, CbFontSize, CbLinkedObject, CbLinkedEvent })
+            picker.MinWidth = 0;
     }
 
     private void ConfigureEditor()
@@ -139,13 +162,16 @@ public partial class ScriptEditorWindow : Window
     /// </summary>
     public void SetFlowsheet(IFlowsheet flowsheet)
     {
+        if (ReferenceEquals(_flowsheet, flowsheet)) return;
         _flowsheet = flowsheet;
+        _current = null;
+        _workingCopies.Clear();
 
         ReloadScripts();
         ReloadLinkedObjects();
 
-        if (_items.Count == 0) NewScript();
-        else ScriptList.SelectedIndex = 0;
+        if (_items.Count > 0) ScriptList.SelectedIndex = 0;
+        else SetStatus("No scripts. Click New to create one.");
     }
 
     private void ReloadScripts()
@@ -167,24 +193,23 @@ public partial class ScriptEditorWindow : Window
         ScriptList.ItemsSource = _items;
         ScriptList.SelectionChanged += (_, _) => LoadSelected();
 
-        CbLanguage.ItemsSource = new[] { "Python", "C#", "Visual Basic" };
+        CbLanguage.ItemsSource = new[] { "Python", "Julia", "C#", "Visual Basic" };
         CbLanguage.SelectedIndex = 0;
         CbLanguage.SelectionChanged += (_, _) => ApplyHighlighting();
 
-        CbInterpreter.ItemsSource = new[] { "IronPython", "Python.NET" };
+        CbInterpreter.ItemsSource = new[] { "IronPython", "Python.NET", "Julia" };
         CbInterpreter.SelectedIndex = 0;
         CbInterpreter.SelectionChanged += (_, _) =>
         {
             if (_loading || _current == null) return;
-            _current.PythonInterpreter = CbInterpreter.SelectedIndex == 1
-                ? Scripts.Interpreter.Python_NET
-                : Scripts.Interpreter.IronPython;
+            _current.PythonInterpreter = (Scripts.Interpreter)CbInterpreter.SelectedIndex;
+            UpdateInterpreterOptions();
         };
 
         CbFont.ItemsSource = new[]
         {
-            "Cascadia Code", "Consolas", "Courier New", "Lucida Console", "Menlo", "monospace"
-        };
+            _preferredFont, "Hack", "DejaVu Sans Mono", "Cascadia Code", "Consolas", "Courier New", "Menlo", "monospace"
+        }.Distinct().ToArray();
         CbFont.SelectedIndex = 0;
         CbFont.SelectionChanged += (_, _) =>
         {
@@ -192,11 +217,14 @@ public partial class ScriptEditorWindow : Window
                 ScriptEditor.FontFamily = new global::Avalonia.Media.FontFamily(family);
         };
 
-        CbFontSize.ItemsSource = new[] { "9", "10", "11", "12", "13", "14", "16", "18", "20" };
-        CbFontSize.SelectedIndex = 4;
+        CbFontSize.ItemsSource = new double[] { 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32 }
+            .Append(ScriptEditor.FontSize).Distinct().OrderBy(x => x)
+            .Select(x => x.ToString("0.##", CultureInfo.InvariantCulture)).ToArray();
+        CbFontSize.SelectedItem = ScriptEditor.FontSize.ToString("0.##", CultureInfo.InvariantCulture);
         CbFontSize.SelectionChanged += (_, _) =>
         {
-            if (CbFontSize.SelectedItem is string size && double.TryParse(size, out var value))
+            if (CbFontSize.SelectedItem is string size &&
+                double.TryParse(size, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
                 ScriptEditor.FontSize = value;
         };
 
@@ -244,8 +272,8 @@ public partial class ScriptEditorWindow : Window
 
         BtnStop.Click += (_, _) =>
         {
-            SetRunning(false);
-            SetStatus("Stopped.");
+            BtnStop.IsEnabled = false;
+            SetStatus("Stopping...");
             StopRequested?.Invoke(this, EventArgs.Empty);
         };
 
@@ -261,17 +289,27 @@ public partial class ScriptEditorWindow : Window
 
         BtnSnippet.Click += (_, _) => ShowSnippets();
         BtnApiHelp.Click += (_, _) => OpenApiHelp();
+        BtnEditZed.Click += (_, _) => EditInZed();
+        BtnImportZed.Click += async (_, _) => await ImportFromZedAsync();
     }
 
     private void ApplyHighlighting()
     {
         ScriptEditor.SyntaxHighlighting = CbLanguage.SelectedItem?.ToString() switch
         {
-            "Python"       => HighlightingManager.Instance.GetDefinition("Python"),
-            "C#"           => HighlightingManager.Instance.GetDefinition("C#"),
-            "Visual Basic" => HighlightingManager.Instance.GetDefinition("VB"),
+            "Python"       => GetDarkHighlighting("Python-Mode.xshd"),
+            "Julia"        => _juliaHighlighting,
+            "C#"           => GetDarkHighlighting("CSharp-Mode.xshd"),
+            "Visual Basic" => GetDarkHighlighting("VB-Mode.xshd"),
             _              => null
         };
+    }
+
+    private void UpdateInterpreterOptions()
+    {
+        var julia = _current?.PythonInterpreter == Scripts.Interpreter.Julia;
+        CbLanguage.SelectedItem = julia ? "Julia" : "Python";
+        ToolTip.SetTip(BtnStop, julia ? "Stop execution and reset the Julia session." : "Stop execution.");
     }
 
     // -------------------------------------------------------------------------
@@ -332,7 +370,15 @@ public partial class ScriptEditorWindow : Window
 
     private void LoadSelected()
     {
-        if (ScriptList.SelectedItem is not ScriptItem item) return;
+        if (ScriptList.SelectedItem is not ScriptItem item)
+        {
+            _current = null;
+            _loading = true;
+            ScriptEditor.Text = "";
+            TbTitle.Text = "";
+            _loading = false;
+            return;
+        }
 
         _loading = true;
 
@@ -340,7 +386,8 @@ public partial class ScriptEditorWindow : Window
 
         ScriptEditor.Text = _current.ScriptText ?? "";
         TbTitle.Text = _current.Title ?? "";
-        CbInterpreter.SelectedIndex = _current.PythonInterpreter == Scripts.Interpreter.Python_NET ? 1 : 0;
+        CbInterpreter.SelectedIndex = (int)_current.PythonInterpreter;
+        UpdateInterpreterOptions();
         ChkLinked.IsChecked = _current.Linked;
 
         SelectLinkedObject();
@@ -580,6 +627,18 @@ public partial class ScriptEditorWindow : Window
         var menu = new ContextMenu();
         var items = new List<Control>();
 
+        if (_current?.PythonInterpreter == Scripts.Interpreter.Julia)
+        {
+            items.Add(Snippet("Julia Version", "println(\"Julia \", VERSION)\n"));
+            items.Add(Snippet("Print Value", "println(\"result = \", value)\n"));
+            items.Add(Snippet("Include Julia File", "include(joinpath(pwd(), \"model.jl\"))\n"));
+            items.Add(Snippet("Active Project", "println(Base.active_project())\n"));
+            menu.ItemsSource = items;
+            menu.PlacementTarget = BtnSnippet;
+            menu.Open(BtnSnippet);
+            return;
+        }
+
         items.Add(Snippet("Get Flowsheet Object",
             "obj = Flowsheet.GetFlowsheetSimulationObject('<tag>')\n"));
         items.Add(Snippet("Solve Flowsheet", "Flowsheet.RequestCalculation()\n"));
@@ -664,7 +723,9 @@ public partial class ScriptEditorWindow : Window
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "https://dwsim.org/api_help/html/R_Project_DWSIM_Class_Library_Documentation.htm",
+                FileName = _current?.PythonInterpreter == Scripts.Interpreter.Julia
+                    ? "https://docs.julialang.org/en/v1/"
+                    : "https://dwsim.org/api_help/html/R_Project_DWSIM_Class_Library_Documentation.htm",
                 UseShellExecute = true
             });
         }
@@ -683,10 +744,10 @@ public partial class ScriptEditorWindow : Window
         OutputBox.CaretIndex = (OutputBox.Text ?? string.Empty).Length;
     }
 
-    public void NotifyRunCompleted()
+    public void NotifyRunCompleted(string status = "Done.")
     {
         SetRunning(false);
-        SetStatus("Done.");
+        SetStatus(status);
     }
 
     private void SetRunning(bool running)
@@ -694,6 +755,15 @@ public partial class ScriptEditorWindow : Window
         BtnRun.IsEnabled = !running;
         BtnRunAsync.IsEnabled = !running;
         BtnStop.IsEnabled = running;
+        BtnNew.IsEnabled = !running;
+        BtnDuplicate.IsEnabled = !running;
+        BtnDelete.IsEnabled = !running;
+        ScriptList.IsEnabled = !running;
+        ScriptOptions.IsEnabled = !running;
+        EventOptions.IsEnabled = !running;
+        ScriptEditor.IsReadOnly = running;
+        foreach (var button in new[] { BtnUndo, BtnRedo, BtnComment, BtnUncomment, BtnIndent, BtnUnindent, BtnSnippet, BtnEditZed, BtnImportZed })
+            button.IsEnabled = !running;
     }
 
     private void SetStatus(string text) => StatusLabel.Text = text;
@@ -742,7 +812,8 @@ public partial class ScriptEditorWindow : Window
         yes.Click += (_, _) => { result = true; dialog.Close(); };
         no.Click += (_, _) => dialog.Close();
 
-        await dialog.ShowDialog(this);
+        if (TopLevel.GetTopLevel(this) is not Window owner) return false;
+        await dialog.ShowDialog(owner);
 
         return result;
     }

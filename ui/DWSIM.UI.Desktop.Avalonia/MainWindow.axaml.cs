@@ -180,6 +180,7 @@ public partial class MainWindow : Window
             _ = ConfirmExitAsync();
             return;
         }
+        foreach (var view in _openViews) view.ReleaseScriptResources();
         try { DWSIM.GlobalSettings.Settings.SaveSettings("dwsim_newui.ini"); } catch { }
         // a clean close clears the marker, so the next run does not offer recovery
         try { File.Delete(SessionLockPath); } catch { }

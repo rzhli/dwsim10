@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -241,6 +242,8 @@ public partial class FlowsheetView : UserControl
     private SpreadsheetPanel? _spreadsheet;
     private readonly ReoGridControl SpreadsheetGrid;
     private readonly DynamicsManagerPanel DynManagerPanel;
+    private readonly ScriptEditorWindow ScriptManagerPanel;
+    private CancellationTokenSource? _scriptCancellation;
     private readonly DynamicsIntegratorPanel IntegratorPanel;
 
     // Dock factory (to show/hide panels programmatically)
@@ -270,6 +273,8 @@ public partial class FlowsheetView : UserControl
         if (SpreadsheetGrid.CurrentWorksheet != null)
             SpreadsheetGrid.CurrentWorksheet.ScaleFactor = DWSIM.UI.Shared.Avalonia.UiScale.Factor;
         DynManagerPanel = new DynamicsManagerPanel();
+        ScriptManagerPanel = new ScriptEditorWindow();
+        WireScriptManager();
         IntegratorPanel = new DynamicsIntegratorPanel();
         IntegratorPanel.OnIntegratorStep = () => { Canvas.Refresh(); UpdateResultsPanel(); };
         IntegratorPanel.OnViewResults = WriteIntegratorResultsToSpreadsheet;
@@ -308,9 +313,11 @@ public partial class FlowsheetView : UserControl
 
         EditorHolder.CloseRequested += (_, _) =>
         {
-            // Hide the editor tool via dock (instead of IsVisible on a Border)
-            if (_dockFactory?.EditorTool != null)
-                _dockFactory.EditorTool.IsActive = false;
+            if (_dockFactory?.EditorTool?.Owner is Dock.Model.Core.IDock panel)
+            {
+                panel.CollapsedProportion = 0;
+                panel.Proportion = 0;
+            }
         };
     }
 
@@ -322,7 +329,6 @@ public partial class FlowsheetView : UserControl
     {
         // Build palette content: header + scrollable items
         var paletteContent = new DockPanel();
-        // The tool tab already labels this "Objects"; no in-panel header is needed.
         paletteContent.Children.Add(new ScrollViewer
         {
             HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
@@ -344,6 +350,7 @@ public partial class FlowsheetView : UserControl
             materialStreamsContent: MaterialStreamsPanel,
             spreadsheetContent: SpreadsheetGrid,
             dynamicsManagerContent: DynManagerPanel,
+            scriptManagerContent: ScriptManagerPanel,
             integratorContent: IntegratorPanel,
             watchContent: _watchPanel);
 
@@ -359,6 +366,10 @@ public partial class FlowsheetView : UserControl
             InitializeLayout = false
         };
 
+        // Dock's splitter defaults to a 75-DIP minimum on both sides. Zero permits
+        // dragging panels all the way to the edge; keep the splitter itself visible.
+        Dock.Controls.ProportionalStackPanel.ProportionalStackPanelSplitter
+            .SetMinimumProportionSize(_dockControl, 0);
         MainDockHost.Child = _dockControl;
     }
 
@@ -854,6 +865,7 @@ public partial class FlowsheetView : UserControl
             ResultsPanel.SetFlowsheet(fs);
             IntegratorPanel.SetFlowsheet(fs);
             DynManagerPanel.SetFlowsheet(fs);
+            ScriptManagerPanel.SetFlowsheet(fs);
             PopulatePalette(); // re-populate with icons from ObjectList
 
             SimulationName = fs.Options?.SimulationName ?? "";
@@ -881,30 +893,38 @@ public partial class FlowsheetView : UserControl
 
     private void OpenScriptEditor()
     {
-        var editor = new ScriptEditorWindow();
+        if (_dockFactory?.ScriptManagerDocument != null)
+            _dockFactory.ScriptManagerDocument.IsActive = true;
+    }
 
-        // the scripts belong to the simulation, so the manager edits them in place and they are
-        // written to the file with everything else
-        if (_flowsheet != null) editor.SetFlowsheet(_flowsheet);
-
-        editor.RunRequested += (_, script) => RunScript(editor, script, background: false);
-        editor.RunAsyncRequested += (_, script) => RunScript(editor, script, background: true);
-
+    private void WireScriptManager()
+    {
+        var editor = ScriptManagerPanel;
+        bool runningJulia = false;
+        void StartScript(DWSIM.Interfaces.IScript script)
+        {
+            _scriptCancellation?.Dispose();
+            _scriptCancellation = new CancellationTokenSource();
+            runningJulia = script.PythonInterpreter == DWSIM.Interfaces.Enums.Scripts.Interpreter.Julia;
+            RunScript(editor, script, _scriptCancellation.Token);
+        }
+        editor.RunRequested += (_, script) => StartScript(script);
+        editor.RunAsyncRequested += (_, script) => StartScript(script);
         editor.StopRequested += (_, _) =>
         {
-            DWSIM.GlobalSettings.Settings.CalculatorStopRequested = true;
+            _scriptCancellation?.Cancel();
+            if (!runningJulia) DWSIM.GlobalSettings.Settings.CalculatorStopRequested = true;
         };
-
-        editor.Show(HostWindow);
     }
 
     /// <summary>
     /// Runs a script of the simulation, sending whatever it prints and whatever the flowsheet
     /// reports while it runs to the manager's output pane.
     /// </summary>
-    private void RunScript(ScriptEditorWindow editor, DWSIM.Interfaces.IScript script, bool background)
+    private void RunScript(ScriptEditorWindow editor, DWSIM.Interfaces.IScript script, CancellationToken cancellationToken)
     {
-        if (_flowsheet == null)
+        var flowsheet = _flowsheet;
+        if (flowsheet == null)
         {
             editor.AppendOutput("No simulation loaded.");
             editor.NotifyRunCompleted();
@@ -914,6 +934,8 @@ public partial class FlowsheetView : UserControl
         Task.Run(() =>
         {
             var sb = new StringBuilder();
+            var julia = script.PythonInterpreter == DWSIM.Interfaces.Enums.Scripts.Interpreter.Julia;
+            var status = "Done.";
 
             // IronPython writes through the flowsheet log, which reports on OnMessage; only
             // Python.NET prints to the console, so that is the one worth redirecting, and
@@ -924,25 +946,33 @@ public partial class FlowsheetView : UserControl
             using var sw = new StringWriter(sb);
             if (console) Console.SetOut(sw);
 
-            Action<string> prevMsg = _flowsheet.OnMessage!;
-            _flowsheet.OnMessage = msg =>
+            Action<string> prevMsg = flowsheet.OnMessage!;
+            if (!julia) flowsheet.OnMessage = msg =>
             {
-                sb.AppendLine(msg);
+                lock (sb) sb.AppendLine(msg);
                 prevMsg?.Invoke(msg);
             };
 
             try
             {
-                if (background) _flowsheet.RunScriptAsync(script.ID);
-                else _flowsheet.RunScript(script.ID);
+                // This worker already runs off the UI thread. Await the actual execution rather
+                // than the async-void wrapper, which returned before output/cleanup were complete.
+                flowsheet.RunScript(script.ID, cancellationToken, line =>
+                    Dispatcher.UIThread.Post(() => editor.AppendOutput(line)));
+            }
+            catch (OperationCanceledException)
+            {
+                status = "Stopped.";
+                sb.AppendLine("Script execution stopped.");
             }
             catch (Exception ex)
             {
+                status = "Failed.";
                 sb.AppendLine($"Error: {ex.Message}");
             }
             finally
             {
-                _flowsheet.OnMessage = prevMsg;
+                if (!julia) flowsheet.OnMessage = prevMsg;
                 if (console) Console.SetOut(prevOut);
             }
 
@@ -951,8 +981,8 @@ public partial class FlowsheetView : UserControl
             Dispatcher.UIThread.Post(() =>
             {
                 if (!string.IsNullOrEmpty(output)) editor.AppendOutput(output);
-                editor.NotifyRunCompleted();
-                AppendLog("Script execution complete.");
+                editor.NotifyRunCompleted(status);
+                AppendLog("Script execution: " + status);
             });
         });
     }
@@ -1009,6 +1039,7 @@ public partial class FlowsheetView : UserControl
         ResultsPanel.SetFlowsheet(fs);
         IntegratorPanel.SetFlowsheet(fs);
         DynManagerPanel.SetFlowsheet(fs);
+        ScriptManagerPanel.SetFlowsheet(fs);
         PopulatePalette(); // re-populate with icons from ObjectList
 
         ApplyPreferredUnitSystem(fs);
@@ -1411,6 +1442,7 @@ public partial class FlowsheetView : UserControl
                     // panels blank (issue #72). The layout is fixed and a hidden panel is a proportion
                     // of zero, so the proportions restore the whole arrangement without a detach.
                     DockLayoutState.ApplyProportions(_dockLayout, restored);
+
                 });
             }
             catch (Exception ex)
@@ -3545,30 +3577,24 @@ public partial class FlowsheetView : UserControl
     // View menu panel toggle helpers
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Stored proportions for dock panels that were hidden via the View menu.
-    /// When the user toggles a panel off, we save its Proportion here and set
-    /// it to 0 so the panel collapses. Toggling it back on restores the saved value.
-    /// </summary>
-    private readonly Dictionary<string, double> _savedProportions = new();
+    private readonly Dictionary<string, double> _savedPanelProportions = new();
 
     private void ToggleDockTool(Dock.Model.Avalonia.Controls.Tool? tool)
     {
-        if (tool == null) return;
-
-        var id = tool.Id ?? tool.Title ?? "";
-        if (tool.Proportion > 0.01)
+        // Preserve the existing View menu, but resize the parent allocating space.
+        if (tool?.Owner is not Dock.Model.Core.IDock panel || panel.Id == null) return;
+        var proportion = panel.Proportion;
+        if (!double.IsFinite(proportion) || proportion > 0.001)
         {
-            // Currently visible - hide it
-            _savedProportions[id] = tool.Proportion;
-            tool.Proportion = 0;
+            _savedPanelProportions[panel.Id] = double.IsFinite(proportion) ? proportion : 0.20;
+            proportion = 0;
         }
         else
         {
-            // Currently hidden - restore it
-            tool.Proportion = _savedProportions.TryGetValue(id, out var saved) ? saved : 0.20;
-            _savedProportions.Remove(id);
+            proportion = _savedPanelProportions.TryGetValue(panel.Id, out var saved) ? saved : 0.20;
         }
+        panel.CollapsedProportion = proportion;
+        panel.Proportion = proportion;
     }
 
     // -------------------------------------------------------------------------
@@ -3953,6 +3979,14 @@ public partial class FlowsheetView : UserControl
     // Closing confirmation
     // -------------------------------------------------------------------------
 
+    internal void ReleaseScriptResources()
+    {
+        _scriptCancellation?.Cancel();
+        _scriptCancellation?.Dispose();
+        _scriptCancellation = null;
+        _flowsheet?.ReleaseScriptResources();
+    }
+
     /// <summary>
     /// Asks whether the simulation may be closed and shuts the view down when it may.
     /// The host calls this before removing the document.
@@ -4006,6 +4040,7 @@ public partial class FlowsheetView : UserControl
 
         _backupTimer?.Stop();
         _backupTimer?.Dispose();
+        ReleaseScriptResources();
 
         return true;
     }

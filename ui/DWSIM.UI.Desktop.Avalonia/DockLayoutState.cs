@@ -117,6 +117,9 @@ public static class DockLayoutState
     {
         if (!string.IsNullOrEmpty(node.Id) && byId.TryGetValue(node.Id!, out var proportion))
         {
+            // Dock's proportional panel prefers its cached size when present.
+            // Restore both values so a zero-width panel stays at the edge on reopen.
+            node.CollapsedProportion = proportion;
             node.Proportion = proportion;
         }
         if (node is IDock dock && dock.VisibleDockables != null)

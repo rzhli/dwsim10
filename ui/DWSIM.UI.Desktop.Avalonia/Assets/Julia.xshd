@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SyntaxDefinition name="Julia" extensions=".jl" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#ACB6BF" />
+  <Color name="String" foreground="#AAD94C" />
+  <Color name="Keyword" foreground="#FF8F40" fontWeight="bold" />
+  <Color name="Number" foreground="#D2A6FF" />
+  <Color name="Macro" foreground="#FFB454" />
+  <RuleSet>
+    <Span color="Comment" multiline="true" begin="\#=" end="=\#" />
+    <Span color="Comment" begin="\#" />
+    <Span color="String" multiline="true" begin="&quot;&quot;&quot;" end="&quot;&quot;&quot;" />
+    <Span color="String" begin="&quot;" end="&quot;">
+      <RuleSet><Rule>\\.</Rule></RuleSet>
+    </Span>
+    <Keywords color="Keyword">
+      <Word>abstract</Word><Word>baremodule</Word><Word>begin</Word><Word>break</Word>
+      <Word>catch</Word><Word>const</Word><Word>continue</Word><Word>do</Word>
+      <Word>else</Word><Word>elseif</Word><Word>end</Word><Word>export</Word>
+      <Word>false</Word><Word>finally</Word><Word>for</Word><Word>function</Word>
+      <Word>global</Word><Word>if</Word><Word>import</Word><Word>in</Word>
+      <Word>let</Word><Word>local</Word><Word>macro</Word><Word>module</Word>
+      <Word>mutable</Word><Word>nothing</Word><Word>primitive</Word><Word>public</Word>
+      <Word>quote</Word><Word>return</Word><Word>struct</Word><Word>true</Word>
+      <Word>try</Word><Word>type</Word><Word>using</Word><Word>where</Word><Word>while</Word>
+    </Keywords>
+    <Rule color="Number">\b(?:0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eEfF][+-]?\d+)?)\b</Rule>
+    <Rule color="Macro">@\w+</Rule>
+  </RuleSet>
+</SyntaxDefinition>
