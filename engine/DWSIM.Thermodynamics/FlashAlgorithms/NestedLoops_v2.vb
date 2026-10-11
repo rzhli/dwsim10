@@ -2852,6 +2852,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Dim result As Object()
             Dim Kvals As Double()
             Dim trivial As Boolean = False
+            Dim fromzero As Object() = Nothing
 
             Dim estimate As Interfaces.IConvergenceHelperResponse = Nothing
 
@@ -2914,6 +2915,15 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     result = retry
                     deltaT = 0.0
                 End If
+            ElseIf Not AcceptStalledSaturationPoint AndAlso result.Count > 1 AndAlso V = 0 AndAlso Math.Abs(deltaT) > 0.01 AndAlso
+                Not PP.AUX_CheckTrivial(DirectCast(result(6), Double()), 0.21, Vz) Then
+                'The bubble-point equation holds at the returned point, so it has converged whatever step the
+                'loop took last: Flash_PV_1 tests its residual after each step, and a loop that lands on the root
+                'in one or two steps reports a step of a kelvin or more. Taken for a failure, that point went to
+                'the fallbacks below, which start from 1 atm and from the ideal-solution seed, and can end on
+                'another root of the equation far from the caller's estimate. A result on the trivial solution
+                '(the test below), where the equation holds at any temperature, still takes the fallbacks.
+                deltaT = 0.0
             End If
 
             If Math.Abs(deltaT) > 0.01 And (V = 0 Or V = 1) Then
@@ -2993,6 +3003,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 If result.Count > 1 Then
                     Kvals = result(6)
                     If PP.AUX_CheckTrivial(Kvals, 0.2, Vz) Then trivial = True
+                    'A bubble point of the model found by this retry, away from the trivial solution, is kept: the
+                    'flag still sends the flash to the pressure stepping below, and where that finds nothing it stands.
+                    If trivial AndAlso Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso V = 0.0 AndAlso
+                        Not StalledSaturationPoint(result, V, PP) AndAlso NestedLoops.ForChecks(FlashSettings, etol).SaturationPointHolds(Vz, P, V, result, PP) Then fromzero = result
                 End If
             End If
 
@@ -3018,6 +3032,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals)
                     If result.Count = 1 Then result = Flash_PV_1(Vz, P, V, Tl, PP, True, Kvals, True)
                 End If
+                If result.Count = 1 AndAlso fromzero IsNot Nothing Then result = fromzero
             End If
 
             If checkdew Then result = DewPointOnStableBranch(Vz, P, Tfirst, result, PP)
@@ -3043,6 +3058,12 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                         result = Flash_PV_4(Vz, P, V, 0.0, IPP, ReuseKI, PrevKi)
                     End If
                 End Using
+                'Raoult's law answers with a temperature of the ideal solution: it stands only where the model
+                'confirms it, as in NestedLoops
+                If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso result.Count > 1 AndAlso Not TypeOf PP Is RaoultPropertyPackage AndAlso
+                    Not NestedLoops.ForChecks(FlashSettings, etol).IdealResultHolds(Vz, P, V, result, PP) Then
+                    result = New Object() {-1}
+                End If
             End If
 
             If result.Count = 1 Then

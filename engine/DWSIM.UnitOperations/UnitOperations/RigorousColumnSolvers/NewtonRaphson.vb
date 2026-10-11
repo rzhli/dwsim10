@@ -626,7 +626,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             Select Case _specs("R").SType
                 Case ColumnSpec.SpecType.Component_Fraction
-                    If _specs("C").SpecUnit = "M" Or _specs("C").SpecUnit = "Molar" Then
+                    If _specs("R").SpecUnit = "M" Or _specs("R").SpecUnit = "Molar" Then
                         spfval2 = Log(xc(ns)(spci2) / spval2)
                         _specs("R").CalculatedValue = xc(ns)(spci2)
                     Else 'W
@@ -663,7 +663,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     spfval2 = Log((Tj(ns)) / spval2)
                     _specs("R").CalculatedValue = Tj(ns)
                 Case ColumnSpec.SpecType.Feed_Recovery
-                    spfval2 = Log(Lj(ns) / (spval1 / 100 * F.SumY))
+                    spfval2 = Log(Lj(ns) / (spval2 / 100 * F.SumY))
                     _specs("R").CalculatedValue = Lj(ns) / F.SumY * 100.0
             End Select
 
@@ -2149,7 +2149,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             Select Case col.Specs("R").SType
                 Case ColumnSpec.SpecType.Component_Fraction
                     If col.Specs("R").SpecUnit = "M" Or col.Specs("R").SpecUnit = "Molar" Then
-                        col.Specs("R").CalculatedValue = x(ns)(spci1)
+                        col.Specs("R").CalculatedValue = x(ns)(spci2)
                     Else 'W
                         col.Specs("R").CalculatedValue = col.PropertyPackage.AUX_CONVERT_MOL_TO_MASS(x(ns))(spci2)
                     End If
