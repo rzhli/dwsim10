@@ -1,5 +1,9 @@
 # Python Scripting
 
+The Avalonia Script Manager also supports direct execution with a local Julia
+installation. See [Julia scripting](54a-julia-scripting.md) for setup and the distinction
+between a Julia process and Python's direct access to DWSIM objects.
+
 DWSIM’s scripting subsystem allows the user to automate tasks, extend calculation logic, and interact programmatically with the simulation through Python scripts. Scripts have full access to all flowsheet objects, the solver, and the simulation environment.
 
 Typical uses include manipulating flowsheet objects, performing property-package calculations outside the normal solver sequence, reading data from external sources, running parametric studies by varying properties between solver calls, and post-processing results.
@@ -91,4 +95,3 @@ You can also set a stream variable with specific units, i.e.
     MSTR01.SetPressure('10 bar')
 
 The above will set the pressure of MSTR-01 to 10 bar or 1000000 Pa.
-

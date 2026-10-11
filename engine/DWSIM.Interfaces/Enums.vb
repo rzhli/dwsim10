@@ -74,6 +74,7 @@ Namespace Enums
         Public Enum Interpreter
             IronPython = 0
             Python_NET = 1
+            Julia = 2
         End Enum
 
         Public Enum ObjectType
@@ -848,6 +849,5 @@ Namespace Enums.GraphicObjects
     End Enum
 
 End Namespace
-
 
 

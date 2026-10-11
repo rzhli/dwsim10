@@ -40,9 +40,9 @@ namespace DWSIM.UI.Desktop.Editors
             compounds.AddRange(obj.GetFlowsheet().SelectedCompounds.Keys);
 
             panel.CreateAndAddDropDownRow(label, compounds,
-                Math.Max(0, compounds.IndexOf(get() ?? "")), (dd, e) =>
+                compounds.IndexOf(get() ?? ""), (dd, e) =>
                 {
-                    if (dd.SelectedIndex < 0 || dd.SelectedIndex >= compounds.Count) return;
+                    if (!panel.IsArmed || dd.SelectedIndex < 0 || dd.SelectedIndex >= compounds.Count) return;
                     set(compounds[dd.SelectedIndex]);
                 });
         }
@@ -1068,21 +1068,28 @@ namespace DWSIM.UI.Desktop.Editors
             return UnitOpEditor.Build(reactor,
                 input: panel => BuildParameters(reactor, panel),
                 results: panel => BuildResults(reactor, panel),
-                extras: new[] { ("Enzymatic Hydrolysis", BuildHydrolysis(reactor)) });
+                extras: reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation
+                    ? null : new[] { ("Enzymatic Hydrolysis", BuildHydrolysis(reactor)) });
         }
 
-        private static void BuildParameters(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        internal static void BuildParameters(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
         {
+            if (reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation)
+            {
+                BuildJuliaParameters(reactor, panel);
+                return;
+            }
             BioRows.Section(panel, "General");
 
             BioRows.Choice(panel, "Operating Mode",
                 () => reactor.OperatingMode, v => reactor.OperatingMode = v);
-            BioRows.Choice(panel, "Kinetic Model",
-                () => reactor.KineticModel, v =>
-                {
-                    reactor.KineticModel = v;
-                    reactor.GetFlowsheet().UpdateOpenEditForms();
-                });
+            BuildKineticModelRow(reactor, panel);
+            if (reactor.KineticModel == Reactors.BioKineticModel.UserScript)
+            {
+                BuildScriptRows(reactor, panel, julia: false);
+                panel.CreateAndAddDescriptionRow(
+                    "Python uses the existing IronPython growth callback. Set mu in 1/s; DWSIM integrates its built-in balances using the yields below.");
+            }
 
             panel.CreateAndAddCheckBoxRow("Aerobic", reactor.IsAerobic,
                 (cb, e) => reactor.IsAerobic = cb.IsChecked.GetValueOrDefault());
@@ -1150,6 +1157,118 @@ namespace DWSIM.UI.Desktop.Editors
                 v => reactor.OutletTemperature = v);
         }
 
+        private static void BuildKineticModelRow(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        {
+            // Both script backends have one user-facing entry. Keep the legacy Julia enum
+            // value in saved files so existing flowsheets and automation remain compatible.
+            var models = new List<string> { "Monod", "Contois", "Moser", "Haldane", "User Script", "Enzymatic Hydrolysis" };
+            var selected = reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation
+                ? (int)Reactors.BioKineticModel.UserScript : (int)reactor.KineticModel;
+            panel.CreateAndAddDropDownRow("Kinetic Model", models, selected, (dd, e) =>
+                {
+                    if (!panel.IsArmed || dd.SelectedIndex < 0 || dd.SelectedIndex == selected) return;
+                    reactor.KineticModel = (Reactors.BioKineticModel)dd.SelectedIndex;
+                    reactor.CreateConnectors();
+                    reactor.GetFlowsheet().UpdateOpenEditForms();
+                });
+        }
+
+        private static void BuildScriptRows(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel, bool julia)
+        {
+            panel.CreateAndAddDropDownRow("Language", new List<string> { "Python (IronPython)", "Julia" },
+                julia ? 1 : 0, (dd, e) =>
+                {
+                    if (!panel.IsArmed || dd.SelectedIndex < 0 || (dd.SelectedIndex == 1) == julia) return;
+                    reactor.KineticModel = dd.SelectedIndex == 1
+                        ? Reactors.BioKineticModel.JuliaCoFermentation : Reactors.BioKineticModel.UserScript;
+                    reactor.CreateConnectors();
+                    reactor.GetFlowsheet().UpdateOpenEditForms();
+                });
+            var scripts = reactor.GetFlowsheet().Scripts.Values
+                .Where(s => s.PythonInterpreter == (julia ? Scripts.Interpreter.Julia : Scripts.Interpreter.IronPython))
+                .Select(s => s.Title).ToList();
+            scripts.Insert(0, "");
+            var current = julia ? reactor.JuliaModelScriptName : reactor.UserScriptName;
+            panel.CreateAndAddDropDownRow("Script", scripts,
+                Math.Max(0, scripts.IndexOf(current)), (dd, e) =>
+                {
+                    if (!panel.IsArmed || dd.SelectedIndex < 0) return;
+                    if (julia) reactor.JuliaModelScriptName = scripts[dd.SelectedIndex];
+                    else reactor.UserScriptName = scripts[dd.SelectedIndex];
+                });
+            if (scripts.Count == 1)
+                panel.CreateAndAddDescriptionRow("Create a script in Tools > Script Manager and select the same interpreter to make it available here.");
+        }
+
+        private static void BuildJuliaParameters(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        {
+            BioRows.Section(panel, "User Script");
+            BuildKineticModelRow(reactor, panel);
+            BuildScriptRows(reactor, panel, julia: true);
+            panel.CreateAndAddDescriptionRow(
+                "Julia returns the complete biomass, glucose, xylose, ethanol and xylitol trajectories. " +
+                "The supplied model uses 30 C and controlled pH 5.");
+            panel.CreateAndAddDescriptionRow("Edit the model equations and parameters in Script Manager. Each calculation reuses the flowsheet's Julia session.");
+
+            BioRows.Choice(panel, "Operating Mode", () => reactor.OperatingMode, v =>
+            {
+                if (!panel.IsArmed || reactor.OperatingMode == v) return;
+                reactor.OperatingMode = v;
+                reactor.CreateConnectors();
+                reactor.GetFlowsheet().UpdateOpenEditForms();
+            });
+            bool continuous = reactor.OperatingMode == Reactors.BioReactorMode.Continuous;
+            bool fedBatch = reactor.OperatingMode == Reactors.BioReactorMode.FedBatch;
+            panel.CreateAndAddCheckBoxRow("Aerobic", reactor.IsAerobic,
+                (cb, e) => reactor.IsAerobic = cb.IsChecked.GetValueOrDefault());
+            panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Initial Working Volume" : "Working Volume", UnitOfMeasure.volume,
+                reactor.Volume, v => reactor.Volume = v);
+            if (continuous)
+            {
+                BioRows.Number(panel, reactor, "Initial Culture Biomass (g/L)",
+                    reactor.JuliaInitialBiomass_gL, v => reactor.JuliaInitialBiomass_gL = v);
+                panel.CreateAndAddTextBoxRow("G3", "Steady-state Tolerance (scaled residual)", reactor.JuliaSteadyStateTolerance,
+                    (tb, e) => { if (UnitOpEditorRows.TryParse(tb.Text, out var v) && v > 0.0) reactor.JuliaSteadyStateTolerance = v; });
+                panel.CreateAndAddValueUnitRow(reactor, "Max Integration Time (0 = automatic)", UnitOfMeasure.time,
+                    reactor.JuliaMaxIntegrationTime_s, v => reactor.JuliaMaxIntegrationTime_s = v);
+                panel.CreateAndAddDescriptionRow(
+                    "The inlet supplies the continuous flow and composition. Initial culture biomass is the startup inoculum. " +
+                    "Julia solves the constant-volume CSTR to steady state; residence time is volume / inlet flow. Combine multiple feeds upstream.");
+                panel.CreateAndAddDescriptionRow(
+                    "Julia stops as soon as the scaled balance residual drops below the tolerance; the horizon only caps the run " +
+                    "(automatic = max(200 h, 40 x residence time)). 1e-8 needs about 20 residence times; 1e-5 stops much earlier and " +
+                    "moves the steady state only in the sixth digit. Scripts embedded before this option keep their own 1e-8 until their source is updated.");
+            }
+            else
+            {
+                panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Fed-batch Duration" : "Batch Duration", UnitOfMeasure.time,
+                    reactor.BatchDuration, v => reactor.BatchDuration = v);
+                panel.CreateAndAddDescriptionRow(
+                    "The first inlet supplies the initial charge, averaged over the fermentation duration: flow = initial volume / duration. " +
+                    "Preserve composition when adjusting the inlet flow after a duration change.");
+                if (fedBatch)
+                    panel.CreateAndAddDescriptionRow(
+                        "Connect supplemental feed to the second inlet. Its composition is constant and its flow is the cycle average. " +
+                        "Edit feed_rate_m3_h(t, operation) in the Julia script to define the instantaneous feed curve; " +
+                        "its integral must equal the stream flow times duration. Culture volume increases during feeding.");
+            }
+            BioRows.Choice(panel, "Thermal Mode", () => reactor.ThermalMode, v => reactor.ThermalMode = v);
+            panel.CreateAndAddValueUnitRow(reactor, "Outlet Temperature Setpoint", UnitOfMeasure.temperature,
+                reactor.OutletTemperature, v => reactor.OutletTemperature = v);
+
+            BioRows.Section(panel, "Compound Roles");
+            BioRows.Compound(panel, reactor, "Biomass", () => reactor.BiomassCompound, v => reactor.BiomassCompound = v, false);
+            BioRows.Compound(panel, reactor, "Glucose", () => reactor.SubstrateCompound, v => reactor.SubstrateCompound = v, false);
+            BioRows.Compound(panel, reactor, "Xylose", () => reactor.XyloseCompound, v => reactor.XyloseCompound = v, false);
+            BioRows.Compound(panel, reactor, "Ethanol", () => reactor.ProductCompound, v => reactor.ProductCompound = v, false);
+            BioRows.Compound(panel, reactor, "Xylitol", () => reactor.XylitolCompound, v => reactor.XylitolCompound = v, false);
+            BioRows.Compound(panel, reactor, "Water", () => reactor.WaterCompound, v => reactor.WaterCompound = v, false);
+            BioRows.Compound(panel, reactor, "Off-Gas Mass Closure (CO2)", () => reactor.CO2Compound, v => reactor.CO2Compound = v, false);
+            panel.CreateAndAddDescriptionRow(
+                "The five concentrations follow the Julia kinetic model. Untracked product mass is represented by CO2 at the off-gas outlet. " +
+                "Nutrient stoichiometry, gas composition and reaction heat are not supplied by the paper; the gas and duty are approximate balance closures.");
+        }
+
         private static Control BuildHydrolysis(Reactors.Reactor_BioReactor reactor)
         {
             var panel = new AvaloniaEditorPanel();
@@ -1182,6 +1301,31 @@ namespace DWSIM.UI.Desktop.Editors
 
         private static void BuildResults(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
         {
+            if (reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation)
+            {
+                bool continuous = reactor.OperatingMode == Reactors.BioReactorMode.Continuous;
+                BioRows.Section(panel, continuous ? "Continuous Steady State" :
+                    reactor.OperatingMode == Reactors.BioReactorMode.FedBatch ? "Fed-batch Endpoint" : "Batch Endpoint");
+                BioRows.Result(panel, reactor, "Biomass", reactor.Result_X_gL, "g/L");
+                BioRows.Result(panel, reactor, "Glucose", reactor.Result_S_gL, "g/L");
+                BioRows.Result(panel, reactor, "Xylose", reactor.Result_Xylose_gL, "g/L");
+                BioRows.Result(panel, reactor, "Ethanol", reactor.Result_P_gL, "g/L");
+                BioRows.Result(panel, reactor, "Xylitol", reactor.Result_Xylitol_gL, "g/L");
+                BioRows.Result(panel, reactor, continuous ? "Steady-state Specific Growth Rate" : "Average Specific Growth Rate", reactor.Result_Mu_h, "1/h");
+                panel.CreateAndAddResultRow(reactor, "Final Working Volume", UnitOfMeasure.volume, reactor.Result_JuliaVolume_m3);
+                panel.CreateAndAddResultRow(reactor, "Integrated Time", UnitOfMeasure.time, reactor.Result_JuliaIntegrationTime_s);
+                if (continuous)
+                {
+                    panel.CreateAndAddResultRow(reactor, "Hydraulic Residence Time", UnitOfMeasure.time, reactor.Result_JuliaResidenceTime_s);
+                    BioRows.Result(panel, reactor, "Dilution Rate", reactor.Result_JuliaDilutionRate_h, "1/h");
+                }
+                BioRows.Section(panel, "Approximate Stream Balances");
+                panel.CreateAndAddResultRow(reactor, "Untracked Product Mass as CO2", UnitOfMeasure.massflow, reactor.Result_JuliaClosureGas_kg_s);
+                panel.CreateAndAddResultRow(reactor, "Enthalpy Closure Duty", UnitOfMeasure.heatflow, reactor.Result_Q_duty_kW);
+                panel.CreateAndAddResultRow(reactor, "Outlet Temperature", UnitOfMeasure.temperature, reactor.Result_OutletTemperature_K);
+                panel.CreateAndAddDescriptionRow("Gas and duty are balance closures, not independently validated predictions from this kinetic paper.");
+                return;
+            }
             if (reactor.KineticModel == Reactors.BioKineticModel.EnzymaticHydrolysis)
             {
                 BioRows.Section(panel, "Streams (Hydrolysate Outlet)");

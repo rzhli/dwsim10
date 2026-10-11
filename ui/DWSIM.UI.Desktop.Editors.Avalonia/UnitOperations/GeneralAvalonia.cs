@@ -349,7 +349,14 @@ namespace DWSIM.UI.Desktop.Editors
             switch (simobj.GraphicObject.ObjectType)
             {
                 case ObjectType.External:
-                    ((IExternalUnitOperation)simobj)?.PopulateEditorPanel(panel);
+                    // Saved bioreactors also use External graphics. Keep the host's
+                    // asynchronous edit handling while showing the Julia-specific rows.
+                    if (simobj is DWSIM.UnitOperations.Reactors.Reactor_BioReactor bioreactor &&
+                        (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaCoFermentation ||
+                         bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.UserScript))
+                        BioReactorEditor.BuildParameters(bioreactor, panel);
+                    else
+                        ((IExternalUnitOperation)simobj)?.PopulateEditorPanel(panel);
                     break;
 
                 case ObjectType.CapeOpenUO:

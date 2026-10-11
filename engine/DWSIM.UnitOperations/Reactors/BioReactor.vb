@@ -51,6 +51,9 @@ Namespace Reactors
         ''' Competitive product inhibition kinetics, no microbial growth. Substrate role = cellulose,
         ''' Product role = glucose, plus new roles Hemicellulose, Xylose and Enzyme.</summary>
         EnzymaticHydrolysis = 5
+        ''' <summary>Julia User Script backend for the five-state batch interface.
+        ''' The enum name is retained for compatibility with saved flowsheets.</summary>
+        JuliaCoFermentation = 6
     End Enum
 
     ''' <summary>Defines the operation mode of the BioReactor.</summary>
@@ -751,6 +754,11 @@ Namespace Reactors
         End Sub
 
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
+
+            If KineticModel = BioKineticModel.JuliaCoFermentation Then
+                CalculateJuliaCoFermentation()
+                Return
+            End If
 
             ' Enzymatic Hydrolysis uses a separate calculation path: no biomass, no aerobic
             ' elemental balance. Substrate = cellulose, Product = glucose, plus the dedicated
@@ -1758,6 +1766,8 @@ Namespace Reactors
         ''' <returns>A formatted multi-line string report.</returns>
         Public Overrides Function GetReport(su As IUnitsOfMeasure, ci As Globalization.CultureInfo, numberformat As String) As String
 
+            If KineticModel = BioKineticModel.JuliaCoFermentation Then Return GetJuliaReport(ci, numberformat)
+
             Dim str As New Text.StringBuilder
             str.AppendLine("BioReactor:  " & Me.GraphicObject.Tag)
             str.AppendLine("Property Package: " & Me.PropertyPackage.ComponentName)
@@ -1842,6 +1852,11 @@ Namespace Reactors
             "Volumetric Oxygen Transfer Coefficient",
             "Dissolved Oxygen Saturation",
             "User Kinetics Script Name",
+            "Julia Model Script Name",
+            "Initial Culture Biomass",
+            "Steady-state Tolerance",
+            "Max Integration Time",
+            "Xylitol Compound",
             "Hemicellulose Compound",
             "Xylose Compound",
             "Enzyme Compound",
@@ -1857,6 +1872,13 @@ Namespace Reactors
             "Outlet Biomass Concentration",
             "Outlet Substrate Concentration",
             "Outlet Product Concentration",
+            "Outlet Xylose Concentration",
+            "Outlet Xylitol Concentration",
+            "Julia Closure Gas Mass Flow",
+            "Final Working Volume",
+            "Integration Time",
+            "Hydraulic Residence Time",
+            "Dilution Rate",
             "Average Specific Growth Rate",
             "Oxygen Uptake Rate",
             "Carbon Dioxide Evolution Rate",
@@ -1889,6 +1911,16 @@ Namespace Reactors
                                           "EH Glucose Inhibition Constant", "EH Xylose Inhibition Constant",
                                           "EH Enzyme Loading", "EH Heat Per Gram Product"}
 
+            If KineticModel = BioKineticModel.JuliaCoFermentation Then
+                unused.UnionWith(growth)
+                unused.ExceptWith({"Aerobic", "Biomass Compound", "CO2 Compound"})
+                unused.UnionWith(hydrolysis)
+                unused.Remove("Xylose Compound")
+                If OperatingMode <> BioReactorMode.Continuous Then unused.UnionWith({"Initial Culture Biomass", "Steady-state Tolerance", "Max Integration Time"})
+                Return unused
+            End If
+
+            unused.UnionWith({"Julia Model Script Name", "Xylitol Compound", "Initial Culture Biomass", "Steady-state Tolerance", "Max Integration Time"})
             If KineticModel = BioKineticModel.EnzymaticHydrolysis Then
                 'no microbial growth: the hydrolysis path has its own roles and rate constants
                 unused.UnionWith(growth)
@@ -1927,7 +1959,13 @@ Namespace Reactors
                     Dim unused = UnusedInputs()
                     Return _inputProps.Where(Function(p) Not unused.Contains(p)).ToArray()
                 Case PropertyType.RO
-                    Return _outputProps
+                    If KineticModel = BioKineticModel.JuliaCoFermentation Then
+                        Dim excluded As New HashSet(Of String) From {"Oxygen Uptake Rate", "Carbon Dioxide Evolution Rate",
+                                                                     "Respiratory Quotient", "Metabolic Heat Duty"}
+                        If OperatingMode <> BioReactorMode.Continuous Then excluded.UnionWith({"Hydraulic Residence Time", "Dilution Rate"})
+                        Return _outputProps.Where(Function(p) Not excluded.Contains(p)).ToArray()
+                    End If
+                    Return _outputProps.Except({"Final Working Volume", "Integration Time", "Hydraulic Residence Time", "Dilution Rate"}).ToArray()
                 Case Else
                     Return _inputProps.Concat(_outputProps).Concat(baseprops).ToArray()
             End Select
@@ -1961,6 +1999,11 @@ Namespace Reactors
                 Case "Volumetric Oxygen Transfer Coefficient" : Return KLa_h
                 Case "Dissolved Oxygen Saturation" : Return CO2sat_gL
                 Case "User Kinetics Script Name" : Return UserScriptName
+                Case "Julia Model Script Name" : Return JuliaModelScriptName
+                Case "Initial Culture Biomass" : Return JuliaInitialBiomass_gL
+                Case "Steady-state Tolerance" : Return JuliaSteadyStateTolerance
+                Case "Max Integration Time" : Return JuliaMaxIntegrationTime_s
+                Case "Xylitol Compound" : Return XylitolCompound
                 Case "Hemicellulose Compound" : Return HemicelluloseCompound
                 Case "Xylose Compound" : Return XyloseCompound
                 Case "Enzyme Compound" : Return EnzymeCompound
@@ -1973,6 +2016,13 @@ Namespace Reactors
                 Case "Outlet Biomass Concentration" : Return Result_X_gL
                 Case "Outlet Substrate Concentration" : Return Result_S_gL
                 Case "Outlet Product Concentration" : Return Result_P_gL
+                Case "Outlet Xylose Concentration" : Return Result_Xylose_gL
+                Case "Outlet Xylitol Concentration" : Return Result_Xylitol_gL
+                Case "Julia Closure Gas Mass Flow" : Return Result_JuliaClosureGas_kg_s
+                Case "Final Working Volume" : Return Result_JuliaVolume_m3
+                Case "Integration Time" : Return Result_JuliaIntegrationTime_s
+                Case "Hydraulic Residence Time" : Return Result_JuliaResidenceTime_s
+                Case "Dilution Rate" : Return Result_JuliaDilutionRate_h
                 Case "Average Specific Growth Rate" : Return Result_Mu_h
                 Case "Oxygen Uptake Rate" : Return Result_OUR_gLh
                 Case "Carbon Dioxide Evolution Rate" : Return Result_CER_gLh
@@ -1986,18 +2036,23 @@ Namespace Reactors
 
         Public Overrides Function GetPropertyUnit(prop As String, Optional su As IUnitsOfMeasure = Nothing) As String
             Select Case prop
-                Case "Working Volume" : Return "m3"
-                Case "Batch Duration" : Return "s"
+                Case "Working Volume", "Final Working Volume" : Return "m3"
+                Case "Batch Duration", "Hydraulic Residence Time", "Max Integration Time", "Integration Time" : Return "s"
                 Case "Max Specific Growth Rate",
+                     "Dilution Rate",
                      "Death Rate Constant",
                      "Volumetric Oxygen Transfer Coefficient",
                      "Average Specific Growth Rate" : Return "1/h"
                 Case "Saturation Constant",
+                     "Initial Culture Biomass",
                      "Inhibition Constant",
                      "Dissolved Oxygen Saturation",
                      "Outlet Biomass Concentration",
                      "Outlet Substrate Concentration",
+                     "Outlet Xylose Concentration",
+                     "Outlet Xylitol Concentration",
                      "Outlet Product Concentration" : Return "g/L"
+                Case "Julia Closure Gas Mass Flow" : Return "kg/s"
                 Case "Biomass Yield on Substrate",
                      "Product Yield on Substrate" : Return "g/g"
                 Case "Maintenance Coefficient" : Return "g/g/h"
@@ -2029,7 +2084,10 @@ Namespace Reactors
                 Case "Batch Duration" : BatchDuration = d : Return True
                 Case "Operating Mode"
                     Dim om As BioReactorMode
-                    If [Enum].TryParse(Of BioReactorMode)(propval?.ToString(), om) Then OperatingMode = om
+                    If [Enum].TryParse(Of BioReactorMode)(propval?.ToString(), om) Then
+                        OperatingMode = om
+                        CreateConnectors()
+                    End If
                     Return True
                 Case "Thermal Mode"
                     Dim tm As BioReactorThermalMode
@@ -2060,6 +2118,11 @@ Namespace Reactors
                 Case "Volumetric Oxygen Transfer Coefficient" : KLa_h = d : Return True
                 Case "Dissolved Oxygen Saturation" : CO2sat_gL = d : Return True
                 Case "User Kinetics Script Name" : UserScriptName = propval?.ToString() : Return True
+                Case "Julia Model Script Name" : JuliaModelScriptName = propval?.ToString() : Return True
+                Case "Initial Culture Biomass" : JuliaInitialBiomass_gL = d : Return True
+                Case "Steady-state Tolerance" : JuliaSteadyStateTolerance = d : Return True
+                Case "Max Integration Time" : JuliaMaxIntegrationTime_s = d : Return True
+                Case "Xylitol Compound" : XylitolCompound = propval?.ToString() : Return True
                 Case "Hemicellulose Compound" : HemicelluloseCompound = propval?.ToString() : Return True
                 Case "Xylose Compound" : XyloseCompound = propval?.ToString() : Return True
                 Case "Enzyme Compound" : EnzymeCompound = propval?.ToString() : Return True
@@ -2117,10 +2180,13 @@ Namespace Reactors
 
             container.CreateAndAddDropDownRow("Kinetic Model",
                                               New List(Of String)({"Monod", "Contois", "Moser", "Haldane", "User Script", "Enzymatic Hydrolysis"}),
-                                              CInt(KineticModel),
+                                              If(KineticModel = BioKineticModel.JuliaCoFermentation, CInt(BioKineticModel.UserScript), CInt(KineticModel)),
                                               Sub(dd, e)
                                                   If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
+                                                  If CInt(KineticModel) = dd.SelectedIndex Then Return
+                                                  If dd.SelectedIndex = CInt(BioKineticModel.UserScript) AndAlso KineticModel = BioKineticModel.JuliaCoFermentation Then Return
                                                   KineticModel = CType(dd.SelectedIndex, BioKineticModel)
+                                                  FlowSheet.UpdateOpenEditForms()
                                               End Sub)
 
             container.CreateAndAddDropDownRow("Operating Mode",
@@ -2157,6 +2223,20 @@ Namespace Reactors
                                              Sub(tb, e)
                                                  If tb.Text.IsValidDoubleExpression() Then
                                                      BatchDuration = tb.Text.ParseExpressionToDouble()
+                                                 End If
+                                             End Sub)
+
+            container.CreateAndAddTextBoxRow("G3", "Steady-state Tolerance (Julia continuous, scaled residual)", JuliaSteadyStateTolerance,
+                                             Sub(tb, e)
+                                                 If tb.Text.IsValidDoubleExpression() Then
+                                                     JuliaSteadyStateTolerance = tb.Text.ParseExpressionToDouble()
+                                                 End If
+                                             End Sub)
+
+            container.CreateAndAddTextBoxRow(nf, "Max Integration Time (s, Julia continuous, 0 = automatic)", JuliaMaxIntegrationTime_s,
+                                             Sub(tb, e)
+                                                 If tb.Text.IsValidDoubleExpression() Then
+                                                     JuliaMaxIntegrationTime_s = tb.Text.ParseExpressionToDouble()
                                                  End If
                                              End Sub)
 
@@ -2314,14 +2394,19 @@ Namespace Reactors
             Dim h = GraphicObject.Height
             Dim gx = GraphicObject.X
             Dim gy = GraphicObject.Y
+            Dim julia = KineticModel = BioKineticModel.JuliaCoFermentation
+            Dim inletName = If(julia AndAlso OperatingMode <> BioReactorMode.Continuous, "Initial Charge (Cycle Average)", "Inlet (Feed)")
+            Dim secondInletName = If(julia,
+                                    If(OperatingMode = BioReactorMode.FedBatch, "Supplemental Feed (Cycle Average)", "Supplemental Feed (Fed-batch Only)"),
+                                    "Sparger Gas Inlet (Optional)")
 
             If GraphicObject.InputConnectors.Count = 2 AndAlso GraphicObject.OutputConnectors.Count = 2 Then
 
                 ' Position-only update
                 GraphicObject.InputConnectors(0).Position = New Point(gx, gy + 0.5 * h)
-                GraphicObject.InputConnectors(0).ConnectorName = "Inlet (Feed)"
+                GraphicObject.InputConnectors(0).ConnectorName = inletName
                 GraphicObject.InputConnectors(1).Position = New Point(gx + 0.25 * w, gy + h)
-                GraphicObject.InputConnectors(1).ConnectorName = "Sparger Gas Inlet (Optional)"
+                GraphicObject.InputConnectors(1).ConnectorName = secondInletName
                 GraphicObject.InputConnectors(1).Direction = ConDir.Up
 
                 GraphicObject.OutputConnectors(0).Position = New Point(gx + w, gy + 0.7 * h)
@@ -2339,13 +2424,13 @@ Namespace Reactors
                     .Position = New Point(gx, gy + 0.5 * h),
                     .Type = ConType.ConIn,
                     .Direction = ConDir.Right,
-                    .ConnectorName = "Inlet (Feed)"
+                    .ConnectorName = inletName
                 })
                 GraphicObject.InputConnectors.Add(New ConnectionPoint With {
                     .Position = New Point(gx + 0.25 * w, gy + h),
                     .Type = ConType.ConIn,
                     .Direction = ConDir.Up,
-                    .ConnectorName = "Sparger Gas Inlet (Optional)"
+                    .ConnectorName = secondInletName
                 })
                 GraphicObject.OutputConnectors.Add(New ConnectionPoint With {
                     .Position = New Point(gx + w, gy + 0.7 * h),
@@ -2609,6 +2694,9 @@ Namespace Reactors
 
         ''' <summary>Chart names the PFD chart object can embed: the trajectory groups of the last calculation.</summary>
         Public Overrides Function GetChartModelNames() As List(Of String)
+            If KineticModel = BioKineticModel.JuliaCoFermentation Then
+                Return New List(Of String)({"Co-Fermentation", "Specific Rates"})
+            End If
             If KineticModel = BioKineticModel.EnzymaticHydrolysis Then
                 Return New List(Of String)({"Enzymatic Hydrolysis"})
             End If
@@ -2624,6 +2712,13 @@ Namespace Reactors
             Dim series As New List(Of Tuple(Of String, String))()
             Dim yTitle As String = "Value"
             Select Case name
+                Case "Co-Fermentation"
+                    series.Add(Tuple.Create("X", "Biomass"))
+                    series.Add(Tuple.Create("Glucose", "Glucose"))
+                    series.Add(Tuple.Create("Xylose", "Xylose"))
+                    series.Add(Tuple.Create("P", "Ethanol"))
+                    series.Add(Tuple.Create("Xylitol", "Xylitol"))
+                    yTitle = "Substrates / biomass (g/L)"
                 Case "Growth Kinetics"
                     series.Add(Tuple.Create("X", "X (biomass)"))
                     series.Add(Tuple.Create("S", "S (substrate)"))
@@ -2665,18 +2760,31 @@ Namespace Reactors
                 .Title = "Time (h)"
             })
             model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                .Key = "primary",
                 .MajorGridlineStyle = OxyPlot.LineStyle.Dash,
                 .MinorGridlineStyle = OxyPlot.LineStyle.Dot,
                 .Position = OxyPlot.Axes.AxisPosition.Left,
                 .FontSize = 10,
+                .Minimum = If(name = "Co-Fermentation", 0.0, Double.NaN),
                 .Title = yTitle
             })
+            If name = "Co-Fermentation" Then
+                model.Axes.Add(New OxyPlot.Axes.LinearAxis() With {
+                    .Key = "products",
+                    .Position = OxyPlot.Axes.AxisPosition.Right,
+                    .FontSize = 10,
+                    .Minimum = 0.0,
+                    .Title = "Products (g/L)"
+                })
+            End If
 
             Dim th = traj.GetTimesHours()
-            Dim colors = {OxyPlot.OxyColors.Red, OxyPlot.OxyColors.Blue, OxyPlot.OxyColors.Green, OxyPlot.OxyColors.Orange}
+            Dim colors = {OxyPlot.OxyColors.Red, OxyPlot.OxyColors.Blue, OxyPlot.OxyColors.Green, OxyPlot.OxyColors.Orange, OxyPlot.OxyColors.Purple}
             For i = 0 To series.Count - 1
                 Dim y = traj.GetSeries(series(i).Item1)
                 Dim ls As New OxyPlot.Series.LineSeries() With {.Title = series(i).Item2, .StrokeThickness = 1.5, .Color = colors(i Mod colors.Length)}
+                ls.YAxisKey = If(name = "Co-Fermentation" AndAlso
+                                (series(i).Item1 = "P" OrElse series(i).Item1 = "Xylitol"), "products", "primary")
                 For j = 0 To Math.Min(th.Length, y.Length) - 1
                     If Not Double.IsNaN(y(j)) Then ls.Points.Add(New OxyPlot.DataPoint(th(j), y(j)))
                 Next

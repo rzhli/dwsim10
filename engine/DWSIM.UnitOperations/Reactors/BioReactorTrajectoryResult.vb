@@ -20,7 +20,7 @@ Namespace Reactors
     ''' </summary>
     <Serializable()> Public Class BioReactorTrajectoryResult
 
-        Public Property Mode As String = "Growth"   ' "Growth" or "EnzymaticHydrolysis"
+        Public Property Mode As String = "Growth"   ' Growth, EnzymaticHydrolysis or CoFermentation
 
         ' Time axis
         Public Property Times As New List(Of Double)()   ' seconds
@@ -41,8 +41,13 @@ Namespace Reactors
         Public Property Hemicellulose As New List(Of Double)()
         Public Property Glucose As New List(Of Double)()
         Public Property Xylose As New List(Of Double)()
+        Public Property Xylitol As New List(Of Double)()
+        Public Property BrothVolume As New List(Of Double)() ' m3; Julia reactor volume
 
         Public Function AvailableSeries() As String()
+            If Mode = "CoFermentation" Then
+                Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP", "Volume_m3"}
+            End If
             If Mode = "EnzymaticHydrolysis" Then
                 Return New String() {"Cellulose", "Hemicellulose", "Glucose", "Xylose"}
             End If
@@ -64,6 +69,8 @@ Namespace Reactors
                 Case "Hemicellulose" : Return Hemicellulose.ToArray()
                 Case "Glucose" : Return Glucose.ToArray()
                 Case "Xylose" : Return Xylose.ToArray()
+                Case "Xylitol" : Return Xylitol.ToArray()
+                Case "Volume_m3" : Return BrothVolume.ToArray()
                 Case Else : Return New Double() {}
             End Select
         End Function
