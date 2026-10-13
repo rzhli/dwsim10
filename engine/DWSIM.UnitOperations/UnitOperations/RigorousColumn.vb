@@ -3564,6 +3564,31 @@ Namespace UnitOperations
             Next
         End Sub
 
+        'Flash liquid labels do not encode column flow directions. For generated
+        'compositions, match the pair to the two boundary feeds: phase 1 descends
+        'from the top and phase 2 rises from the bottom. This is an initial-guess
+        'choice only; the nonlinear column equations remain unchanged.
+        Private Shared Sub OrientExtractorTrialToFeeds(topFeed As Double(), bottomFeed As Double(),
+                                                        ByRef flow1 As Double, ByRef flow2 As Double,
+                                                        ByRef composition1 As Double(), ByRef composition2 As Double())
+            If flow1 <= 0.0 OrElse flow2 <= 0.0 Then Return
+            Dim directDistance, swappedDistance As Double
+            For component As Integer = 0 To topFeed.Length - 1
+                directDistance += (composition1(component) - topFeed(component)) ^ 2 +
+                                  (composition2(component) - bottomFeed(component)) ^ 2
+                swappedDistance += (composition2(component) - topFeed(component)) ^ 2 +
+                                   (composition1(component) - bottomFeed(component)) ^ 2
+            Next
+            If (Double.IsNaN(directDistance) OrElse Double.IsInfinity(directDistance)) OrElse (Double.IsNaN(swappedDistance) OrElse Double.IsInfinity(swappedDistance)) OrElse
+                swappedDistance >= directDistance Then Return
+            Dim savedFlow = flow1
+            flow1 = flow2
+            flow2 = savedFlow
+            Dim savedComposition = composition1
+            composition1 = composition2
+            composition2 = savedComposition
+        End Sub
+
         Public Overridable Function GetSolverInputData(Optional ByVal ignoreuserestimates As Boolean = False,
                                                        Optional ByVal splitFeedByVolatility As Boolean = False) As ColumnSolverInputData
 
@@ -4423,37 +4448,49 @@ Namespace UnitOperations
                     Dim L1, L2, Vx1(), Vx2() As Double
                     Dim trialcomp As Double() = zm.Clone
                     For counter As Integer = 0 To 100
-                        Dim flashresult = pp.FlashBase.Flash_PT(trialcomp, P.Average, T.Average, pp)
-                        L1 = flashresult(0)
-                        L2 = flashresult(5)
-                        Vx1 = flashresult(2)
-                        Vx2 = flashresult(6)
-                        If L2 > 0.0 Then
-                            Dim L1t, L2t As New List(Of Double)
-                            Dim xt1, xt2 As New List(Of Double())
-                            For i = 0 To Stages.Count - 1
-                                If UseLiquidFlowEstimates Then
-                                    L1t.Add(L(i))
-                                Else
-                                    L1t.Add(F.Sum * L1)
+                        Dim flashresult As Object() = Nothing
+                        Try
+                            flashresult = pp.FlashBase.Flash_PT(trialcomp, P.Average, T.Average, pp)
+                        Catch ex As OperationCanceledException
+                            Throw
+                        Catch ex As Exception
+                            'A numerical failure of one trial must not discard the remaining trials.
+                        End Try
+                        If flashresult IsNot Nothing Then
+                            L1 = flashresult(0)
+                            L2 = flashresult(5)
+                            Vx1 = flashresult(2)
+                            Vx2 = flashresult(6)
+                            If L2 > 0.0 Then
+                                If Not UseCompositionEstimates AndAlso F(0) > 0.0 AndAlso F(ns) > 0.0 Then
+                                    OrientExtractorTrialToFeeds(fc(0), fc(ns), L1, L2, Vx1, Vx2)
                                 End If
-                                If UseVaporFlowEstimates Then
-                                    L2t.Add(V(i))
-                                Else
-                                    L2t.Add(F.Sum * L2)
-                                End If
-                                If UseCompositionEstimates Then
-                                    xt1.Add(x(i).Clone)
-                                    xt2.Add(y(i).Clone)
-                                Else
-                                    xt1.Add(Vx1)
-                                    xt2.Add(Vx2)
-                                End If
-                            Next
-                            L1trials.Add(L1t.ToArray())
-                            L2trials.Add(L2t.ToArray())
-                            x1trials.Add(xt1.ToArray())
-                            x2trials.Add(xt2.ToArray())
+                                Dim L1t, L2t As New List(Of Double)
+                                Dim xt1, xt2 As New List(Of Double())
+                                For i = 0 To Stages.Count - 1
+                                    If UseLiquidFlowEstimates Then
+                                        L1t.Add(L(i))
+                                    Else
+                                        L1t.Add(F.Sum * L1)
+                                    End If
+                                    If UseVaporFlowEstimates Then
+                                        L2t.Add(V(i))
+                                    Else
+                                        L2t.Add(F.Sum * L2)
+                                    End If
+                                    If UseCompositionEstimates Then
+                                        xt1.Add(x(i).Clone)
+                                        xt2.Add(y(i).Clone)
+                                    Else
+                                        xt1.Add(Vx1)
+                                        xt2.Add(Vx2)
+                                    End If
+                                Next
+                                L1trials.Add(L1t.ToArray())
+                                L2trials.Add(L2t.ToArray())
+                                x1trials.Add(xt1.ToArray())
+                                x2trials.Add(xt2.ToArray())
+                            End If
                         End If
                         Dim rnd As New Random(counter)
                         'random trials only over the compounds in the column feed (same draws when all are present)
@@ -4464,37 +4501,49 @@ Namespace UnitOperations
                     trialcomp = zm.Clone
                     Dim lle As New PropertyPackages.Auxiliary.FlashAlgorithms.SimpleLLE()
                     For counter As Integer = 0 To 100
-                        Dim flashresult = lle.Flash_PT(trialcomp, P.Average, T.Average, pp)
-                        L1 = flashresult(0)
-                        L2 = flashresult(5)
-                        Vx1 = flashresult(2)
-                        Vx2 = flashresult(6)
-                        If L2 > 0.0 And Vx1.SubtractY(Vx2).AbsSqrSumY > 0.001 Then
-                            Dim L1t, L2t As New List(Of Double)
-                            Dim xt1, xt2 As New List(Of Double())
-                            For i = 0 To Stages.Count - 1
-                                If UseLiquidFlowEstimates Then
-                                    L1t.Add(L(i))
-                                Else
-                                    L1t.Add(F.Sum * L1)
+                        Dim flashresult As Object() = Nothing
+                        Try
+                            flashresult = lle.Flash_PT(trialcomp, P.Average, T.Average, pp)
+                        Catch ex As OperationCanceledException
+                            Throw
+                        Catch ex As Exception
+                            'A numerical failure of one trial must not discard the remaining trials.
+                        End Try
+                        If flashresult IsNot Nothing Then
+                            L1 = flashresult(0)
+                            L2 = flashresult(5)
+                            Vx1 = flashresult(2)
+                            Vx2 = flashresult(6)
+                            If L2 > 0.0 And Vx1.SubtractY(Vx2).AbsSqrSumY > 0.001 Then
+                                If Not UseCompositionEstimates AndAlso F(0) > 0.0 AndAlso F(ns) > 0.0 Then
+                                    OrientExtractorTrialToFeeds(fc(0), fc(ns), L1, L2, Vx1, Vx2)
                                 End If
-                                If UseVaporFlowEstimates Then
-                                    L2t.Add(V(i))
-                                Else
-                                    L2t.Add(F.Sum * L2)
-                                End If
-                                If UseCompositionEstimates Then
-                                    xt1.Add(x(i))
-                                    xt2.Add(y(i))
-                                Else
-                                    xt1.Add(Vx1)
-                                    xt2.Add(Vx2)
-                                End If
-                            Next
-                            L1trials.Add(L1t.ToArray())
-                            L2trials.Add(L2t.ToArray())
-                            x1trials.Add(xt1.ToArray())
-                            x2trials.Add(xt2.ToArray())
+                                Dim L1t, L2t As New List(Of Double)
+                                Dim xt1, xt2 As New List(Of Double())
+                                For i = 0 To Stages.Count - 1
+                                    If UseLiquidFlowEstimates Then
+                                        L1t.Add(L(i))
+                                    Else
+                                        L1t.Add(F.Sum * L1)
+                                    End If
+                                    If UseVaporFlowEstimates Then
+                                        L2t.Add(V(i))
+                                    Else
+                                        L2t.Add(F.Sum * L2)
+                                    End If
+                                    If UseCompositionEstimates Then
+                                        xt1.Add(x(i))
+                                        xt2.Add(y(i))
+                                    Else
+                                        xt1.Add(Vx1)
+                                        xt2.Add(Vx2)
+                                    End If
+                                Next
+                                L1trials.Add(L1t.ToArray())
+                                L2trials.Add(L2t.ToArray())
+                                x1trials.Add(xt1.ToArray())
+                                x2trials.Add(xt2.ToArray())
+                            End If
                         End If
                         Dim rnd As New Random(counter)
                         'random trials only over the compounds in the column feed (same draws when all are present)
@@ -6713,6 +6762,68 @@ Namespace UnitOperations
             End Try
         End Function
 
+        'With the trial flows and compositions fixed, solve the stage energy
+        'balances for a temperature starting profile. No column equation or
+        'acceptance tolerance is changed. A failed estimate leaves the old ramp.
+        Private Shared Function ExtractorTrialTemperatures(input As ColumnSolverInputData,
+                                                           pp As PropertyPackages.PropertyPackage) As List(Of Double)
+            Dim original = input.StageTemperatures.ToArray()
+            Dim temperatures = DirectCast(original.Clone(), Double())
+            Dim n = temperatures.Length
+            Dim liquid = input.LiquidFlows.ToArray(), secondLiquid = input.VaporFlows.ToArray()
+            Dim x = input.LiquidCompositions.ToArray(), y = input.VaporCompositions.ToArray()
+            Dim p = input.StagePressures.ToArray()
+            Try
+                For iteration As Integer = 0 To 7
+                    If Settings.TaskCancellationTokenSource.IsCancellationRequested Then Throw New TaskCanceledException()
+                    Dim hl(n - 1), hv(n - 1), cl(n - 1), cv(n - 1) As Double
+                    For stage As Integer = 0 To n - 1
+                        Dim ml = pp.AUX_MMM(x(stage)) / 1000.0
+                        Dim mv = pp.AUX_MMM(y(stage)) / 1000.0
+                        hl(stage) = liquid(stage) * ml * pp.DW_CalcEnthalpy(x(stage), temperatures(stage), p(stage), PropertyPackages.State.Liquid)
+                        hv(stage) = secondLiquid(stage) * mv * pp.DW_CalcEnthalpy(y(stage), temperatures(stage), p(stage), PropertyPackages.State.Liquid)
+                        cl(stage) = (liquid(stage) * ml * pp.DW_CalcEnthalpy(x(stage), temperatures(stage) + 0.1, p(stage), PropertyPackages.State.Liquid) - hl(stage)) / 0.1
+                        cv(stage) = (secondLiquid(stage) * mv * pp.DW_CalcEnthalpy(y(stage), temperatures(stage) + 0.1, p(stage), PropertyPackages.State.Liquid) - hv(stage)) / 0.1
+                        If (Double.IsNaN(cl(stage)) OrElse Double.IsInfinity(cl(stage))) OrElse (Double.IsNaN(cv(stage)) OrElse Double.IsInfinity(cv(stage))) OrElse cl(stage) <= 0 OrElse cv(stage) <= 0 Then Return original.ToList()
+                    Next
+                    Dim lower(n - 1), diagonal(n - 1), upper(n - 1), rhs(n - 1), stepT(n - 1) As Double
+                    For stage As Integer = 0 To n - 1
+                        diagonal(stage) = cl(stage) + cv(stage)
+                        rhs(stage) = input.FeedFlows(stage) * input.FeedEnthalpies(stage) / 1000.0 + input.StageHeats(stage) - hl(stage) - hv(stage)
+                        If stage > 0 Then
+                            lower(stage) = -cl(stage - 1)
+                            rhs(stage) += hl(stage - 1)
+                        End If
+                        If stage < n - 1 Then
+                            upper(stage) = -cv(stage + 1)
+                            rhs(stage) += hv(stage + 1)
+                        End If
+                    Next
+                    For stage As Integer = 1 To n - 1
+                        Dim multiplier = lower(stage) / diagonal(stage - 1)
+                        diagonal(stage) -= multiplier * upper(stage - 1)
+                        rhs(stage) -= multiplier * rhs(stage - 1)
+                    Next
+                    For stage As Integer = n - 1 To 0 Step -1
+                        Dim value = rhs(stage)
+                        If stage < n - 1 Then value -= upper(stage) * stepT(stage + 1)
+                        stepT(stage) = value / diagonal(stage)
+                        If (Double.IsNaN(stepT(stage)) OrElse Double.IsInfinity(stepT(stage))) Then Return original.ToList()
+                    Next
+                    Dim factor = Math.Min(1.0, 50.0 / Math.Max(1.0, stepT.Select(Function(value) Math.Abs(value)).Max()))
+                    For stage As Integer = 0 To n - 1
+                        temperatures(stage) += factor * stepT(stage)
+                        If (Double.IsNaN(temperatures(stage)) OrElse Double.IsInfinity(temperatures(stage))) OrElse temperatures(stage) <= 0 Then Return original.ToList()
+                    Next
+                Next
+                Return temperatures.ToList()
+            Catch ex As OperationCanceledException
+                Throw
+            Catch ex As Exception
+                Return original.ToList()
+            End Try
+        End Function
+
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
 
             ColumnPropertiesProfile = ""
@@ -6866,6 +6977,11 @@ Namespace UnitOperations
                             inputdata.Kvalues = Kval.ToList()
                             inputdata.LiquidCompositions = x1trials(i).ToList()
                             inputdata.VaporCompositions = x2trials(i).ToList()
+                            If Not (UseTemperatureEstimates AndAlso InitialEstimates.ValidateTemperatures()) AndAlso
+                                inputdata.LiquidSideDraws.All(Function(value) value = 0.0) AndAlso
+                                inputdata.VaporSideDraws.All(Function(value) value = 0.0) Then
+                                inputdata.StageTemperatures = ExtractorTrialTemperatures(inputdata, pp)
+                            End If
                             so = Solver.SolveColumn(inputdata)
                             ex0 = Nothing
                             Exit For
