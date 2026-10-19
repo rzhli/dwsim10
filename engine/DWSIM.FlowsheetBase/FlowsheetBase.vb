@@ -3433,6 +3433,10 @@ Imports DWSIM.ExtensionMethods
                             obj.CreateConnectors(0, 0)
                             obj.Owner = Nothing
                             DirectCast(euo, Interfaces.ISimulationObject).GraphicObject = Nothing
+                            'The palette instance builds the ports of its default configuration; a unit with more
+                            'feeds or products than that needs room for every saved port before the connections
+                            'below are restored. The unit trims the spare ones the next time it builds its ports.
+                            ExternalUnitOperationGraphic.PadSavedConnectors(obj, xel)
                         Else
                             Try
                                 obj.CreateConnectors(0, 0)
@@ -3864,6 +3868,10 @@ Imports DWSIM.ExtensionMethods
                 Return New Utilities.PetroleumColdFlowUtility()
             Case FlowsheetUtility.PureCompoundProperties
                 Return New Utilities.PureCompoundPropertiesUtility()
+            Case FlowsheetUtility.DistillationCurves
+                Return New DWSIM.Thermodynamics.Utilities.PetroleumProperties.DistillationCurvesUtility()
+            Case FlowsheetUtility.Depressurization
+                Return New Utilities.DepressurizationUtility()
             Case FlowsheetUtility.ColumnInternals
                 'lives in the runner assembly, which references this one; found by name in whatever assembly carries it
                 Return CreateUtilityByName("DWSIM.Automation.DynamicRunner.ColumnInternals.ColumnInternalsUtility")

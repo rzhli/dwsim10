@@ -400,7 +400,21 @@ public partial class FlowsheetView : UserControl
 
         KeyDown += async (_, e) =>
         {
-            if (e.Key == Key.Delete || e.Key == Key.Back)
+            // The object shortcuts act only when the key comes from the flowsheet canvas. A key
+            // that bubbles up from an editor (a grid cell not being edited, a button, a check box)
+            // must not delete, copy, paste or select objects on the flowsheet.
+            bool fromCanvas = e.Source is Visual src && (ReferenceEquals(src, Canvas) || Canvas.IsVisualAncestorOf(src));
+
+            if ((e.Key == Key.Delete || e.Key == Key.Back) && !fromCanvas)
+            {
+                return;
+            }
+            else if (!fromCanvas && e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                     (e.Key == Key.C || e.Key == Key.V || e.Key == Key.A))
+            {
+                return;
+            }
+            else if (e.Key == Key.Delete || e.Key == Key.Back)
             {
                 HandleDelete();
                 e.Handled = true;
@@ -1351,8 +1365,7 @@ public partial class FlowsheetView : UserControl
                 if (rgfEl != null && !string.IsNullOrEmpty(rgfEl.Value))
                 {
                     // RGF format: JSON dictionary of worksheet name -> RGF XML JSON
-                    var rgfdata = rgfEl.Value.Replace("Calibri", "Arial").Replace("10.25", "10");
-                    var sdict = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(rgfdata);
+                    var sdict = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(rgfEl.Value);
                     if (sdict != null && sdict.Count > 0)
                     {
                         Dispatcher.UIThread.Invoke(() =>
@@ -1364,7 +1377,8 @@ public partial class FlowsheetView : UserControl
                                 try
                                 {
                                     var sheet = _spreadsheet.Grid.NewWorksheet(item.Key);
-                                    var xmldoc = Newtonsoft.Json.JsonConvert.DeserializeXmlNode(item.Value);
+                                    var xmldoc = Newtonsoft.Json.JsonConvert.DeserializeXmlNode(
+                                        DWSIM.Automation.Flowsheet2.DefaultSheetFont(item.Value));
                                     var tmpfile = DWSIM.SharedClasses.Utility.GetTempFileName();
                                     xmldoc!.Save(tmpfile);
                                     sheet.LoadRGF(tmpfile);
@@ -1515,7 +1529,7 @@ public partial class FlowsheetView : UserControl
             var ws = _spreadsheet.Grid.CurrentWorksheet;
             var cell = ws.Cells[ws.SelectionRange.StartPos];
             var units = dlg.SelectedUnit ?? "";
-            cell.Formula = string.Format("GETPROPVAL(\"{0}\";\"{1}\";\"{2}\")",
+            cell.Formula = SpreadsheetPanel.FormulaCall("GETPROPVAL",
                 dlg.SelectedObjectId, dlg.SelectedPropertyKey, units);
         };
 
@@ -1529,7 +1543,7 @@ public partial class FlowsheetView : UserControl
             var scell = ws.Cells[ws.SelectionRange.StartPos];
             var currdata = scell.Formula ?? scell.Data?.ToString() ?? "";
             var units = dlg.SelectedUnit ?? "";
-            scell.Formula = string.Format("SETPROPVAL(\"{0}\";\"{1}\";\"{2}\";\"{3}\")",
+            scell.Formula = SpreadsheetPanel.FormulaCall("SETPROPVAL",
                 dlg.SelectedObjectId, dlg.SelectedPropertyKey, currdata, units);
         };
 
@@ -2110,6 +2124,12 @@ public partial class FlowsheetView : UserControl
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
             new ColdFlowPropertiesWindow(_flowsheet).Show(HostWindow);
         };
+        MenuStreamDistCurves.Click += (_, _) =>
+        {
+            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            var sel = _surface?.SelectedObject;
+            new StreamDistillationCurvesWindow(_flowsheet, sel != null && sel.ObjectType == ObjectType.MaterialStream ? sel.Tag : null).Show(HostWindow);
+        };
         MenuSepSizing.Click += (_, _) =>
         {
             if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
@@ -2129,6 +2149,7 @@ public partial class FlowsheetView : UserControl
         {
             if (_flowsheet == null) return;
             if (utility is DWSIM.Automation.DynamicRunner.ColumnInternals.ColumnInternalsUtility ci) new ColumnInternalsWindow(_flowsheet, ci).Show(HostWindow);
+            if (utility is DWSIM.Thermodynamics.Utilities.PetroleumProperties.DistillationCurvesUtility dc) new StreamDistillationCurvesWindow(_flowsheet, null, dc).Show(HostWindow);
         };
         MenuMcCabeThiele.Click += (_, _) =>
         {
@@ -2709,6 +2730,16 @@ public partial class FlowsheetView : UserControl
         AppendLog($"{changed} object(s) {(active ? "activated" : "deactivated")}.");
     }
 
+    // the table and chart classes declare their own ClipboardData, which hides the base property
+    private static string? AnnotationClipboardText(object obj) => obj switch
+    {
+        DWSIM.Drawing.SkiaSharp.GraphicObjects.Tables.MasterTableGraphic t => t.ClipboardData,
+        DWSIM.Drawing.SkiaSharp.GraphicObjects.Tables.SpreadsheetTableGraphic t => t.ClipboardData,
+        DWSIM.Drawing.SkiaSharp.GraphicObjects.Tables.TableGraphic t => t.ClipboardData,
+        DWSIM.Drawing.SkiaSharp.GraphicObjects.Charts.OxyPlotGraphic c => c.ClipboardData,
+        _ => null
+    };
+
     private void ShowCanvasContextMenu()
     {
         var obj = _surface?.SelectedObject;
@@ -2851,7 +2882,21 @@ public partial class FlowsheetView : UserControl
             var copyData = new MenuItem { Header = "Copy Data to Clipboard", Icon = IconHelper.MIcon("\U0001F4CB") }; // clipboard
             copyData.Click += async (_, _) =>
             {
-                if (simObj == null) return;
+                if (simObj == null)
+                {
+                    // tables and charts keep the text of what they draw
+                    var text = AnnotationClipboardText(obj);
+                    if (text == null) return;
+                    try
+                    {
+                        var tclip = TopLevel.GetTopLevel(this)?.Clipboard;
+                        if (tclip != null)
+                            await tclip.SetTextAsync(text);
+                        AppendLog("Data copied to clipboard.");
+                    }
+                    catch (Exception ex) { AppendLog($"Copy failed: {ex.Message}", DWSIM.Interfaces.IFlowsheet.MessageType.GeneralError); }
+                    return;
+                }
                 try
                 {
                     var sb = new StringBuilder();

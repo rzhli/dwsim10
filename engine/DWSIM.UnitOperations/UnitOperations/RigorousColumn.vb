@@ -78,7 +78,7 @@ Namespace UnitOperations
 
         ''' <summary>
         ''' Initializes a new instance of the <see cref="DistillationColumn"/> class with a name and description,
-        ''' creates the default stages and sets every stage pressure to 101325 Pa.
+        ''' creates the default stages, sets every stage pressure to 101325 Pa and the column pressure drop to zero.
         ''' </summary>
         ''' <param name="name">The name of this unit operation.</param>
         ''' <param name="description">A brief description of this unit operation.</param>
@@ -90,6 +90,9 @@ Namespace UnitOperations
             For k2 = 0 To Me.Stages.Count - 1
                 Me.Stages(k2).P = 101325
             Next
+            ' a new column runs every stage from the top pressure plus a uniform drop; a loaded file keeps the
+            ' value it was saved with (NaN, the property default, means a custom per-stage profile)
+            Me.ColumnPressureDrop = 0.0
         End Sub
 
         ''' <summary>
@@ -1081,7 +1084,7 @@ Namespace UnitOperations
 
         ''' <summary>
         ''' Initializes a new instance of the <see cref="AbsorptionColumn"/> class with a name and description,
-        ''' creates the default stages and sets every stage pressure to 101325 Pa.
+        ''' creates the default stages, sets every stage pressure to 101325 Pa and the column pressure drop to zero.
         ''' </summary>
         ''' <param name="name">The name of this unit operation.</param>
         ''' <param name="description">A brief description of this unit operation.</param>
@@ -1096,6 +1099,9 @@ Namespace UnitOperations
             For k2 = 0 To Me.Stages.Count - 1
                 Me.Stages(k2).P = 101325
             Next
+            ' a new column runs every stage from the top pressure plus a uniform drop; a loaded file keeps the
+            ' value it was saved with (NaN, the property default, means a custom per-stage profile)
+            Me.ColumnPressureDrop = 0.0
         End Sub
 
         ''' <summary>Creates a deep copy of this object by round-tripping through XML serialization.</summary>
@@ -2300,6 +2306,51 @@ Namespace UnitOperations
 
         Public Shared ExternalColumnSolvers As New Dictionary(Of String, IExternalColumnSolver)
 
+        ''' <summary>
+        ''' Whether the external solver registered under this name takes the column: what it says through
+        ''' <see cref="IExternalColumnSolverSupport"/>, or distillation columns only when it says nothing.
+        ''' </summary>
+        ''' <summary>True when a free water product is connected to the condenser.</summary>
+        Public Function HasFreeWaterProduct() As Boolean
+            Return MaterialStreams.Values.Any(Function(s) s.StreamBehavior = StreamInformation.Behavior.FreeWater)
+        End Function
+
+        ''' <summary>The index of water among the compounds when a free water product is connected, or -1.</summary>
+        Public Function FreeWaterCompoundIndex() As Integer
+            If Not HasFreeWaterProduct() Then Return -1
+            Dim k = 0
+            For Each c In FlowSheet.SelectedCompounds.Values
+                If c.CAS_Number = "7732-18-5" OrElse String.Equals(c.Name, "Water", StringComparison.OrdinalIgnoreCase) Then Return k
+                k += 1
+            Next
+            Return -1
+        End Function
+
+        ''' <summary>Connects a stream to a side connector as the free water decanted from the condenser.</summary>
+        Public Sub ConnectFreeWater(stream As Interfaces.ISimulationObject)
+            Dim i As Integer = 0
+            For Each con In GraphicObject.OutputConnectors
+                If Not con.IsAttached AndAlso con.ConnectorName.Contains("Side") Then
+                    FlowSheet.ConnectObjects(GraphicObject, stream.GraphicObject, i, 0)
+                    MaterialStreams.Add(stream.Name, New StreamInformation With {.ID = stream.Name, .StreamID = stream.Name,
+                        .AssociatedStage = Stages(0).ID,
+                        .StreamBehavior = StreamInformation.Behavior.FreeWater,
+                        .StreamType = StreamInformation.Type.Material,
+                        .StreamPhase = StreamInformation.Phase.L})
+                    Return
+                End If
+                i += 1
+            Next
+            Throw New Exception("No side connector available for the free water product")
+        End Sub
+
+        Public Shared Function ExternalSolverSupports(name As String, column As Column) As Boolean
+            If name Is Nothing OrElse Not ExternalColumnSolvers.ContainsKey(name) Then Return False
+            Dim support = TryCast(ExternalColumnSolvers(name), IExternalColumnSolverSupport)
+            If support IsNot Nothing Then Return support.Supports(column)
+            Return TypeOf column Is DistillationColumn
+        End Function
+
         Public Property InitialEstimatesProvider As String = "Internal (Default)"
 
         Public Overrides ReadOnly Property EquipmentTypes As List(Of String)
@@ -2359,6 +2410,11 @@ Namespace UnitOperations
 
         Public Property ColumnPropertiesProfile As String = ""
 
+        ''' <summary>
+        ''' Pressure drop across the column, Pa. Every stage then runs at the top pressure plus its share of the drop.
+        ''' NaN means a custom per-stage profile: the solvers use the stage pressures as stored. New columns start at
+        ''' zero; NaN stays the property default so a file saved without the value loads as it always did.
+        ''' </summary>
         Public Property ColumnPressureDrop As Double = Double.NaN
 
         ''' <summary>
@@ -2555,6 +2611,8 @@ Namespace UnitOperations
                 For i = 1 To dif
                     Stages.Insert(Stages.Count - 1, New Stage(Guid.NewGuid().ToString))
                     Stages(Stages.Count - 2).Name = "Stage" & Stages.Count - 2
+                    ' between its neighbours, so a custom pressure profile has no stage at zero pressure
+                    Stages(Stages.Count - 2).P = (Stages(Stages.Count - 3).P + Stages(Stages.Count - 1).P) / 2
                     With InitialEstimates
                         Dim d As New Dictionary(Of String, Parameter)
                         For Each cp In FlowSheet.SelectedCompounds.Values
@@ -3448,6 +3506,13 @@ Namespace UnitOperations
                             Else
                                 Me.GraphicObject.OutputConnectors(idx).Position = New Point.Point(Me.GraphicObject.X, Me.GraphicObject.Y + 0.02 * Me.GraphicObject.Height)
                             End If
+                        Case StreamInformation.Behavior.FreeWater
+                            idx = FlowSheet.GraphicObjects(strinfo.StreamID).InputConnectors(0).AttachedConnector.AttachedFromConnectorIndex
+                            If Not Me.GraphicObject.FlippedH Then
+                                Me.GraphicObject.OutputConnectors(idx).Position = New Point.Point(Me.GraphicObject.X + Me.GraphicObject.Width, Me.GraphicObject.Y + 0.18 * Me.GraphicObject.Height)
+                            Else
+                                Me.GraphicObject.OutputConnectors(idx).Position = New Point.Point(Me.GraphicObject.X, Me.GraphicObject.Y + 0.18 * Me.GraphicObject.Height)
+                            End If
                         Case StreamInformation.Behavior.Sidedraw
                             idx = FlowSheet.GraphicObjects(strinfo.StreamID).InputConnectors(0).AttachedConnector.AttachedFromConnectorIndex
                             If Me.GraphicObject.FlippedH Then
@@ -3517,6 +3582,9 @@ Namespace UnitOperations
         Public Lf As Double() = New Double() {}
         Public LSS0 As Double() = New Double() {}
         Public LSSf As Double() = New Double() {}
+
+        ''' <summary>Free water decanted from the condenser in the last solution, mol/s.</summary>
+        Public FreeWaterFlow As Double = 0.0
         Public VSS0 As Double() = New Double() {}
         Public VSSf As Double() = New Double() {}
         Public P0 As Double() = New Double() {}
@@ -3549,6 +3617,31 @@ Namespace UnitOperations
                     v(k) = v(k) / others * (1.0 - x)
                 End If
             Next
+        End Sub
+
+        'Flash liquid labels do not encode column flow directions. For generated
+        'compositions, match the pair to the two boundary feeds: phase 1 descends
+        'from the top and phase 2 rises from the bottom. This is an initial-guess
+        'choice only; the nonlinear column equations remain unchanged.
+        Private Shared Sub OrientExtractorTrialToFeeds(topFeed As Double(), bottomFeed As Double(),
+                                                        ByRef flow1 As Double, ByRef flow2 As Double,
+                                                        ByRef composition1 As Double(), ByRef composition2 As Double())
+            If flow1 <= 0.0 OrElse flow2 <= 0.0 Then Return
+            Dim directDistance, swappedDistance As Double
+            For component As Integer = 0 To topFeed.Length - 1
+                directDistance += (composition1(component) - topFeed(component)) ^ 2 +
+                                  (composition2(component) - bottomFeed(component)) ^ 2
+                swappedDistance += (composition2(component) - topFeed(component)) ^ 2 +
+                                   (composition1(component) - bottomFeed(component)) ^ 2
+            Next
+            If (Double.IsNaN(directDistance) OrElse Double.IsInfinity(directDistance)) OrElse (Double.IsNaN(swappedDistance) OrElse Double.IsInfinity(swappedDistance)) OrElse
+                swappedDistance >= directDistance Then Return
+            Dim savedFlow = flow1
+            flow1 = flow2
+            flow2 = savedFlow
+            Dim savedComposition = composition1
+            composition1 = composition2
+            composition2 = savedComposition
         End Sub
 
         Public Overridable Function GetSolverInputData(Optional ByVal ignoreuserestimates As Boolean = False,
@@ -4410,37 +4503,49 @@ Namespace UnitOperations
                     Dim L1, L2, Vx1(), Vx2() As Double
                     Dim trialcomp As Double() = zm.Clone
                     For counter As Integer = 0 To 100
-                        Dim flashresult = pp.FlashBase.Flash_PT(trialcomp, P.Average, T.Average, pp)
-                        L1 = flashresult(0)
-                        L2 = flashresult(5)
-                        Vx1 = flashresult(2)
-                        Vx2 = flashresult(6)
-                        If L2 > 0.0 Then
-                            Dim L1t, L2t As New List(Of Double)
-                            Dim xt1, xt2 As New List(Of Double())
-                            For i = 0 To Stages.Count - 1
-                                If UseLiquidFlowEstimates Then
-                                    L1t.Add(L(i))
-                                Else
-                                    L1t.Add(F.Sum * L1)
+                        Dim flashresult As Object() = Nothing
+                        Try
+                            flashresult = pp.FlashBase.Flash_PT(trialcomp, P.Average, T.Average, pp)
+                        Catch ex As OperationCanceledException
+                            Throw
+                        Catch ex As Exception
+                            'A numerical failure of one trial must not discard the remaining trials.
+                        End Try
+                        If flashresult IsNot Nothing Then
+                            L1 = flashresult(0)
+                            L2 = flashresult(5)
+                            Vx1 = flashresult(2)
+                            Vx2 = flashresult(6)
+                            If L2 > 0.0 Then
+                                If Not UseCompositionEstimates AndAlso F(0) > 0.0 AndAlso F(ns) > 0.0 Then
+                                    OrientExtractorTrialToFeeds(fc(0), fc(ns), L1, L2, Vx1, Vx2)
                                 End If
-                                If UseVaporFlowEstimates Then
-                                    L2t.Add(V(i))
-                                Else
-                                    L2t.Add(F.Sum * L2)
-                                End If
-                                If UseCompositionEstimates Then
-                                    xt1.Add(x(i).Clone)
-                                    xt2.Add(y(i).Clone)
-                                Else
-                                    xt1.Add(Vx1)
-                                    xt2.Add(Vx2)
-                                End If
-                            Next
-                            L1trials.Add(L1t.ToArray())
-                            L2trials.Add(L2t.ToArray())
-                            x1trials.Add(xt1.ToArray())
-                            x2trials.Add(xt2.ToArray())
+                                Dim L1t, L2t As New List(Of Double)
+                                Dim xt1, xt2 As New List(Of Double())
+                                For i = 0 To Stages.Count - 1
+                                    If UseLiquidFlowEstimates Then
+                                        L1t.Add(L(i))
+                                    Else
+                                        L1t.Add(F.Sum * L1)
+                                    End If
+                                    If UseVaporFlowEstimates Then
+                                        L2t.Add(V(i))
+                                    Else
+                                        L2t.Add(F.Sum * L2)
+                                    End If
+                                    If UseCompositionEstimates Then
+                                        xt1.Add(x(i).Clone)
+                                        xt2.Add(y(i).Clone)
+                                    Else
+                                        xt1.Add(Vx1)
+                                        xt2.Add(Vx2)
+                                    End If
+                                Next
+                                L1trials.Add(L1t.ToArray())
+                                L2trials.Add(L2t.ToArray())
+                                x1trials.Add(xt1.ToArray())
+                                x2trials.Add(xt2.ToArray())
+                            End If
                         End If
                         Dim rnd As New Random(counter)
                         'random trials only over the compounds in the column feed (same draws when all are present)
@@ -4451,37 +4556,49 @@ Namespace UnitOperations
                     trialcomp = zm.Clone
                     Dim lle As New PropertyPackages.Auxiliary.FlashAlgorithms.SimpleLLE()
                     For counter As Integer = 0 To 100
-                        Dim flashresult = lle.Flash_PT(trialcomp, P.Average, T.Average, pp)
-                        L1 = flashresult(0)
-                        L2 = flashresult(5)
-                        Vx1 = flashresult(2)
-                        Vx2 = flashresult(6)
-                        If L2 > 0.0 And Vx1.SubtractY(Vx2).AbsSqrSumY > 0.001 Then
-                            Dim L1t, L2t As New List(Of Double)
-                            Dim xt1, xt2 As New List(Of Double())
-                            For i = 0 To Stages.Count - 1
-                                If UseLiquidFlowEstimates Then
-                                    L1t.Add(L(i))
-                                Else
-                                    L1t.Add(F.Sum * L1)
+                        Dim flashresult As Object() = Nothing
+                        Try
+                            flashresult = lle.Flash_PT(trialcomp, P.Average, T.Average, pp)
+                        Catch ex As OperationCanceledException
+                            Throw
+                        Catch ex As Exception
+                            'A numerical failure of one trial must not discard the remaining trials.
+                        End Try
+                        If flashresult IsNot Nothing Then
+                            L1 = flashresult(0)
+                            L2 = flashresult(5)
+                            Vx1 = flashresult(2)
+                            Vx2 = flashresult(6)
+                            If L2 > 0.0 And Vx1.SubtractY(Vx2).AbsSqrSumY > 0.001 Then
+                                If Not UseCompositionEstimates AndAlso F(0) > 0.0 AndAlso F(ns) > 0.0 Then
+                                    OrientExtractorTrialToFeeds(fc(0), fc(ns), L1, L2, Vx1, Vx2)
                                 End If
-                                If UseVaporFlowEstimates Then
-                                    L2t.Add(V(i))
-                                Else
-                                    L2t.Add(F.Sum * L2)
-                                End If
-                                If UseCompositionEstimates Then
-                                    xt1.Add(x(i))
-                                    xt2.Add(y(i))
-                                Else
-                                    xt1.Add(Vx1)
-                                    xt2.Add(Vx2)
-                                End If
-                            Next
-                            L1trials.Add(L1t.ToArray())
-                            L2trials.Add(L2t.ToArray())
-                            x1trials.Add(xt1.ToArray())
-                            x2trials.Add(xt2.ToArray())
+                                Dim L1t, L2t As New List(Of Double)
+                                Dim xt1, xt2 As New List(Of Double())
+                                For i = 0 To Stages.Count - 1
+                                    If UseLiquidFlowEstimates Then
+                                        L1t.Add(L(i))
+                                    Else
+                                        L1t.Add(F.Sum * L1)
+                                    End If
+                                    If UseVaporFlowEstimates Then
+                                        L2t.Add(V(i))
+                                    Else
+                                        L2t.Add(F.Sum * L2)
+                                    End If
+                                    If UseCompositionEstimates Then
+                                        xt1.Add(x(i))
+                                        xt2.Add(y(i))
+                                    Else
+                                        xt1.Add(Vx1)
+                                        xt2.Add(Vx2)
+                                    End If
+                                Next
+                                L1trials.Add(L1t.ToArray())
+                                L2trials.Add(L2t.ToArray())
+                                x1trials.Add(xt1.ToArray())
+                                x2trials.Add(xt2.ToArray())
+                            End If
                         End If
                         Dim rnd As New Random(counter)
                         'random trials only over the compounds in the column feed (same draws when all are present)
@@ -6682,7 +6799,10 @@ Namespace UnitOperations
         Private Function SolveBubblePointRetry(bpsolver As ColumnSolver) As ColumnSolverOutputData
             SetColumnSolver(bpsolver)
             Try
-                Return Solver.SolveColumn(GetSolverInputData(True))
+                ' the retry starts from the products split by volatility (when the specifications leave their
+                ' compositions open): the stage temperatures and compositions then start on the line between
+                ' two separated products, where a column the feed-composition start cannot settle often converges
+                Return Solver.SolveColumn(GetSolverInputData(True, True))
             Catch oex As OperationCanceledException
                 Throw
             Catch bpex As Exception
@@ -6700,7 +6820,75 @@ Namespace UnitOperations
             End Try
         End Function
 
+        'With the trial flows and compositions fixed, solve the stage energy
+        'balances for a temperature starting profile. No column equation or
+        'acceptance tolerance is changed. A failed estimate leaves the old ramp.
+        Private Shared Function ExtractorTrialTemperatures(input As ColumnSolverInputData,
+                                                           pp As PropertyPackages.PropertyPackage) As List(Of Double)
+            Dim original = input.StageTemperatures.ToArray()
+            Dim temperatures = DirectCast(original.Clone(), Double())
+            Dim n = temperatures.Length
+            Dim liquid = input.LiquidFlows.ToArray(), secondLiquid = input.VaporFlows.ToArray()
+            Dim x = input.LiquidCompositions.ToArray(), y = input.VaporCompositions.ToArray()
+            Dim p = input.StagePressures.ToArray()
+            Try
+                For iteration As Integer = 0 To 7
+                    If Settings.TaskCancellationTokenSource.IsCancellationRequested Then Throw New TaskCanceledException()
+                    Dim hl(n - 1), hv(n - 1), cl(n - 1), cv(n - 1) As Double
+                    For stage As Integer = 0 To n - 1
+                        Dim ml = pp.AUX_MMM(x(stage)) / 1000.0
+                        Dim mv = pp.AUX_MMM(y(stage)) / 1000.0
+                        hl(stage) = liquid(stage) * ml * pp.DW_CalcEnthalpy(x(stage), temperatures(stage), p(stage), PropertyPackages.State.Liquid)
+                        hv(stage) = secondLiquid(stage) * mv * pp.DW_CalcEnthalpy(y(stage), temperatures(stage), p(stage), PropertyPackages.State.Liquid)
+                        cl(stage) = (liquid(stage) * ml * pp.DW_CalcEnthalpy(x(stage), temperatures(stage) + 0.1, p(stage), PropertyPackages.State.Liquid) - hl(stage)) / 0.1
+                        cv(stage) = (secondLiquid(stage) * mv * pp.DW_CalcEnthalpy(y(stage), temperatures(stage) + 0.1, p(stage), PropertyPackages.State.Liquid) - hv(stage)) / 0.1
+                        If (Double.IsNaN(cl(stage)) OrElse Double.IsInfinity(cl(stage))) OrElse (Double.IsNaN(cv(stage)) OrElse Double.IsInfinity(cv(stage))) OrElse cl(stage) <= 0 OrElse cv(stage) <= 0 Then Return original.ToList()
+                    Next
+                    Dim lower(n - 1), diagonal(n - 1), upper(n - 1), rhs(n - 1), stepT(n - 1) As Double
+                    For stage As Integer = 0 To n - 1
+                        diagonal(stage) = cl(stage) + cv(stage)
+                        rhs(stage) = input.FeedFlows(stage) * input.FeedEnthalpies(stage) / 1000.0 + input.StageHeats(stage) - hl(stage) - hv(stage)
+                        If stage > 0 Then
+                            lower(stage) = -cl(stage - 1)
+                            rhs(stage) += hl(stage - 1)
+                        End If
+                        If stage < n - 1 Then
+                            upper(stage) = -cv(stage + 1)
+                            rhs(stage) += hv(stage + 1)
+                        End If
+                    Next
+                    For stage As Integer = 1 To n - 1
+                        Dim multiplier = lower(stage) / diagonal(stage - 1)
+                        diagonal(stage) -= multiplier * upper(stage - 1)
+                        rhs(stage) -= multiplier * rhs(stage - 1)
+                    Next
+                    For stage As Integer = n - 1 To 0 Step -1
+                        Dim value = rhs(stage)
+                        If stage < n - 1 Then value -= upper(stage) * stepT(stage + 1)
+                        stepT(stage) = value / diagonal(stage)
+                        If (Double.IsNaN(stepT(stage)) OrElse Double.IsInfinity(stepT(stage))) Then Return original.ToList()
+                    Next
+                    Dim factor = Math.Min(1.0, 50.0 / Math.Max(1.0, stepT.Select(Function(value) Math.Abs(value)).Max()))
+                    For stage As Integer = 0 To n - 1
+                        temperatures(stage) += factor * stepT(stage)
+                        If (Double.IsNaN(temperatures(stage)) OrElse Double.IsInfinity(temperatures(stage))) OrElse temperatures(stage) <= 0 Then Return original.ToList()
+                    Next
+                Next
+                Return temperatures.ToList()
+            Catch ex As OperationCanceledException
+                Throw
+            Catch ex As Exception
+                Return original.ToList()
+            End Try
+        End Function
+
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
+
+            'secondary specifications: an outer loop around this same solve
+            If Not _secondarySpecPass AndAlso HasActiveSecondarySpecs() Then
+                SolveWithSecondarySpecs(args)
+                Exit Sub
+            End If
 
             ColumnPropertiesProfile = ""
 
@@ -6824,6 +7012,9 @@ Namespace UnitOperations
                         Throw New Exception($"Unable to find column solver with name '{SolvingMethodName}'.")
                     End If
                 End If
+            ElseIf TypeOf Me Is AbsorptionColumn AndAlso ExternalSolverSupports(SolvingMethodName, Me) Then
+                'an external solver that says it takes this absorber
+                so = Column.ExternalColumnSolvers(SolvingMethodName).SolveColumn(Me, inputdata)
             ElseIf TypeOf Me Is AbsorptionColumn Then
                 If SolvingMethodName.Contains("Rates") Then
                     SetColumnSolver(New SolvingMethods.BurninghamOttoMethod())
@@ -6853,6 +7044,11 @@ Namespace UnitOperations
                             inputdata.Kvalues = Kval.ToList()
                             inputdata.LiquidCompositions = x1trials(i).ToList()
                             inputdata.VaporCompositions = x2trials(i).ToList()
+                            If Not (UseTemperatureEstimates AndAlso InitialEstimates.ValidateTemperatures()) AndAlso
+                                inputdata.LiquidSideDraws.All(Function(value) value = 0.0) AndAlso
+                                inputdata.VaporSideDraws.All(Function(value) value = 0.0) Then
+                                inputdata.StageTemperatures = ExtractorTrialTemperatures(inputdata, pp)
+                            End If
                             so = Solver.SolveColumn(inputdata)
                             ex0 = Nothing
                             Exit For
@@ -6920,6 +7116,10 @@ Namespace UnitOperations
             VSSf = so.VaporSideDraws.ToArray()
             LSSf = so.LiquidSideDraws.ToArray()
             Q = so.StageHeats.ToArray()
+            FreeWaterFlow = so.FreeWaterFlow
+            If HasFreeWaterProduct() AndAlso Not so.FreeWaterDecanted Then
+                FlowSheet.ShowMessage(GraphicObject.Tag + ": the " + SolvingMethodName + " solver does not decant free water; the free water product is empty and the water stays with the condenser liquid.", IFlowsheet.MessageType.Warning)
+            End If
 
             'generate properties profile
 
@@ -7123,6 +7323,34 @@ Namespace UnitOperations
                                 i = 0
                                 For Each subst As BaseClasses.Compound In .Phases(0).Compounds.Values
                                     subst.MassFraction = pp.AUX_CONVERT_MOL_TO_MASS(xf(ns))(i)
+                                    i += 1
+                                Next
+                                .Phases(3).Properties.molarfraction = 1.0
+                                .CopyCompositions(PhaseLabel.Mixture, PhaseLabel.Liquid1)
+                                .AtEquilibrium = True
+                            End With
+                        Case StreamInformation.Behavior.FreeWater
+                            msm = FlowSheet.SimulationObjects(sinf.StreamID)
+                            Dim iw = FreeWaterCompoundIndex()
+                            'pure water at the condenser temperature and pressure
+                            Dim zw(comps.Count - 1) As Double
+                            If iw >= 0 Then zw(iw) = 1.0
+                            Dim fw = If(iw >= 0, FreeWaterFlow, 0.0)
+                            With msm
+                                pp.CurrentMaterialStream = msm
+                                .Clear()
+                                .SpecType = StreamSpec.Pressure_and_Enthalpy
+                                .DefinedFlow = FlowSpec.Mass
+                                .Phases(0).Properties.massflow = If(iw >= 0, fw * pp.RET_VMM()(iw) / 1000, 0.0)
+                                .Phases(0).Properties.molarflow = fw
+                                .Phases(0).Properties.temperature = Tf(0)
+                                .Phases(0).Properties.pressure = P(0)
+                                If iw >= 0 Then .Phases(0).Properties.enthalpy = pp.DW_CalcEnthalpy(zw, Tf(0), P(0), PropertyPackages.State.Liquid)
+                                i = 0
+                                For Each subst As BaseClasses.Compound In .Phases(0).Compounds.Values
+                                    subst.MoleFraction = zw(i)
+                                    subst.MassFraction = zw(i)
+                                    If i = iw Then compound_balances(subst.Name) -= fw
                                     i += 1
                                 Next
                                 .Phases(3).Properties.molarfraction = 1.0
@@ -7471,6 +7699,16 @@ Namespace UnitOperations
                                 For Each subst As BaseClasses.Compound In .Phases(0).Compounds.Values
                                     subst.MoleFraction = 0
                                     i += 1
+                                Next
+                            End With
+                        Case StreamInformation.Behavior.FreeWater
+                            msm = FlowSheet.SimulationObjects(sinf.StreamID)
+                            With msm
+                                .Phases(0).Properties.massflow = 0
+                                .Phases(0).Properties.temperature = 0
+                                .Phases(0).Properties.pressure = 0
+                                For Each subst As BaseClasses.Compound In .Phases(0).Compounds.Values
+                                    subst.MoleFraction = 0
                                 Next
                             End With
                         Case StreamInformation.Behavior.Sidedraw
@@ -8167,6 +8405,12 @@ Namespace UnitOperations.Auxiliary.SepOps
         Public Property LiquidSideDraws As List(Of Double)
         Public Property Kvalues As List(Of Double())
 
+        ''' <summary>Free water decanted from the condenser, mol/s, pure water; zero when the solver does not decant it.</summary>
+        Public Property FreeWaterFlow As Double = 0.0
+
+        ''' <summary>True when the solver handled the free water product (even at zero flow).</summary>
+        Public Property FreeWaterDecanted As Boolean = False
+
     End Class
 
     <System.Serializable()> Public Class StreamInformation
@@ -8188,6 +8432,8 @@ Namespace UnitOperations.Auxiliary.SepOps
             SideOpVaporProduct = 6
             Steam = 7
             InterExchanger = 8
+            ''' <summary>Water decanted from the condenser as a free water phase (a side connector of the column).</summary>
+            FreeWater = 9
         End Enum
 
         Public Enum Phase

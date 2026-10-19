@@ -426,9 +426,14 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                 GoTo out
 
-            ElseIf vpMinP > P And vpMinP > 0 Then
+            ElseIf vpMinP > P And vpMinP > 0 AndAlso Not (PP.PackageType = PropertyPackages.PackageType.EOS AndAlso vpMinP < 2.0# * P AndAlso EOSDewSum(Vz, Ki, T, P, PP) > 1.0#) Then
 
-                'all vapor
+                'all vapor. With an equation of state the vapour pressures above come from the compound
+                'correlation, and the dew point of the model can lie above the temperature where every one
+                'of them exceeds P (water with a user vapour pressure fit 13 % high at 373 K, 5 % oxygen,
+                'Peng-Robinson, 1 atm: all vapour by the correlation from 369.5 K, dew point 373.0 K). Within
+                'a factor of 2 of P the shortcut stands only when the incipient liquid of the model says so,
+                'sum(z/K) <= 1 (the tangent plane test with a liquid trial phase).
                 L = 0
                 V = 1
                 Vy = Vz
@@ -911,6 +916,49 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             If V <= 0.0# OrElse V >= 1.0# Then Return Nothing
             Return New Object() {V, Vx, Vy, K}
 
+        End Function
+
+        ''' <summary>
+        ''' Dew-point sum, sum(z/K), of the feed as vapour against its incipient liquid on the model's own K
+        ''' values, by successive substitution from the K values K0. Above 1 the feed is below its dew point.
+        ''' Returns 0 when the substitution reaches the trivial solution or fails, so the caller keeps its result.
+        ''' </summary>
+        Private Function EOSDewSum(Vz As Double(), K0 As Double(), T As Double, P As Double, PP As PropertyPackages.PropertyPackage) As Double
+            Dim n As Integer = Vz.Length - 1
+            Dim x(n) As Double
+            Dim s As Double = 0.0#
+            Try
+                For j = 0 To n
+                    x(j) = If(Vz(j) > 0.0# AndAlso K0(j) > 0.0#, Vz(j) / K0(j), 0.0#)
+                Next
+                If x.SumY <= 0.0# Then Return 0.0#
+                x = x.NormalizeY()
+                For it As Integer = 1 To 50
+                    Dim K = PP.DW_CalcKvalue(x, Vz, T, P)
+                    Dim xn(n) As Double
+                    Dim trivial As Boolean = True
+                    s = 0.0#
+                    For j = 0 To n
+                        If Vz(j) > 0.0# Then
+                            If Double.IsNaN(K(j)) OrElse Double.IsInfinity(K(j)) OrElse K(j) <= 0.0# Then Return 0.0#
+                            xn(j) = Vz(j) / K(j)
+                            s += xn(j)
+                            If Math.Abs(Log(K(j))) > 0.0001 Then trivial = False
+                        End If
+                    Next
+                    If trivial Then Return 0.0#
+                    Dim dx As Double = 0.0#
+                    For j = 0 To n
+                        xn(j) /= s
+                        dx = Math.Max(dx, Math.Abs(xn(j) - x(j)))
+                    Next
+                    x = xn
+                    If dx < 0.000001 Then Exit For
+                Next
+            Catch ex As Exception
+                Return 0.0#
+            End Try
+            Return s
         End Function
 
         ''' <summary>
@@ -1574,6 +1622,41 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Dim fx_bracket_pos As Double = Double.NaN
             Dim fx_bracket_neg As Double = Double.NaN
 
+            'A temperature interval does not bound enthalpy error near a vaporization front.
+            'Use the configured absolute enthalpy tolerance for every bracketed exit.
+            Dim bisectEnthalpy As Func(Of Double, Double, Double) =
+                Function(ta, tb)
+                    Try
+                        Dim lo = Math.Min(ta, tb)
+                        Dim hi = Math.Max(ta, tb)
+                        Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                        Dim fhi As Double = Herror("PT", hi, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                        If Double.IsNaN(flo) OrElse Double.IsNaN(fhi) Then Return Double.NaN
+                        If Math.Abs(flo) <= tolEXT Then Return lo
+                        If Math.Abs(fhi) <= tolEXT Then Return hi
+                        If Math.Sign(flo) = Math.Sign(fhi) Then Return Double.NaN
+                        For bcnt As Integer = 0 To 200
+                            Dim mid = lo + (hi - lo) / 2.0
+                            Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                            If Double.IsNaN(fmid) Then Return Double.NaN
+                            If Math.Abs(fmid) <= tolEXT Then Return mid
+                            If mid = lo OrElse mid = hi Then Return Double.NaN
+                            If Math.Sign(fmid) = Math.Sign(flo) Then
+                                lo = mid
+                                flo = fmid
+                            Else
+                                hi = mid
+                            End If
+                        Next
+                        Return Double.NaN
+                    Catch ex As OperationCanceledException
+                        Throw
+                    Catch ex As Exception
+                        'a flash that fails inside the bracket: let the caller take its fallback
+                        Return Double.NaN
+                    End Try
+                End Function
+
             Do
 
                 IObj?.SetCurrent()
@@ -1639,24 +1722,27 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     signChanges += 1
                 End If
 
-                ' Oscillation fallback: use Brent on bracketed interval
+                ' Oscillation fallback: solve the enthalpy residual on the bracket
                 If signChanges >= 3 Then
 
                     If Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg) Then
-                        Dim bmin As New Brent
-                        Dim Kbrent = Ki_est
-                        Dim Ta = Math.Min(T_bracket_pos, T_bracket_neg)
-                        Dim Tb = Math.Max(T_bracket_pos, T_bracket_neg)
-                        'a bracket that bisection has already collapsed to one temperature (the
-                        'residual flips sign on the noise of a dew-point flash) is the answer itself
-                        If Tb - Ta <= 1.0E-6 * Ta Then
-                            x1 = 0.5 * (Ta + Tb)
-                            Exit Do
+                        x1 = bisectEnthalpy(T_bracket_pos, T_bracket_neg)
+                        If Double.IsNaN(x1) Then
+                            'the residual is not resolvable to tolEXT on this bracket (flash noise or a
+                            'jump): keep the previous answer
+                            Dim bmin As New Brent
+                            Dim Kbrent = Ki_est
+                            Dim Ta = Math.Min(T_bracket_pos, T_bracket_neg)
+                            Dim Tb = Math.Max(T_bracket_pos, T_bracket_neg)
+                            If Tb - Ta <= 1.0E-6 * Ta Then
+                                x1 = 0.5 * (Ta + Tb)
+                            Else
+                                x1 = bmin.BrentOpt2(Ta, Tb, 100, tolEXT, maxitEXT,
+                                    Function(tval)
+                                        Return Herror("PT", tval, P, Vz, PP, Kbrent IsNot Nothing, Kbrent)(0)
+                                    End Function)
+                            End If
                         End If
-                        x1 = bmin.BrentOpt2(Ta, Tb, 100, tolEXT, maxitEXT,
-                            Function(tval)
-                                Return Herror("PT", tval, P, Vz, PP, Kbrent IsNot Nothing, Kbrent)(0)
-                            End Function)
                         Exit Do
                     Else
                         ' Cannot bracket, fall back to rigorous mode
@@ -1738,25 +1824,29 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             ' than hand off to the rigorous mode, whose bubble/dew phase test is itself unreliable at
             ' high pressure here and can return a spurious all-vapour temperature far from the spec.
             If notConverged AndAlso haveBracket Then
-                Dim lo As Double = Math.Min(T_bracket_pos, T_bracket_neg)
-                Dim hi As Double = Math.Max(T_bracket_pos, T_bracket_neg)
-                Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
-                Dim bcnt As Integer = 0
-                Do
-                    Dim mid As Double = (lo + hi) / 2.0
-                    Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
-                    If Double.IsNaN(fmid) Then Exit Do
-                    If Math.Abs(fmid) <= tolEXT OrElse (hi - lo) < 0.0005 Then
-                        lo = mid : hi = mid : Exit Do
-                    End If
-                    If Math.Sign(fmid) = Math.Sign(flo) Then
-                        lo = mid : flo = fmid
-                    Else
-                        hi = mid
-                    End If
-                    bcnt += 1
-                Loop Until bcnt > 200
-                T = (lo + hi) / 2.0
+                T = bisectEnthalpy(T_bracket_pos, T_bracket_neg)
+                If Double.IsNaN(T) Then
+                    'not resolvable to tolEXT: keep the previous answer
+                    Dim lo As Double = Math.Min(T_bracket_pos, T_bracket_neg)
+                    Dim hi As Double = Math.Max(T_bracket_pos, T_bracket_neg)
+                    Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                    Dim bcnt As Integer = 0
+                    Do
+                        Dim mid As Double = (lo + hi) / 2.0
+                        Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                        If Double.IsNaN(fmid) Then Exit Do
+                        If Math.Abs(fmid) <= tolEXT OrElse (hi - lo) < 0.0005 Then
+                            lo = mid : hi = mid : Exit Do
+                        End If
+                        If Math.Sign(fmid) = Math.Sign(flo) Then
+                            lo = mid : flo = fmid
+                        Else
+                            hi = mid
+                        End If
+                        bcnt += 1
+                    Loop Until bcnt > 200
+                    T = (lo + hi) / 2.0
+                End If
                 notConverged = Double.IsNaN(T) OrElse T <= Tmin OrElse T >= Tmax
             End If
 
@@ -3584,6 +3674,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Dim result As Object()
             Dim Kvals As Double()
             Dim trivial As Boolean = False
+            Dim fromzero As Object() = Nothing
 
             Dim estimate As Interfaces.IConvergenceHelperResponse = Nothing
 
@@ -3631,6 +3722,17 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             'run: with more than one liquid branch the first attempt can converge on the wrong one.
             Dim checkdew As Boolean = Not AcceptStalledSaturationPoint AndAlso V = 1.0
             Dim Tfirst As Double = If(result.Count > 1, Convert.ToDouble(result(4)), Tref)
+
+            'A bubble point whose equation holds at the returned point has converged, whatever step the loop
+            'took last: Flash_PV_1 exits on its residual. It is neither retried from the ideal-solution seed nor
+            'sent to the pressure stepping below, both of which can end on another root of the equation, far
+            'from the caller's estimate. Only a point the check against the model at the end would keep
+            '(SaturationPointHolds, which also rejects the trivial solution, where the equation holds at any
+            'temperature) skips them; any other result takes the fallbacks as before.
+            If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso V = 0 AndAlso Math.Abs(deltaT) > 0.01 AndAlso
+                BubblePointEquationHolds(result, PP) AndAlso SaturationPointHolds(Vz, P, V, result, PP) Then
+                deltaT = 0.0
+            End If
 
             'A bubble or dew point that did not converge from the caller's seed is tried once more
             'from the ideal-solution seed, with K values from the package, before the pressure
@@ -3733,6 +3835,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 If result.Count > 1 Then
                     Kvals = result(6)
                     If PP.AUX_CheckTrivial(Kvals, 0.2, Vz) Then trivial = True
+                    'A bubble point of the model found by this retry, away from the trivial solution, is kept: the
+                    'flag still sends the flash to the pressure stepping below, and where that finds nothing it stands.
+                    If trivial AndAlso Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso V = 0.0 AndAlso
+                        SaturationPointHolds(Vz, P, V, result, PP) Then fromzero = result
                 End If
             End If
 
@@ -3762,6 +3868,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                         result = New Object() {-1}
                     End If
                 End If
+                If result.Count = 1 AndAlso fromzero IsNot Nothing Then result = fromzero
             End If
 
             If checkdew Then result = DewPointOnStableBranch(Vz, P, Tfirst, result, PP)
@@ -4149,6 +4256,14 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
         Friend Property CheckedByCaller As Boolean = False
 
         ''' <summary>
+        ''' An instance that runs the checks below (SaturationPointHolds, IdealResultHolds) for NestedLoops2, with its
+        ''' flash settings and loop tolerance.
+        ''' </summary>
+        Friend Shared Function ForChecks(settings As Dictionary(Of Interfaces.Enums.FlashSetting, String), tol As Double) As NestedLoops
+            Return New NestedLoops With {.FlashSettings = settings, .etol = tol}
+        End Function
+
+        ''' <summary>
         ''' Whether the checks below apply: to an equation of state, a corresponding-states or an activity-coefficient
         ''' package whose K values come from its fugacity coefficients, and not to a single compound, nor to a feed with
         ''' solids or salts, which Flash_PV_1 keeps out of the vapour on another basis.
@@ -4164,12 +4279,32 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
         End Function
 
         ''' <summary>
+        ''' True for a bubble point result whose equation holds at the returned point: sum K x = 1 to the loop
+        ''' tolerance over the compounds not declared solid, with the K values and liquid it returns. As
+        ''' NestedLoops2.StalledSaturationPoint reads a result.
+        ''' </summary>
+        Private Function BubblePointEquationHolds(result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+            If result.Length < 12 Then Return False
+            Dim K = DirectCast(result(6), Double()), x = DirectCast(result(2), Double())
+            Dim cprops = PP.DW_GetConstantProperties()
+            Dim s, xs As Double
+            For i = 0 To K.Length - 1
+                If Not cprops(i).IsSolid Then
+                    s += K(i) * x(i)
+                    xs += x(i)
+                End If
+            Next
+            If Not xs > 0.0 Then Return False
+            Return Math.Abs(s / xs - 1.0) < etol
+        End Function
+
+        ''' <summary>
         ''' True when a bubble (V = 0) or dew (V = 1) point is a saturation point of the model: the returned incipient
         ''' phase lies on the tangent plane of the feed (tpd within 10 etol, each composition on its root of lower Gibbs
         ''' energy), and no stationary point of the tangent plane distance lies below it. The test of
         ''' DewPointOnStableBranch, for a result that is not re-seeded.
         ''' </summary>
-        Private Function SaturationPointHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+        Friend Function SaturationPointHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
 
             If result.Count < 7 OrElse Not (V = 0.0 OrElse V = 1.0) OrElse Not SaturationCheckApplies(Vz, PP) Then Return False
             'phases next to each other (y/x within 0.21 of 1, the trivial solution as Flash_PV takes it; within 0.01
@@ -4233,7 +4368,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
         ''' Whether the answer of the ideal-solution fallback holds for the model: a bubble or dew point that is one of
         ''' the model, or a two-phase state of the model. Feeds outside the saturation-point check keep the answer.
         ''' </summary>
-        Private Function IdealResultHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
+        Friend Function IdealResultHolds(Vz As Double(), P As Double, V As Double, result As Object(), PP As PropertyPackages.PropertyPackage) As Boolean
             If Not SaturationCheckApplies(Vz, PP) Then Return True
             If V = 0.0 OrElse V = 1.0 Then Return SaturationPointHolds(Vz, P, V, result, PP)
             Return TwoPhaseResultHolds(Vz, P, result, PP)

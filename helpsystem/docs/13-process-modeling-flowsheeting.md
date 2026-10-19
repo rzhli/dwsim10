@@ -229,13 +229,15 @@ DWSIM includes a number of utilities which give the user more information about 
 
 - **Petroleum Cold Flow Properties** - the cold flow properties of a petroleum stream.
 
+- **Distillation Curves** - the distillation curves of a stream and the properties of a petroleum product. Every curve point and property becomes a property of the stream.
+
 - **Pressure Safety Valve Sizing** - the orifice area required by a relief valve.
 
 - **Gas-Liquid Separator Sizing** - vertical and horizontal separator dimensions.
 
-- **Vessel Depressurization** - the pressure, temperature, released flow and wall temperature history of a vessel blown down through an orifice or a valve, or relieving under a pool fire; it lives on the Dynamics menu (see Section[2.45](#sec:vessel_depressurization)).
+- **Vessel Depressurization** - the pressure, temperature, released flow and wall temperature history of a vessel blown down through an orifice or a valve, or relieving under a pool fire; it lives on the Dynamics menu (see Section[Vessel Depressurization (Blowdown)](24-unit-operations.md#sec:vessel_depressurization)).
 
-- **Column Internals** - the fraction of flood, pressure drop, weeping, entrainment and downcomer backup of the trays, or the pressure drop, holdup, HETP and bed height of the packings of a solved rigorous column, stage by stage, with sizing for a target fraction of flood (see Section[2.46](#sec:column_internals)).
+- **Column Internals** - the fraction of flood, pressure drop, weeping, entrainment and downcomer backup of the trays, or the pressure drop, holdup, HETP and bed height of the packings of a solved rigorous column, stage by stage, with sizing for a target fraction of flood (see Section[Column Internals (Trays and Packings)](24-unit-operations.md#sec:column_internals)).
 
 **Pure Compound Properties**, which needs no stream at all, is on the **Tools** menu together with the compound creation and petroleum characterization tools.
 

@@ -198,6 +198,26 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             End Get
         End Property
 
+        'Project only roundoff-sized negative scaled component flows. A substantive
+        'negative component is not a rounding error and retains the existing path.
+        'The caller evaluates the complete residual again before accepting a root.
+        Private Shared Function ProjectExtractorRoundoff(variables As Double(), components As Integer) As Double()
+            Const roundoff As Double = 32.0 * 2.2204460492503131E-16
+            Dim block = 2 * components + 1
+            Dim needsProjection As Boolean = False
+            For index As Integer = 0 To variables.Length - 1
+                If index Mod block = 0 Then Continue For
+                If (Double.IsNaN(variables(index)) OrElse Double.IsInfinity(variables(index))) OrElse variables(index) < -roundoff Then Return variables
+                If variables(index) < 0.0 Then needsProjection = True
+            Next
+            If Not needsProjection Then Return variables
+            Dim projected = DirectCast(variables.Clone(), Double())
+            For index As Integer = 0 To projected.Length - 1
+                If index Mod block <> 0 AndAlso projected(index) < 0.0 Then projected(index) = 0.0
+            Next
+            Return projected
+        End Function
+
         Public Function FunctionValue(ByVal xl() As Double) As Double()
 
             If Settings.TaskCancellationTokenSource.IsCancellationRequested Then Throw New TaskCanceledException()
@@ -335,11 +355,9 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 LSSj(0) = vc(0).Sum
                 yc(0) = _pp.DW_CalcBubT(xc(0), P(0), Tj(0), Nothing, False)(3)
             Else
-                If llextr Then
-                    LSSj(0) = F.Sum - Lj(ns) - sumLSS - sumVSS
-                Else
-                    LSSj(0) = 0.0
-                End If
+                'For an extractor Vj(0) is the second liquid-phase product. It already
+                'carries the extract out; adding a liquid draw here counts that outlet twice.
+                LSSj(0) = 0.0
             End If
 
             For i = 0 To ns
@@ -626,7 +644,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             Select Case _specs("R").SType
                 Case ColumnSpec.SpecType.Component_Fraction
-                    If _specs("C").SpecUnit = "M" Or _specs("C").SpecUnit = "Molar" Then
+                    If _specs("R").SpecUnit = "M" Or _specs("R").SpecUnit = "Molar" Then
                         spfval2 = Log(xc(ns)(spci2) / spval2)
                         _specs("R").CalculatedValue = xc(ns)(spci2)
                     Else 'W
@@ -663,7 +681,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     spfval2 = Log((Tj(ns)) / spval2)
                     _specs("R").CalculatedValue = Tj(ns)
                 Case ColumnSpec.SpecType.Feed_Recovery
-                    spfval2 = Log(Lj(ns) / (spval1 / 100 * F.SumY))
+                    spfval2 = Log(Lj(ns) / (spval2 / 100 * F.SumY))
                     _specs("R").CalculatedValue = Lj(ns) / F.SumY * 100.0
             End Select
 
@@ -1876,6 +1894,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             IObj?.Paragraphs.Add(String.Format("Final Variable Values: {0}", xvar.ToMathArrayString))
 
+            If LLEX Then
+                xvar = ProjectExtractorRoundoff(xvar, nc)
+                ' Final acceptance must not reuse a failed Jacobian's properties.
+                _jacCacheActive = False
+                _jacCacheFill = False
+                _jacCacheStage = -1
+                _useGpuPropertyCache = False
+            End If
+
             il_err = FunctionValue(xvar)
 
             pp.CurrentMaterialStream.Flowsheet.ShowMessage(dc.GraphicObject.Tag + ": [NR Solver] final objective function (error) value = " & il_err.AbsSqrSumY, IFlowsheet.MessageType.Information)
@@ -2149,7 +2176,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             Select Case col.Specs("R").SType
                 Case ColumnSpec.SpecType.Component_Fraction
                     If col.Specs("R").SpecUnit = "M" Or col.Specs("R").SpecUnit = "Molar" Then
-                        col.Specs("R").CalculatedValue = x(ns)(spci1)
+                        col.Specs("R").CalculatedValue = x(ns)(spci2)
                     Else 'W
                         col.Specs("R").CalculatedValue = col.PropertyPackage.AUX_CONVERT_MOL_TO_MASS(x(ns))(spci2)
                     End If

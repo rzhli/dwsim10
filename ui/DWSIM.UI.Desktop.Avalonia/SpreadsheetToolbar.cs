@@ -521,8 +521,8 @@ public sealed class SpreadsheetToolbar : DockPanel
         // would throw and show INVALID ARGS / ERROR).
         var unit = dialog.SelectedUnit ?? "";
         cell.Formula = string.IsNullOrEmpty(unit)
-            ? string.Format("GETPROPVAL(\"{0}\",\"{1}\")", dialog.SelectedObjectId, dialog.SelectedPropertyKey)
-            : string.Format("GETPROPVAL(\"{0}\",\"{1}\",\"{2}\")", dialog.SelectedObjectId, dialog.SelectedPropertyKey, unit);
+            ? SpreadsheetPanel.FormulaCall("GETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey)
+            : SpreadsheetPanel.FormulaCall("GETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, unit);
 
         sheet.Recalculate();
         ReadCell();
@@ -545,8 +545,8 @@ public sealed class SpreadsheetToolbar : DockPanel
 
         var unit = dialog.SelectedUnit ?? "";
         cell.Formula = string.IsNullOrEmpty(unit)
-            ? string.Format("SETPROPVAL(\"{0}\",\"{1}\",\"{2}\")", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current)
-            : string.Format("SETPROPVAL(\"{0}\",\"{1}\",\"{2}\",\"{3}\")", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current, unit);
+            ? SpreadsheetPanel.FormulaCall("SETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current)
+            : SpreadsheetPanel.FormulaCall("SETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current, unit);
 
         sheet.Recalculate();
         ReadCell();

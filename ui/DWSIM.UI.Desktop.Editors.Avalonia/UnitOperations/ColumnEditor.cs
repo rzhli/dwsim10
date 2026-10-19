@@ -86,17 +86,22 @@ namespace DWSIM.UI.Desktop.Editors
                 {
                     var tabs = new TabControl { Margin = new Thickness(0, 4, 0, 0) };
 
-                    tabs.Items.Add(new TabItem { Header = "General", Content = BuildGeneral(column) });
+                    // the General tab and the Stages grid both edit the stage pressures; each refreshes the other
+                    Action refreshStages = null;
+                    Action refreshGeneral = null;
+
+                    tabs.Items.Add(new TabItem { Header = "General", Content = BuildGeneral(column, () => refreshStages?.Invoke(), out refreshGeneral) });
 
                     if (column is DistillationColumn distillation)
                     {
                         var specs = new TabControl();
                         specs.Items.Add(new TabItem { Header = "Condenser", Content = BuildCondenser(distillation) });
                         specs.Items.Add(new TabItem { Header = "Reboiler", Content = BuildReboiler(distillation) });
+                        specs.Items.Add(new TabItem { Header = "Secondary", Content = ColumnSecondarySpecsEditor.Build(distillation) });
                         tabs.Items.Add(new TabItem { Header = "Specifications", Content = specs });
                     }
 
-                    tabs.Items.Add(new TabItem { Header = "Stages", Content = ColumnStagesEditor.Build(column) });
+                    tabs.Items.Add(new TabItem { Header = "Stages", Content = ColumnStagesEditor.Build(column, () => refreshGeneral?.Invoke(), out refreshStages) });
                     tabs.Items.Add(new TabItem { Header = "Connections", Content = BuildConnections(column) });
                     tabs.Items.Add(new TabItem { Header = "Estimates", Content = BuildEstimates(column) });
 
@@ -111,7 +116,7 @@ namespace DWSIM.UI.Desktop.Editors
         // General
         // ---------------------------------------------------------------------
 
-        private static Control BuildGeneral(Column column)
+        private static Control BuildGeneral(Column column, Action pressuresChanged, out Action refresh)
         {
             var panel = new AvaloniaEditorPanel().AutoSolveOnEdit(column);
             var flowsheet = column.GetFlowsheet();
@@ -138,15 +143,35 @@ namespace DWSIM.UI.Desktop.Editors
                 flowsheet.UpdateOpenEditForms();
             });
 
+            // the top pressure moves the whole profile: with a pressure drop every stage follows from the top,
+            // with a custom per-stage profile (no drop) every stage shifts by the same amount
+            UnitOpEditorRows.ValueRow topRow = null;
             if (column.Stages != null && column.Stages.Count > 0)
             {
-                panel.CreateAndAddValueUnitRow(column, "Condenser/Top Pressure", UnitOfMeasure.pressure,
-                    column.Stages[0].P, v => column.Stages[0].P = v);
+                topRow = panel.CreateAndAddValueUnitRow(column, "Condenser/Top Pressure", UnitOfMeasure.pressure,
+                    column.Stages[0].P, v =>
+                    {
+                        column.SetTopStagePressure(v);
+                        pressuresChanged?.Invoke();
+                    });
             }
 
-            panel.CreateAndAddValueUnitRow(column, "Column Pressure Drop", UnitOfMeasure.deltaP,
-                double.IsNaN(column.ColumnPressureDrop) ? 0.0 : column.ColumnPressureDrop,
-                v => column.ColumnPressureDrop = v);
+            // an empty drop is a custom per-stage profile, the stage pressures as listed in the Stages tab
+            var dropRow = panel.CreateAndAddValueUnitRow(column, "Column Pressure Drop", UnitOfMeasure.deltaP,
+                column.ColumnPressureDrop, v =>
+                {
+                    column.ColumnPressureDrop = v;
+                    if (!double.IsNaN(v) && column.Stages != null && column.Stages.Count > 0)
+                        column.SetTopStagePressure(column.Stages[0].P);
+                    pressuresChanged?.Invoke();
+                }, emptyHint: "custom per-stage profile");
+            panel.CreateAndAddDescriptionRow("Every stage runs at the top pressure plus its share of the column pressure drop. Leave the drop empty to use the stage pressures typed in the Stages tab as a custom profile; changing the top pressure then shifts every stage by the same amount.");
+
+            refresh = () =>
+            {
+                if (topRow != null && column.Stages != null && column.Stages.Count > 0) topRow.Refresh(column.Stages[0].P);
+                dropRow.Refresh(column.ColumnPressureDrop);
+            };
 
             panel.CreateAndAddValueUnitRow(column, "Tray Spacing (Sizing)", UnitOfMeasure.distance,
                 column.TraySpacing, v => column.TraySpacing = v);
@@ -258,7 +283,7 @@ namespace DWSIM.UI.Desktop.Editors
             });
         }
 
-        /// <summary>The solvers the Windows form offers, per column type, plus the external ones.</summary>
+        /// <summary>The solvers the Windows form offers, per column type, plus the external ones that take this column.</summary>
         private static List<string> SolverNames(Column column)
         {
             var names = column is AbsorptionColumn
@@ -274,7 +299,7 @@ namespace DWSIM.UI.Desktop.Editors
                     "Modified Wang-Henke (Bubble Point)"
                 };
 
-            try { names.AddRange(Column.ExternalColumnSolvers.Keys); }
+            try { names.AddRange(Column.ExternalColumnSolvers.Keys.Where(k => Column.ExternalSolverSupports(k, column))); }
             catch (Exception) { }
 
             return names;
