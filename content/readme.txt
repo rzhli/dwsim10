@@ -49,6 +49,9 @@ Version 10.2.12
 - [NEW] Pipe Network: a source can take its flow from the connected stream, so a flare fed by a splitter keeps the splitter's rate
 - [NEW] MCP server: reaction tools for conversion and equilibrium reactions, reaction sets and the compounds of a Gibbs reactor
 - [NEW] User guide and offline help: water-saturated biogas, metabolic heat of digestion, critical pressure of biomass compounds, network source fed by another unit and Spec blocks sharing an object
+- [NEW] Cross-platform pipe segment: pressure profile in the results and a profiles window with a chart of any variable and a table of every increment
+- [NEW] Divided-Wall Column (Plus, Level 2): wall in the middle, at the top or at the bottom, heat transfer through the wall, side draws, secondary specifications, shortcut design, wall split optimization, size, cost and life-cycle inventory
+- [NEW] Divided-Wall Column samples and advanced tutorial
 - [CHG] Each column lists only the external solvers that take it
 - [CHG] Classic stream editor: the Attach Utility menu also offers Distillation Curves and Vessel Depressurization
 - [CHG] Cross-platform tables and charts on the flowsheet: Copy Data to Clipboard, as in the Windows interface
@@ -71,6 +74,21 @@ Version 10.2.12
 - [FIX] Cross-platform tables: the text of a numeric cell was rewritten while typing
 - [FIX] MCP server: a stream composition was applied as compound mass flows and replaced the total flow
 - [FIX] MCP server: reactor results came back with internal codes as labels and without conversions or extents
+- [FIX] Flowsheet spreadsheet: formulas and numbers were stored with the separators of the saving computer and could be misread on a computer with another decimal separator
+- [FIX] Nested Loops bubble point discarded a converged answer and could return the other root, 80 K away for a CO2 liquid with dissolved hydrogen (issue 97, contributed by Jan Boshoff)
+- [FIX] PT flash took a stream near its dew point as all vapour without checking the equation of state (issue 100)
+- [FIX] Enthalpy flash accepted a narrow temperature bracket before reaching the enthalpy tolerance
+- [FIX] CAPE-OPEN 1.0 packages: phase properties without the package's phase names, fugacity coefficients left at zero and the last listed property skipped
+- [FIX] Cross-platform spreadsheet: Import Data wrote GETPROPVAL with ";" separators, blank on comma-separator computers and dropped on save (issue 101)
+- [FIX] Cross-platform column editor: the top pressure set stage 1 only and the other stages stayed at 1 atm (issue 96)
+- [FIX] Bubble-point column solver: bottoms rate search outside the feed with reboiler specifications, and the reboiler fraction of another compound reported
+- [FIX] Naphtali-Sandholm: reboiler component fraction read on the wrong basis and feed recovery without the reboiler target
+- [FIX] Liquid-liquid extractor counted the extract twice; the Liquid-Liquid Extraction and Biodiesel Production samples converge
+- [FIX] Flowsheet unit operation could not find its sub-flowsheet when the simulation was opened from scripts
+- [FIX] Cross-platform interface: CAPE-OPEN property packages and package managers could not be selected (issue 104)
+- [FIX] Cross-platform Python Script: input variables could not be added, removed, renamed or edited (issue 103)
+- [FIX] Cross-platform flowsheet: Delete, Backspace and Ctrl+C/V/A in an editor field also acted on flowsheet objects
+- [FIX] DWSIM MCP Debian package failed to install with exit status 127 (issue 102)
 
 Version 10.2.11
 
