@@ -664,8 +664,9 @@ Namespace Reactors
 
                     Dim DNbr = -xf(i) * rxn.Components(rxn.BaseReactant).StoichCoeff / scBC * nBC
 
-                    'Heat released (or absorbed) (kJ/s = kW) (Ideal Gas)
-                    DHr += rxn.ReactionHeat * Abs(DNbr) / 1000
+                    'Heat released (or absorbed) (kJ/s = kW) (Ideal Gas). Signed extent, as in the mole balance above:
+                    'the optimizer can return a negative conversion for one of two identical parallel reactions.
+                    DHr += rxn.ReactionHeat * -DNbr / 1000
 
                     i += 1
 
@@ -1086,7 +1087,7 @@ Namespace Reactors
                     For i = 0 To 0
                         proplist.Add("PROP_CR_" + CStr(i))
                     Next
-                Case PropertyType.ALL
+                Case PropertyType.ALL, PropertyType.RO
                     For i = 0 To 0
                         proplist.Add("PROP_CR_" + CStr(i))
                     Next
