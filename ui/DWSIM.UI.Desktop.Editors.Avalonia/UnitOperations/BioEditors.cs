@@ -1063,13 +1063,25 @@ namespace DWSIM.UI.Desktop.Editors
     public static class BioReactorEditor
     {
 
+        internal static Control BuildCustomProperties(Reactors.Reactor_BioReactor reactor)
+        {
+            var root = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Vertical,
+                Spacing = AvaloniaEditorPanel.RowSpacing
+            };
+            var parameters = new AvaloniaEditorPanel().AutoSolveOnEdit(reactor);
+            BuildParameters(reactor, parameters);
+            root.Children.Add(parameters);
+            root.Children.Add(AvaloniaTabBuilders.BuildCustomProperties(reactor));
+            return root;
+        }
+
         public static Control Build(Reactors.Reactor_BioReactor reactor)
         {
             return UnitOpEditor.Build(reactor,
                 input: panel => BuildParameters(reactor, panel),
-                results: panel => BuildResults(reactor, panel),
-                extras: reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation
-                    ? null : new[] { ("Enzymatic Hydrolysis", BuildHydrolysis(reactor)) });
+                results: panel => BuildResults(reactor, panel));
         }
 
         internal static void BuildParameters(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
@@ -1082,7 +1094,13 @@ namespace DWSIM.UI.Desktop.Editors
             BioRows.Section(panel, "General");
 
             BioRows.Choice(panel, "Operating Mode",
-                () => reactor.OperatingMode, v => reactor.OperatingMode = v);
+                () => reactor.OperatingMode, v =>
+                {
+                    if (!panel.IsArmed || reactor.OperatingMode == v) return;
+                    reactor.OperatingMode = v;
+                    reactor.CreateConnectors();
+                    reactor.GetFlowsheet().UpdateOpenEditForms();
+                });
             BuildKineticModelRow(reactor, panel);
             if (reactor.KineticModel == Reactors.BioKineticModel.UserScript)
             {
@@ -1094,11 +1112,16 @@ namespace DWSIM.UI.Desktop.Editors
             panel.CreateAndAddCheckBoxRow("Aerobic", reactor.IsAerobic,
                 (cb, e) => reactor.IsAerobic = cb.IsChecked.GetValueOrDefault());
 
-            panel.CreateAndAddValueUnitRow(reactor, "Working Volume", UnitOfMeasure.volume,
-                reactor.Volume, v => reactor.Volume = v);
+            bool fedBatch = reactor.OperatingMode == Reactors.BioReactorMode.FedBatch;
+            Action refreshFeedSchedule = null;
+            panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Initial Working Volume" : "Working Volume", UnitOfMeasure.volume,
+                reactor.Volume, v => { reactor.Volume = v; refreshFeedSchedule?.Invoke(); });
 
-            panel.CreateAndAddValueUnitRow(reactor, "Batch Duration", UnitOfMeasure.time,
-                reactor.BatchDuration, v => reactor.BatchDuration = v);
+            panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Fed-batch Duration" : "Batch Duration", UnitOfMeasure.time,
+                reactor.BatchDuration, v => { reactor.BatchDuration = v; refreshFeedSchedule?.Invoke(); });
+            if (fedBatch) refreshFeedSchedule = BuildFeedSchedule(reactor, panel);
+            if (reactor.KineticModel == Reactors.BioKineticModel.EnzymaticHydrolysis)
+                BuildHydrolysis(reactor, panel);
 
             BioRows.Section(panel, "Compound Roles");
 
@@ -1114,6 +1137,8 @@ namespace DWSIM.UI.Desktop.Editors
                 () => reactor.CO2Compound, v => reactor.CO2Compound = v);
             BioRows.Compound(panel, reactor, "N-Source Compound",
                 () => reactor.NitrogenSourceCompound, v => reactor.NitrogenSourceCompound = v);
+            BioRows.Compound(panel, reactor, "Sulfur Source Compound",
+                () => reactor.SulfurSourceCompound, v => reactor.SulfurSourceCompound = v);
             BioRows.Compound(panel, reactor, "Water Compound",
                 () => reactor.WaterCompound, v => reactor.WaterCompound = v);
 
@@ -1143,6 +1168,8 @@ namespace DWSIM.UI.Desktop.Editors
 
             BioRows.Number(panel, reactor, "Volumetric Oxygen Transfer Coeff. kLa (1/h)",
                 reactor.KLa_h, v => reactor.KLa_h = v);
+            BioRows.Number(panel, reactor, "Saturation Dissolved Oxygen (g/L)",
+                reactor.CO2sat_gL, v => reactor.CO2sat_gL = v);
 
             BioRows.Section(panel, "Thermal Balance");
 
@@ -1196,8 +1223,6 @@ namespace DWSIM.UI.Desktop.Editors
                     if (julia) reactor.JuliaModelScriptName = scripts[dd.SelectedIndex];
                     else reactor.UserScriptName = scripts[dd.SelectedIndex];
                 });
-            if (scripts.Count == 1)
-                panel.CreateAndAddDescriptionRow("Create a script in Tools > Script Manager and select the same interpreter to make it available here.");
         }
 
         private static void BuildJuliaParameters(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
@@ -1205,10 +1230,6 @@ namespace DWSIM.UI.Desktop.Editors
             BioRows.Section(panel, "User Script");
             BuildKineticModelRow(reactor, panel);
             BuildScriptRows(reactor, panel, julia: true);
-            panel.CreateAndAddDescriptionRow(
-                "Julia returns the complete biomass, glucose, xylose, ethanol and xylitol trajectories. " +
-                "The supplied model uses 30 C and controlled pH 5.");
-            panel.CreateAndAddDescriptionRow("Edit the model equations and parameters in Script Manager. Each calculation reuses the flowsheet's Julia session.");
 
             BioRows.Choice(panel, "Operating Mode", () => reactor.OperatingMode, v =>
             {
@@ -1219,10 +1240,11 @@ namespace DWSIM.UI.Desktop.Editors
             });
             bool continuous = reactor.OperatingMode == Reactors.BioReactorMode.Continuous;
             bool fedBatch = reactor.OperatingMode == Reactors.BioReactorMode.FedBatch;
+            Action refreshFeedSchedule = null;
             panel.CreateAndAddCheckBoxRow("Aerobic", reactor.IsAerobic,
                 (cb, e) => reactor.IsAerobic = cb.IsChecked.GetValueOrDefault());
             panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Initial Working Volume" : "Working Volume", UnitOfMeasure.volume,
-                reactor.Volume, v => reactor.Volume = v);
+                reactor.Volume, v => { reactor.Volume = v; refreshFeedSchedule?.Invoke(); });
             if (continuous)
             {
                 BioRows.Number(panel, reactor, "Initial Culture Biomass (g/L)",
@@ -1231,26 +1253,18 @@ namespace DWSIM.UI.Desktop.Editors
                     (tb, e) => { if (UnitOpEditorRows.TryParse(tb.Text, out var v) && v > 0.0) reactor.JuliaSteadyStateTolerance = v; });
                 panel.CreateAndAddValueUnitRow(reactor, "Max Integration Time (0 = automatic)", UnitOfMeasure.time,
                     reactor.JuliaMaxIntegrationTime_s, v => reactor.JuliaMaxIntegrationTime_s = v);
-                panel.CreateAndAddDescriptionRow(
-                    "The inlet supplies the continuous flow and composition. Initial culture biomass is the startup inoculum. " +
-                    "Julia solves the constant-volume CSTR to steady state; residence time is volume / inlet flow. Combine multiple feeds upstream.");
-                panel.CreateAndAddDescriptionRow(
-                    "Julia stops as soon as the scaled balance residual drops below the tolerance; the horizon only caps the run " +
-                    "(automatic = max(200 h, 40 x residence time)). 1e-8 needs about 20 residence times; 1e-5 stops much earlier and " +
-                    "moves the steady state only in the sixth digit. Scripts embedded before this option keep their own 1e-8 until their source is updated.");
             }
             else
             {
                 panel.CreateAndAddValueUnitRow(reactor, fedBatch ? "Fed-batch Duration" : "Batch Duration", UnitOfMeasure.time,
-                    reactor.BatchDuration, v => reactor.BatchDuration = v);
+                    reactor.BatchDuration, v => { reactor.BatchDuration = v; refreshFeedSchedule?.Invoke(); });
                 panel.CreateAndAddDescriptionRow(
                     "The first inlet supplies the initial charge, averaged over the fermentation duration: flow = initial volume / duration. " +
                     "Preserve composition when adjusting the inlet flow after a duration change.");
                 if (fedBatch)
-                    panel.CreateAndAddDescriptionRow(
-                        "Connect supplemental feed to the second inlet. Its composition is constant and its flow is the cycle average. " +
-                        "Edit feed_rate_m3_h(t, operation) in the Julia script to define the instantaneous feed curve; " +
-                        "its integral must equal the stream flow times duration. Culture volume increases during feeding.");
+                    refreshFeedSchedule = BuildFeedSchedule(reactor, panel);
+                else
+                    AddInitialChargeAverageButton(reactor, panel);
             }
             BioRows.Choice(panel, "Thermal Mode", () => reactor.ThermalMode, v => reactor.ThermalMode = v);
             panel.CreateAndAddValueUnitRow(reactor, "Outlet Temperature Setpoint", UnitOfMeasure.temperature,
@@ -1269,12 +1283,185 @@ namespace DWSIM.UI.Desktop.Editors
                 "Nutrient stoichiometry, gas composition and reaction heat are not supplied by the paper; the gas and duty are approximate balance closures.");
         }
 
-        private static Control BuildHydrolysis(Reactors.Reactor_BioReactor reactor)
+        private sealed class FeedPulseRow : INotifyPropertyChanged
         {
-            var panel = new AvaloniaEditorPanel();
+            internal readonly Reactors.BioReactorFeedPulse Pulse;
+            private readonly Reactors.Reactor_BioReactor _reactor;
+            private readonly Action _changed;
 
+            internal FeedPulseRow(Reactors.Reactor_BioReactor reactor, Reactors.BioReactorFeedPulse pulse, Action changed)
+            {
+                _reactor = reactor;
+                Pulse = pulse;
+                _changed = changed;
+            }
+
+            public string Start { get => Format(Pulse.StartTime_h); set => Set(value, v => Pulse.StartTime_h = v); }
+            public string Amount { get => Format(Pulse.Volume_m3); set => Set(value, v => Pulse.Volume_m3 = v); }
+            public string Rate { get => Format(Pulse.Rate_m3_h); set => Set(value, v => Pulse.Rate_m3_h = v); }
+            private static string Format(double value) => value.ToString("G8", CultureInfo.CurrentCulture);
+
+            private void Set(string text, Action<double> commit)
+            {
+                if (!UnitOpEditorRows.TryParse(text, out var value)) return;
+                _reactor.GetFlowsheet().RegisterSnapshot(SnapshotType.ObjectData, _reactor);
+                commit(value);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+                _changed();
+            }
+
+            public event PropertyChangedEventHandler PropertyChanged;
+        }
+
+        private static Action BuildFeedSchedule(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        {
+            var flowsheet = reactor.GetFlowsheet();
+            BioRows.Section(panel, "Initial Charge");
+            var initialChargeSummary = panel.CreateAndAddDescriptionRow("");
+            AddInitialChargeAverageButton(reactor, panel);
+
+            BioRows.Section(panel, "Supplemental Feed Schedule");
+            panel.CreateAndAddCheckBoxRow("Use Pulse Feed Schedule", reactor.UseFeedSchedule, (cb, e) =>
+            {
+                if (!panel.IsArmed || cb.IsChecked.GetValueOrDefault() == reactor.UseFeedSchedule) return;
+                flowsheet.RegisterSnapshot(SnapshotType.ObjectData, reactor);
+                reactor.UseFeedSchedule = cb.IsChecked.GetValueOrDefault();
+                reactor.CreateConnectors();
+                reactor.SetDirtyStatus(true);
+                reactor.Calculated = false;
+                reactor.GraphicObject.Calculated = false;
+                flowsheet.UpdateInterface();
+                flowsheet.UpdateOpenEditForms();
+            });
             panel.CreateAndAddDescriptionRow(
-                "Only used when the kinetic model is EnzymaticHydrolysis.");
+                "Each row is one constant-rate pulse. Duration = amount / rate; feeding is zero between pulses. " +
+                "Start times are measured from the start of cultivation. All pulses use the second inlet's composition. " +
+                "The schedule does not overwrite that inlet's flow specification; set its cycle average with the button below or at its upstream source.");
+
+            var rows = new ObservableCollection<FeedPulseRow>();
+            var grid = new DataGrid
+            {
+                ItemsSource = rows,
+                AutoGenerateColumns = false,
+                CanUserSortColumns = false,
+                HeadersVisibility = DataGridHeadersVisibility.Column,
+                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+                IsEnabled = reactor.UseFeedSchedule,
+                Height = 190
+            };
+            grid.Columns.Add(GridColumns.Text("Start (h)", "Start", 1.0));
+            grid.Columns.Add(GridColumns.Text("Amount (m³)", "Amount", 1.1));
+            grid.Columns.Add(GridColumns.Text("Rate (m³/h)", "Rate", 1.1));
+            panel.Children.Add(grid);
+            var summary = panel.CreateAndAddDescriptionRow("");
+            Button apply = null;
+
+            void RefreshInitialChargeSummary()
+            {
+                if (reactor.Volume > 0.0 && reactor.BatchDuration > 0.0 &&
+                    double.IsFinite(reactor.Volume) && double.IsFinite(reactor.BatchDuration))
+                    initialChargeSummary.Text = $"Required initial-charge cycle average: {reactor.Volume / reactor.BatchDuration * 3600.0:G8} m³/h at reactor conditions. Apply after changing volume or duration; source proportions are preserved.";
+                else
+                    initialChargeSummary.Text = "Set a positive initial working volume and cultivation duration to calculate the initial-charge cycle average.";
+            }
+
+            void RefreshSummary()
+            {
+                RefreshInitialChargeSummary();
+                if (!reactor.UseFeedSchedule)
+                {
+                    summary.Text = reactor.KineticModel == Reactors.BioKineticModel.JuliaCoFermentation
+                        ? "The selected Julia script defines the feed curve. Enable this common schedule to supply pulses from the table."
+                        : "Enable the schedule to include supplemental feeding and volume changes. With it disabled, the built-in model uses a constant-volume batch calculation.";
+                    return;
+                }
+                try
+                {
+                    var total = reactor.ValidateFeedSchedule();
+                    summary.Text = $"Total feed: {total:G8} m³. Required second-inlet cycle average: {total / reactor.BatchDuration * 3600.0:G8} m³/h at reactor conditions. " +
+                        "Use Apply Schedule Average to Supplemental Inlet after changing amounts or the cultivation duration, then recalculate.";
+                    if (apply != null) apply.IsEnabled = true;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    summary.Text = ex.Message;
+                    if (apply != null) apply.IsEnabled = false;
+                }
+            }
+
+            void Changed()
+            {
+                reactor.SetDirtyStatus(true);
+                reactor.Calculated = false;
+                reactor.GraphicObject.Calculated = false;
+                RefreshSummary();
+                flowsheet.UpdateInterface();
+            }
+
+            foreach (var pulse in reactor.FeedPulses)
+                rows.Add(new FeedPulseRow(reactor, pulse, Changed));
+
+            panel.CreateAndAddButtonRow("Add Pulse", null, (btn, e) =>
+            {
+                flowsheet.RegisterSnapshot(SnapshotType.ObjectData, reactor);
+                var start = reactor.FeedPulses.Where(p => p.Rate_m3_h > 0.0)
+                    .Select(p => p.StartTime_h + p.Volume_m3 / p.Rate_m3_h).DefaultIfEmpty(0.0).Max();
+                var pulse = new Reactors.BioReactorFeedPulse { StartTime_h = start };
+                reactor.FeedPulses.Add(pulse);
+                rows.Add(new FeedPulseRow(reactor, pulse, Changed));
+                grid.SelectedIndex = rows.Count - 1;
+                Changed();
+            }).IsEnabled = reactor.UseFeedSchedule;
+            panel.CreateAndAddButtonRow("Remove Selected Pulse", null, (btn, e) =>
+            {
+                if (!(grid.SelectedItem is FeedPulseRow row)) return;
+                flowsheet.RegisterSnapshot(SnapshotType.ObjectData, reactor);
+                reactor.FeedPulses.Remove(row.Pulse);
+                rows.Remove(row);
+                Changed();
+            }).IsEnabled = reactor.UseFeedSchedule;
+            apply = panel.CreateAndAddButtonRow("Apply Schedule Average to Supplemental Inlet", null, (btn, e) =>
+            {
+                try
+                {
+                    reactor.ApplyFeedScheduleToInlet();
+                    flowsheet.UpdateOpenEditForms();
+                    flowsheet.ShowMessage("Supplemental inlet cycle-average flow updated, preserving composition. Recalculate the flowsheet to use the pulse schedule.",
+                        IFlowsheet.MessageType.Information);
+                }
+                catch (Exception ex)
+                {
+                    flowsheet.ShowMessage(ex.Message, IFlowsheet.MessageType.GeneralError);
+                }
+            });
+            apply.IsEnabled = reactor.UseFeedSchedule;
+            RefreshSummary();
+            return RefreshSummary;
+        }
+
+        private static void AddInitialChargeAverageButton(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        {
+            var flowsheet = reactor.GetFlowsheet();
+            panel.CreateAndAddButtonRow("Apply Initial Charge Average to Feed Sources", null, (btn, e) =>
+            {
+                try
+                {
+                    reactor.ApplyInitialChargeAverageToInlet();
+                    flowsheet.UpdateOpenEditForms();
+                    flowsheet.UpdateInterface();
+                    flowsheet.ShowMessage("Initial-charge feed source flows scaled proportionally to working volume / duration, preserving the mixed composition. Recalculate the flowsheet.",
+                        IFlowsheet.MessageType.Information);
+                }
+                catch (Exception ex)
+                {
+                    flowsheet.ShowMessage(ex.Message, IFlowsheet.MessageType.GeneralError);
+                }
+            });
+        }
+
+        private static void BuildHydrolysis(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
+        {
+            BioRows.Section(panel, "Enzymatic Hydrolysis");
 
             BioRows.Compound(panel, reactor, "Hemicellulose Compound",
                 () => reactor.HemicelluloseCompound, v => reactor.HemicelluloseCompound = v);
@@ -1295,8 +1482,6 @@ namespace DWSIM.UI.Desktop.Editors
                 reactor.EH_EnzymeLoading_gL, v => reactor.EH_EnzymeLoading_gL = v);
             BioRows.Number(panel, reactor, "Heat per g Sugar Produced (J/g)",
                 reactor.EH_HeatPerGProduct_Jg, v => reactor.EH_HeatPerGProduct_Jg = v);
-
-            return panel;
         }
 
         private static void BuildResults(Reactors.Reactor_BioReactor reactor, AvaloniaEditorPanel panel)
@@ -1348,6 +1533,8 @@ namespace DWSIM.UI.Desktop.Editors
                 BioRows.Result(panel, reactor, "Respiratory Quotient (RQ)", reactor.Result_RQ, "");
             }
 
+            if (reactor.OperatingMode == Reactors.BioReactorMode.FedBatch)
+                panel.CreateAndAddResultRow(reactor, "Final Working Volume", UnitOfMeasure.volume, reactor.Result_WorkingVolume_m3);
             BioRows.Section(panel, "Thermal Balance");
             panel.CreateAndAddResultRow(reactor, "Metabolic Heat Release", UnitOfMeasure.heatflow, reactor.Result_Q_metabolic_kW);
             panel.CreateAndAddResultRow(reactor, "Net Heat Duty", UnitOfMeasure.heatflow, reactor.Result_Q_duty_kW);

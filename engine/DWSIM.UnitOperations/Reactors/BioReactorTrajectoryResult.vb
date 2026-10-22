@@ -42,15 +42,20 @@ Namespace Reactors
         Public Property Glucose As New List(Of Double)()
         Public Property Xylose As New List(Of Double)()
         Public Property Xylitol As New List(Of Double)()
-        Public Property BrothVolume As New List(Of Double)() ' m3; Julia reactor volume
+        Public Property BrothVolume As New List(Of Double)() ' m3; culture volume, including scheduled feeding
 
         Public Function AvailableSeries() As String()
             If Mode = "CoFermentation" Then
-                Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP", "Volume_m3"}
+                If BrothVolume.Count > 0 Then
+                    Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP", "Volume_m3"}
+                End If
+                Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP"}
             End If
             If Mode = "EnzymaticHydrolysis" Then
+                If BrothVolume.Count > 0 Then Return New String() {"Cellulose", "Hemicellulose", "Glucose", "Xylose", "Volume_m3"}
                 Return New String() {"Cellulose", "Hemicellulose", "Glucose", "Xylose"}
             End If
+            If BrothVolume.Count > 0 Then Return New String() {"X", "S", "P", "Mu", "qS", "qP", "OUR", "CER", "RQ", "Volume_m3"}
             Return New String() {"X", "S", "P", "Mu", "qS", "qP", "OUR", "CER", "RQ"}
         End Function
 

@@ -181,12 +181,26 @@ namespace DWSIM.Automation
 
         private void SetCustomSpreadsheetFunctions()
         {
+            ISimulationObject ResolveSpreadsheetObject(string idOrTag)
+            {
+                if (SimulationObjects.TryGetValue(idOrTag, out var obj)) return obj;
+
+                ISimulationObject match = null;
+                foreach (var candidate in SimulationObjects.Values)
+                {
+                    if (!string.Equals(candidate.GraphicObject?.Tag, idOrTag, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (match != null) throw new InvalidOperationException($"More than one object has the tag '{idOrTag}'.");
+                    match = candidate;
+                }
+
+                return match ?? throw new KeyNotFoundException($"The given key '{idOrTag}' was not present in the dictionary.");
+            }
 
             FormulaExtension.CustomFunctions["GETNAME"] = (cell, args) =>
             {
                 try
                 {
-                    return SimulationObjects[args[0].ToString()].GraphicObject.Tag;
+                    return ResolveSpreadsheetObject(args[0].ToString()).GraphicObject.Tag;
                 }
                 catch (Exception ex)
                 {
@@ -200,7 +214,7 @@ namespace DWSIM.Automation
                 {
                     try
                     {
-                        return SimulationObjects[args[0].ToString()].GetPropertyValue(args[1].ToString());
+                        return ResolveSpreadsheetObject(args[0].ToString()).GetPropertyValue(args[1].ToString());
                     }
                     catch (Exception ex)
                     {
@@ -211,7 +225,7 @@ namespace DWSIM.Automation
                 {
                     try
                     {
-                        var obj = SimulationObjects[args[0].ToString()];
+                        var obj = ResolveSpreadsheetObject(args[0].ToString());
                         var val = obj.GetPropertyValue(args[1].ToString());
                         return General.ConvertUnits(double.Parse(val.ToString()), obj.GetPropertyUnit(args[1].ToString()), args[2].ToString());
                     }
@@ -240,10 +254,10 @@ namespace DWSIM.Automation
                         {
                             val = wcell.Formula;
                         }
-                        SimulationObjects[args[0].ToString()].SetPropertyValue(args[1].ToString(), val);
+                        ResolveSpreadsheetObject(args[0].ToString()).SetPropertyValue(args[1].ToString(), val);
                         wcell.Formula = null;
                         wcell.Data = null;
-                        return string.Format("EXPORT OK [{0}, {1} = {2}]", SimulationObjects[args[0].ToString()].GraphicObject.Tag, args[1].ToString(), val);
+                        return string.Format("EXPORT OK [{0}, {1} = {2}]", ResolveSpreadsheetObject(args[0].ToString()).GraphicObject.Tag, args[1].ToString(), val);
                     }
                     catch (Exception ex)
                     {
@@ -254,7 +268,7 @@ namespace DWSIM.Automation
                 {
                     try
                     {
-                        var obj = SimulationObjects[args[0].ToString()];
+                        var obj = ResolveSpreadsheetObject(args[0].ToString());
                         var prop = args[1].ToString();
                         var ws = cell.Worksheet;
                         var wcell = ws.Cells[ws.RowCount - 1, ws.ColumnCount - 1];
@@ -283,7 +297,7 @@ namespace DWSIM.Automation
                 {
                     try
                     {
-                        return SimulationObjects[args[0].ToString()].GetPropertyUnit(args[1].ToString());
+                        return ResolveSpreadsheetObject(args[0].ToString()).GetPropertyUnit(args[1].ToString());
                     }
                     catch (Exception ex)
                     {
@@ -317,7 +331,7 @@ namespace DWSIM.Automation
                 {
                     try
                     {
-                        return SimulationObjects[args[0].ToString()].GraphicObject.Tag;
+                        return ResolveSpreadsheetObject(args[0].ToString()).GraphicObject.Tag;
                     }
                     catch (Exception ex)
                     {

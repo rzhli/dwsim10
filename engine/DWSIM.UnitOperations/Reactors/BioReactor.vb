@@ -63,7 +63,7 @@ Namespace Reactors
         Continuous = 0
         ''' <summary>Batch operation - inlet feed represents initial charge; residence time is batch duration.</summary>
         Batch = 1
-        ''' <summary>Fed-batch - inlet continuously fed; internal volume ramps (integration time = BatchDuration).</summary>
+        ''' <summary>Fed-batch: initial charge plus an optional supplemental pulse schedule; integration time = BatchDuration.</summary>
         FedBatch = 2
     End Enum
 
@@ -767,6 +767,7 @@ Namespace Reactors
                 CalculateEnzymaticHydrolysis()
                 Return
             End If
+            Dim scheduled = OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule
 
             If String.IsNullOrEmpty(BiomassCompound) Then
                 Throw New Exception("BioReactor: Biomass compound not selected.")
@@ -803,6 +804,10 @@ Namespace Reactors
                     ims.SpecType = StreamSpec.Temperature_and_Pressure
                     ims.Calculate(True, True)
             End Select
+            If scheduled AndAlso ReactorOperationMode <> OperationMode.OutletTemperature Then
+                ims.SpecType = StreamSpec.Temperature_and_Pressure
+                ims.Calculate(True, True)
+            End If
 
             Dim compounds = ims.Phases(0).Compounds
 
@@ -938,6 +943,11 @@ Namespace Reactors
             Dim S0 = massflow_S_in / Q_liquid ' kg/s / (m3/s) = kg/m3 = g/L
             Dim X0 = massflow_X_in / Q_liquid
             Dim P0c = massflow_P_in / Q_liquid
+            Dim supplemental = If(scheduled, PrepareScheduledFeed(Q_liquid, T, P), Nothing)
+            Dim feedS = FeedConcentration(supplemental, SubstrateCompound)
+            Dim feedX = FeedConcentration(supplemental, BiomassCompound)
+            Dim feedP = FeedConcentration(supplemental, ProductCompound)
+            Dim feedHeat_W = SupplementalSensibleHeat(supplemental)
 
             ' Integration time and "effective" volumetric flow used to convert the integrated
             ' concentration changes (g/L) back into mass-flow deltas (kg/s).
@@ -948,7 +958,9 @@ Namespace Reactors
             '  Batch      : Q_eff = V/BatchDuration (cycle-averaged equivalent volumetric flow,
             '               as if the reactor processed one V-volume charge every BatchDuration
             '               seconds and discharged it instantly); tau = BatchDuration
-            '  Fed-Batch  : same as Batch in this simplified model (final-volume / cycle-time)
+            '  Fed-Batch  : pulse-enabled balances use variable volume; reaction totals below
+            '               are normalised to initial volume so Q_eff still converts them to kg/s.
+            '               Without a schedule, preserve the legacy Batch approximation.
             Dim tau As Double
             Dim Q_eff As Double
             Select Case OperatingMode
@@ -977,7 +989,7 @@ Namespace Reactors
 
             ' Scale factor that maps the inlet stream's mass flows (kg/s defined at Q_liquid)
             ' onto the cycle-equivalent flow Q_eff used by the batch/fed-batch model.
-            Dim flowScale As Double = If(Q_liquid > 0.0, Q_eff / Q_liquid, 1.0)
+            Dim flowScale As Double = If(scheduled, 1.0, If(Q_liquid > 0.0, Q_eff / Q_liquid, 1.0))
 
             ' Forward integration (adaptive RK4) of dX/dt, dS/dt, dP/dt
             Dim S = S0, X = X0, Px = P0c
@@ -1059,9 +1071,11 @@ Namespace Reactors
                 Dim qP0 = If(YieldPS > 0.0, YieldPS * mu0 / Max(YieldXS, 0.000000000001) * 3600.0, 0.0)
                 traj.qP.Add(qP0)
                 traj.OUR.Add(0.0) : traj.CER.Add(0.0) : traj.RQ.Add(0.0)
+                If scheduled Then traj.BrothVolume.Add(Volume)
 
                 While tt < tau
                     Dim h = Min(dt, tau - tt)
+                    If scheduled Then h = LimitFeedStep(tt, h)
 
                     Dim mu = ComputeMu(S, X, Px, T, P)
                     Dim rX = (mu - kd_SI) * X           ' g/L/s
@@ -1082,9 +1096,27 @@ Namespace Reactors
                     Dim Xn = Max(X + dX, 0.0)
                     Dim Sn = Max(S + dS, 0.0)
                     Dim Pn = Max(Px + dP, 0.0)
-                    dX = Xn - X
-                    dS = Sn - S
-                    dP = Pn - Px
+                    If scheduled Then
+                        Dim presentVolume = Volume + GetScheduledFeedVolume(tt)
+                        Dim nextVolume = Volume + GetScheduledFeedVolume(tt + h)
+                        Dim addedVolume = nextVolume - presentVolume
+                        Dim massX = X * presentVolume + feedX * addedVolume
+                        Dim massS = S * presentVolume + feedS * addedVolume
+                        Dim massP = Px * presentVolume + feedP * addedVolume
+                        ' Integrate reaction masses and add the exact pulse volume. This includes
+                        ' dilution without mistaking incoming material for reaction production.
+                        dX = Max(dX * presentVolume, -massX)
+                        dS = Max(dS * presentVolume, -massS)
+                        dP = Max(dP * presentVolume, -massP)
+                        Xn = (massX + dX) / nextVolume
+                        Sn = (massS + dS) / nextVolume
+                        Pn = (massP + dP) / nextVolume
+                        dX /= Volume : dS /= Volume : dP /= Volume
+                    Else
+                        dX = Xn - X
+                        dS = Sn - S
+                        dP = Pn - Px
+                    End If
                     X = Xn : S = Sn : Px = Pn
 
                     ' Track cumulative metabolic fluxes (g/L total over the integration).
@@ -1108,6 +1140,7 @@ Namespace Reactors
                         If ourInst > 0.000000001 Then rqInst = (cerInst / MW_CO2) / (ourInst / MW_O2)
                         traj.Times.Add(tt)
                         traj.X.Add(X) : traj.S.Add(S) : traj.P.Add(Px)
+                        If scheduled Then traj.BrothVolume.Add(Volume + GetScheduledFeedVolume(tt))
                         traj.Mu.Add(mu * 3600.0)
                         traj.qS.Add(qS * 3600.0)
                         traj.qP.Add(qP * 3600.0)
@@ -1125,6 +1158,7 @@ Namespace Reactors
                 If traj.Times.Count = 0 OrElse traj.Times(traj.Times.Count - 1) < tt - 0.000000001 Then
                     traj.Times.Add(tt)
                     traj.X.Add(X) : traj.S.Add(S) : traj.P.Add(Px)
+                    If scheduled Then traj.BrothVolume.Add(Volume + GetScheduledFeedVolume(tt))
                     Dim muF = ComputeMu(S, X, Px, T, P)
                     traj.Mu.Add(muF * 3600.0)
                     traj.qS.Add((muF / Max(YieldXS, 0.000000000001) + ms_SI) * 3600.0)
@@ -1167,6 +1201,7 @@ Namespace Reactors
             Result_X_gL = X
             Result_S_gL = S
             Result_P_gL = Px
+            Result_WorkingVolume_m3 = Volume + GetScheduledFeedVolume(tau)
             Result_Mu_h = muAvg * 3600.0
             If tau > 0 Then
                 Result_OUR_gLh = integrated_O2_total / (tau / 3600.0)
@@ -1212,6 +1247,11 @@ Namespace Reactors
                 Dim currentMF = kvp.Value.MassFlow.GetValueOrDefault * flowScale
                 newMass(kvp.Key) = currentMF
             Next
+            If supplemental IsNot Nothing Then
+                For Each kvp In supplemental.Phases(0).Compounds
+                    newMass(kvp.Key) += kvp.Value.MassFlow.GetValueOrDefault()
+                Next
+            End If
 
             newMass(substrate.Name) = Max(newMass(substrate.Name) + dm_S, 0.0)
             newMass(biomass.Name) = Max(newMass(biomass.Name) + dm_X, 0.0)
@@ -1275,7 +1315,7 @@ Namespace Reactors
             ' broth inventory as (rho_L * Volume) and compute the steady-state temperature rise
             ' assumption over the batch duration.
             Dim m_dot_kgs As Double = ims.Phases(0).Properties.massflow.GetValueOrDefault
-            Dim m_holdup_kg As Double = rho_L * Volume
+            Dim m_holdup_kg As Double = rho_L * Result_WorkingVolume_m3
 
             Dim T_in_K = T
             Dim T_out_K = T_in_K
@@ -1286,7 +1326,7 @@ Namespace Reactors
                 Case BioReactorThermalMode.Isothermal
                     ' Hold outlet T at inlet T -> cooling duty removes the metabolic heat
                     T_out_K = T_in_K
-                    Q_duty_W = -Q_met_W
+                    Q_duty_W = -Q_met_W - feedHeat_W
 
                 Case BioReactorThermalMode.Adiabatic
                     ' No external duty; metabolic heat raises the broth temperature.
@@ -1295,7 +1335,7 @@ Namespace Reactors
                         Case BioReactorMode.Continuous
                             If m_dot_kgs > 0.0 Then T_out_K = T_in_K + Q_met_W / (m_dot_kgs * cp_L_mass)
                         Case BioReactorMode.Batch, BioReactorMode.FedBatch
-                            If m_holdup_kg > 0.0 Then T_out_K = T_in_K + (Q_met_W * tau) / (m_holdup_kg * cp_L_mass)
+                            If m_holdup_kg > 0.0 Then T_out_K = T_in_K + ((Q_met_W + feedHeat_W) * tau) / (m_holdup_kg * cp_L_mass)
                     End Select
 
                 Case BioReactorThermalMode.DefinedOutletTemperature
@@ -1306,7 +1346,7 @@ Namespace Reactors
                             Q_duty_W = m_dot_kgs * cp_L_mass * (T_out_K - T_in_K) - Q_met_W
                         Case BioReactorMode.Batch, BioReactorMode.FedBatch
                             If tau > 0.0 Then _
-                                Q_duty_W = (m_holdup_kg * cp_L_mass * (T_out_K - T_in_K)) / tau - Q_met_W
+                                Q_duty_W = (m_holdup_kg * cp_L_mass * (T_out_K - T_in_K)) / tau - Q_met_W - feedHeat_W
                     End Select
 
             End Select
@@ -1393,6 +1433,7 @@ Namespace Reactors
         ''' </summary>
         Private Sub CalculateEnzymaticHydrolysis()
 
+            Dim scheduled = OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule
             If String.IsNullOrEmpty(SubstrateCompound) Then
                 Throw New Exception("BioReactor (EH): Substrate (cellulose) compound not selected.")
             End If
@@ -1428,6 +1469,10 @@ Namespace Reactors
                     ims.SpecType = StreamSpec.Temperature_and_Pressure
                     ims.Calculate(True, True)
             End Select
+            If scheduled AndAlso ReactorOperationMode <> OperationMode.OutletTemperature Then
+                ims.SpecType = StreamSpec.Temperature_and_Pressure
+                ims.Calculate(True, True)
+            End If
 
             Dim compounds = ims.Phases(0).Compounds
 
@@ -1454,6 +1499,13 @@ Namespace Reactors
 
             Dim rho_L = ims.Phases(1).Properties.density.GetValueOrDefault
             If rho_L <= 0.0 Then rho_L = 1000.0
+            Dim supplemental = If(scheduled, PrepareScheduledFeed(Q_liquid, T, P), Nothing)
+            Dim feedCell = FeedConcentration(supplemental, SubstrateCompound)
+            Dim feedGlucose = FeedConcentration(supplemental, ProductCompound)
+            Dim feedHemi = FeedConcentration(supplemental, HemicelluloseCompound)
+            Dim feedXylose = FeedConcentration(supplemental, XyloseCompound)
+            Dim feedEnzyme = FeedConcentration(supplemental, EnzymeCompound)
+            Dim feedHeat_W = SupplementalSensibleHeat(supplemental)
 
             ' Inlet concentrations (g/L)
             Dim Cc = cell.MassFlow.GetValueOrDefault / Q_liquid
@@ -1539,19 +1591,37 @@ Namespace Reactors
                 traj.Times.Add(0.0)
                 traj.Cellulose.Add(Cc) : traj.Hemicellulose.Add(Ch)
                 traj.Glucose.Add(Cg) : traj.Xylose.Add(Cx)
+                If scheduled Then traj.BrothVolume.Add(Volume)
 
                 While tt < tau
                     Dim h = Min(dt, tau - tt)
+                    If scheduled Then h = LimitFeedStep(tt, h)
+                    Dim presentVolume = Volume + GetScheduledFeedVolume(tt)
+                    Dim enzyme = If(scheduled, (E_gL * Volume + feedEnzyme * (presentVolume - Volume)) / presentVolume, E_gL)
                     Dim inhib = 1.0 + Cg / Max(EH_KG_glucose_gL, 0.000000000001) +
                                 Cx / Max(EH_KX_xylose_gL, 0.000000000001)
-                    Dim rC = k1_SI * E_gL * Cc / inhib ' g/L/s
-                    Dim rH = k2_SI * E_gL * Ch / inhib
+                    Dim rC = k1_SI * enzyme * Cc / inhib ' g/L/s
+                    Dim rH = k2_SI * enzyme * Ch / inhib
                     Dim dCc = -rC * h
                     Dim dCh = -rH * h
-                    Cc = Max(Cc + dCc, 0.0)
-                    Ch = Max(Ch + dCh, 0.0)
-                    Cg += -dCc * 1.111  ' 180.16 / 162.14
-                    Cx += -dCh * 1.1364 ' 150.13 / 132.12
+                    If scheduled Then
+                        Dim nextVolume = Volume + GetScheduledFeedVolume(tt + h)
+                        Dim addedVolume = nextVolume - presentVolume
+                        Dim massCell = Cc * presentVolume + feedCell * addedVolume
+                        Dim massHemi = Ch * presentVolume + feedHemi * addedVolume
+                        dCc = Max(dCc * presentVolume, -massCell)
+                        dCh = Max(dCh * presentVolume, -massHemi)
+                        Cc = (massCell + dCc) / nextVolume
+                        Ch = (massHemi + dCh) / nextVolume
+                        Cg = (Cg * presentVolume + feedGlucose * addedVolume - dCc * 1.111) / nextVolume
+                        Cx = (Cx * presentVolume + feedXylose * addedVolume - dCh * 1.1364) / nextVolume
+                        dCc /= Volume : dCh /= Volume
+                    Else
+                        Cc = Max(Cc + dCc, 0.0)
+                        Ch = Max(Ch + dCh, 0.0)
+                        Cg += -dCc * 1.111  ' 180.16 / 162.14
+                        Cx += -dCh * 1.1364 ' 150.13 / 132.12
+                    End If
                     sumRCell += -dCc
                     sumRHemi += -dCh
                     tt += h
@@ -1561,6 +1631,7 @@ Namespace Reactors
                         traj.Times.Add(tt)
                         traj.Cellulose.Add(Cc) : traj.Hemicellulose.Add(Ch)
                         traj.Glucose.Add(Cg) : traj.Xylose.Add(Cx)
+                        If scheduled Then traj.BrothVolume.Add(Volume + GetScheduledFeedVolume(tt))
                         If traj.Times.Count >= maxSamplesEH \ 2 Then
                             sampleIntervalEH = Max(sampleIntervalEH, sampleIntervalEH * 2)
                         End If
@@ -1571,23 +1642,30 @@ Namespace Reactors
                     traj.Times.Add(tt)
                     traj.Cellulose.Add(Cc) : traj.Hemicellulose.Add(Ch)
                     traj.Glucose.Add(Cg) : traj.Xylose.Add(Cx)
+                    If scheduled Then traj.BrothVolume.Add(Volume + GetScheduledFeedVolume(tt))
                 End If
 
             End If
 
             ' Mass flow changes (kg/s)
-            Dim dm_cell = -sumRCell * Q_liquid
-            Dim dm_hemi = -sumRHemi * Q_liquid
-            Dim dm_glu = sumRCell * 1.111 * Q_liquid
-            Dim dm_xyl = sumRHemi * 1.1364 * Q_liquid
+            Dim Q_eff = If(scheduled, Volume / tau, Q_liquid)
+            Dim dm_cell = -sumRCell * Q_eff
+            Dim dm_hemi = -sumRHemi * Q_eff
+            Dim dm_glu = sumRCell * 1.111 * Q_eff
+            Dim dm_xyl = sumRHemi * 1.1364 * Q_eff
             ' Water consumed: 0.111 g/g cell + 0.136 g/g hemi
-            Dim dm_h2o = -(sumRCell * 0.111 + sumRHemi * 0.1364) * Q_liquid
+            Dim dm_h2o = -(sumRCell * 0.111 + sumRHemi * 0.1364) * Q_eff
 
             Dim newMass As New Dictionary(Of String, Double)
             Dim totalNewMass As Double = 0.0
             For Each kvp In compounds
                 newMass(kvp.Key) = kvp.Value.MassFlow.GetValueOrDefault
             Next
+            If supplemental IsNot Nothing Then
+                For Each kvp In supplemental.Phases(0).Compounds
+                    newMass(kvp.Key) += kvp.Value.MassFlow.GetValueOrDefault()
+                Next
+            End If
             newMass(cell.Name) = Max(newMass(cell.Name) + dm_cell, 0.0)
             newMass(glu.Name) = Max(newMass(glu.Name) + dm_glu, 0.0)
             If hemi IsNot Nothing Then newMass(hemi.Name) = Max(newMass(hemi.Name) + dm_hemi, 0.0)
@@ -1616,6 +1694,7 @@ Namespace Reactors
             Result_X_gL = 0.0
             Result_S_gL = Cc
             Result_P_gL = Cg
+            Result_WorkingVolume_m3 = Volume + GetScheduledFeedVolume(tau)
             Result_Mu_h = 0.0
             Result_OUR_gLh = 0.0
             Result_CER_gLh = 0.0
@@ -1641,7 +1720,7 @@ Namespace Reactors
             If cp_L_mass <= 0.0 Then cp_L_mass = 4180.0
 
             Dim m_dot_kgs As Double = ims.Phases(0).Properties.massflow.GetValueOrDefault
-            Dim m_holdup_kg As Double = rho_L * Volume
+            Dim m_holdup_kg As Double = rho_L * Result_WorkingVolume_m3
 
             Dim T_in_K = T
             Dim T_out_K = T_in_K
@@ -1650,14 +1729,14 @@ Namespace Reactors
             Select Case ThermalMode
                 Case BioReactorThermalMode.Isothermal
                     T_out_K = T_in_K
-                    Q_duty_W = -Q_met_W
+                    Q_duty_W = -Q_met_W - feedHeat_W
                 Case BioReactorThermalMode.Adiabatic
                     Q_duty_W = 0.0
                     Select Case OperatingMode
                         Case BioReactorMode.Continuous
                             If m_dot_kgs > 0.0 Then T_out_K = T_in_K + Q_met_W / (m_dot_kgs * cp_L_mass)
                         Case BioReactorMode.Batch, BioReactorMode.FedBatch
-                            If m_holdup_kg > 0.0 Then T_out_K = T_in_K + (Q_met_W * tau) / (m_holdup_kg * cp_L_mass)
+                            If m_holdup_kg > 0.0 Then T_out_K = T_in_K + ((Q_met_W + feedHeat_W) * tau) / (m_holdup_kg * cp_L_mass)
                     End Select
                 Case BioReactorThermalMode.DefinedOutletTemperature
                     If OutletTemperature > 0.0 Then T_out_K = OutletTemperature Else T_out_K = T_in_K
@@ -1666,7 +1745,7 @@ Namespace Reactors
                             Q_duty_W = m_dot_kgs * cp_L_mass * (T_out_K - T_in_K) - Q_met_W
                         Case BioReactorMode.Batch, BioReactorMode.FedBatch
                             If tau > 0.0 Then _
-                                Q_duty_W = (m_holdup_kg * cp_L_mass * (T_out_K - T_in_K)) / tau - Q_met_W
+                                Q_duty_W = (m_holdup_kg * cp_L_mass * (T_out_K - T_in_K)) / tau - Q_met_W - feedHeat_W
                     End Select
             End Select
 
@@ -1780,6 +1859,10 @@ Namespace Reactors
             str.AppendLine("    Substrate: " & SubstrateCompound)
             If ProductCompound <> "" Then str.AppendLine("    Product: " & ProductCompound)
             str.AppendLine("    Volume: " & Volume.ToString(numberformat, ci) & " m3")
+            If OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule Then
+                str.AppendLine("    Cultivation duration: " & (BatchDuration / 3600.0).ToString(numberformat, ci) & " h")
+                AppendFeedScheduleReport(str, ci)
+            End If
             str.AppendLine()
             str.AppendLine("Kinetic Parameters")
             str.AppendLine("    mu_max: " & MuMax_h.ToString(numberformat, ci) & " 1/h")
@@ -1814,6 +1897,9 @@ Namespace Reactors
                 str.AppendLine("    OUR:          " & Result_OUR_gLh.ToString(numberformat, ci) & " g O2/L/h")
                 str.AppendLine("    CER:          " & Result_CER_gLh.ToString(numberformat, ci) & " g CO2/L/h")
                 str.AppendLine("    RQ:           " & Result_RQ.ToString(numberformat, ci))
+            End If
+            If OperatingMode = BioReactorMode.FedBatch Then
+                str.AppendLine("    Final working volume: " & Result_WorkingVolume_m3.ToString(numberformat, ci) & " m3")
             End If
             str.AppendLine()
             str.AppendLine("Thermal Balance")
@@ -1856,6 +1942,8 @@ Namespace Reactors
             "Initial Culture Biomass",
             "Steady-state Tolerance",
             "Max Integration Time",
+            "Use Feed Schedule",
+            "Feed Schedule",
             "Xylitol Compound",
             "Hemicellulose Compound",
             "Xylose Compound",
@@ -1895,6 +1983,7 @@ Namespace Reactors
         Private Function UnusedInputs() As HashSet(Of String)
 
             Dim unused As New HashSet(Of String)
+            If OperatingMode <> BioReactorMode.FedBatch Then unused.UnionWith({"Use Feed Schedule", "Feed Schedule"})
 
             'the batch duration is the integration time of the batch and fed-batch modes only
             If OperatingMode = BioReactorMode.Continuous Then unused.Add("Batch Duration")
@@ -1965,7 +2054,7 @@ Namespace Reactors
                         If OperatingMode <> BioReactorMode.Continuous Then excluded.UnionWith({"Hydraulic Residence Time", "Dilution Rate"})
                         Return _outputProps.Where(Function(p) Not excluded.Contains(p)).ToArray()
                     End If
-                    Return _outputProps.Except({"Final Working Volume", "Integration Time", "Hydraulic Residence Time", "Dilution Rate"}).ToArray()
+                    Return _outputProps.Except({"Integration Time", "Hydraulic Residence Time", "Dilution Rate"}).ToArray()
                 Case Else
                     Return _inputProps.Concat(_outputProps).Concat(baseprops).ToArray()
             End Select
@@ -2003,6 +2092,8 @@ Namespace Reactors
                 Case "Initial Culture Biomass" : Return JuliaInitialBiomass_gL
                 Case "Steady-state Tolerance" : Return JuliaSteadyStateTolerance
                 Case "Max Integration Time" : Return JuliaMaxIntegrationTime_s
+                Case "Use Feed Schedule" : Return UseFeedSchedule
+                Case "Feed Schedule" : Return Newtonsoft.Json.JsonConvert.SerializeObject(FeedPulses)
                 Case "Xylitol Compound" : Return XylitolCompound
                 Case "Hemicellulose Compound" : Return HemicelluloseCompound
                 Case "Xylose Compound" : Return XyloseCompound
@@ -2019,7 +2110,7 @@ Namespace Reactors
                 Case "Outlet Xylose Concentration" : Return Result_Xylose_gL
                 Case "Outlet Xylitol Concentration" : Return Result_Xylitol_gL
                 Case "Julia Closure Gas Mass Flow" : Return Result_JuliaClosureGas_kg_s
-                Case "Final Working Volume" : Return Result_JuliaVolume_m3
+                Case "Final Working Volume" : Return Result_WorkingVolume_m3
                 Case "Integration Time" : Return Result_JuliaIntegrationTime_s
                 Case "Hydraulic Residence Time" : Return Result_JuliaResidenceTime_s
                 Case "Dilution Rate" : Return Result_JuliaDilutionRate_h
@@ -2122,6 +2213,12 @@ Namespace Reactors
                 Case "Initial Culture Biomass" : JuliaInitialBiomass_gL = d : Return True
                 Case "Steady-state Tolerance" : JuliaSteadyStateTolerance = d : Return True
                 Case "Max Integration Time" : JuliaMaxIntegrationTime_s = d : Return True
+                Case "Use Feed Schedule" : UseFeedSchedule = Convert.ToBoolean(propval) : CreateConnectors() : Return True
+                Case "Feed Schedule"
+                    Dim pulses = Newtonsoft.Json.JsonConvert.DeserializeObject(Of List(Of BioReactorFeedPulse))(propval.ToString())
+                    If pulses Is Nothing OrElse pulses.Any(Function(p) p Is Nothing) Then Throw New ArgumentException("Feed Schedule must be a JSON array of pulse objects (StartTime_h, Volume_m3, Rate_m3_h).")
+                    FeedPulses = pulses
+                    Return True
                 Case "Xylitol Compound" : XylitolCompound = propval?.ToString() : Return True
                 Case "Hemicellulose Compound" : HemicelluloseCompound = propval?.ToString() : Return True
                 Case "Xylose Compound" : XyloseCompound = propval?.ToString() : Return True
@@ -2195,6 +2292,8 @@ Namespace Reactors
                                               Sub(dd, e)
                                                   If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
                                                   OperatingMode = CType(dd.SelectedIndex, BioReactorMode)
+                                                  CreateConnectors()
+                                                  FlowSheet.UpdateOpenEditForms()
                                               End Sub)
 
             container.CreateAndAddDropDownRow("Thermal Mode",
@@ -2395,9 +2494,12 @@ Namespace Reactors
             Dim gx = GraphicObject.X
             Dim gy = GraphicObject.Y
             Dim julia = KineticModel = BioKineticModel.JuliaCoFermentation
-            Dim inletName = If(julia AndAlso OperatingMode <> BioReactorMode.Continuous, "Initial Charge (Cycle Average)", "Inlet (Feed)")
-            Dim secondInletName = If(julia,
-                                    If(OperatingMode = BioReactorMode.FedBatch, "Supplemental Feed (Cycle Average)", "Supplemental Feed (Fed-batch Only)"),
+            Dim scheduled = OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule
+            Dim inletName = If(OperatingMode = BioReactorMode.FedBatch OrElse
+                               (julia AndAlso OperatingMode <> BioReactorMode.Continuous),
+                               "Initial Charge (Cycle Average)", "Inlet (Feed)")
+            Dim secondInletName = If(julia OrElse scheduled,
+                                    "Supplemental Feed",
                                     "Sparger Gas Inlet (Optional)")
 
             If GraphicObject.InputConnectors.Count = 2 AndAlso GraphicObject.OutputConnectors.Count = 2 Then
@@ -2649,14 +2751,37 @@ Namespace Reactors
 
         Public Overrides Function LoadData(data As System.Collections.Generic.List(Of System.Xml.Linq.XElement)) As Boolean
 
+            UseFeedSchedule = False
             XMLSerializer.XMLSerializer.Deserialize(Me, data)
+            If Not data.Any(Function(e) e.Name = "UseFeedSchedule") Then
+                Dim previous = data.FirstOrDefault(Function(e) e.Name = "JuliaUseFeedSchedule")
+                If previous IsNot Nothing Then UseFeedSchedule = Boolean.Parse(previous.Value)
+            End If
+            If Not data.Any(Function(e) e.Name = "Result_WorkingVolume_m3") Then
+                Dim previous = data.FirstOrDefault(Function(e) e.Name = "Result_JuliaVolume_m3")
+                Result_WorkingVolume_m3 = If(previous Is Nothing, Volume, Double.Parse(previous.Value, Globalization.CultureInfo.InvariantCulture))
+            End If
+            FeedPulses = New List(Of BioReactorFeedPulse)
+            Dim schedule = data.FirstOrDefault(Function(e) e.Name = "FeedPulses")
+            If schedule Is Nothing Then schedule = data.FirstOrDefault(Function(e) e.Name = "JuliaFeedPulses")
+            If schedule IsNot Nothing Then
+                For Each element In schedule.Elements("Pulse")
+                    Dim pulse As New BioReactorFeedPulse
+                    XMLSerializer.XMLSerializer.Deserialize(pulse, element.Elements().ToList())
+                    FeedPulses.Add(pulse)
+                Next
+            End If
+            Return True
 
         End Function
 
         ''' <summary>Serializes the reactor state, including reaction extents and component IDs, to XML.</summary>
         Public Overrides Function SaveData() As System.Collections.Generic.List(Of System.Xml.Linq.XElement)
 
-            Return XMLSerializer.XMLSerializer.Serialize(Me)
+            Dim data = XMLSerializer.XMLSerializer.Serialize(Me)
+            data.Add(New System.Xml.Linq.XElement("FeedPulses",
+                FeedPulses.Select(Function(p) New System.Xml.Linq.XElement("Pulse", XMLSerializer.XMLSerializer.Serialize(p)))))
+            Return data
 
         End Function
 

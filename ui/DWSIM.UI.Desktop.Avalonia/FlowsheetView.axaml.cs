@@ -1529,8 +1529,9 @@ public partial class FlowsheetView : UserControl
             var ws = _spreadsheet.Grid.CurrentWorksheet;
             var cell = ws.Cells[ws.SelectionRange.StartPos];
             var units = dlg.SelectedUnit ?? "";
+            var objectReference = SpreadsheetPanel.GetObjectReference(fs, dlg.SelectedObjectId);
             cell.Formula = SpreadsheetPanel.FormulaCall("GETPROPVAL",
-                dlg.SelectedObjectId, dlg.SelectedPropertyKey, units);
+                objectReference, dlg.SelectedPropertyKey, units);
         };
 
         menuExport.Click += async (_, _) =>
@@ -1543,8 +1544,9 @@ public partial class FlowsheetView : UserControl
             var scell = ws.Cells[ws.SelectionRange.StartPos];
             var currdata = scell.Formula ?? scell.Data?.ToString() ?? "";
             var units = dlg.SelectedUnit ?? "";
+            var objectReference = SpreadsheetPanel.GetObjectReference(fs, dlg.SelectedObjectId);
             scell.Formula = SpreadsheetPanel.FormulaCall("SETPROPVAL",
-                dlg.SelectedObjectId, dlg.SelectedPropertyKey, currdata, units);
+                objectReference, dlg.SelectedPropertyKey, currdata, units);
         };
 
         var contextMenu = new ContextMenu();

@@ -450,20 +450,21 @@
            Details
            ================================================================== -->
       <TabItem Header="Details">
-        <ScrollViewer>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
           <Border Classes="group" Margin="6">
             <DockPanel>
               <TextBlock DockPanel.Dock="Top" Classes="groupHeader" Text="Description" />
 
-              <Grid DockPanel.Dock="Top" ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto">
+              <!-- Measure labels at the active font scale instead of clipping them to 150 px. -->
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Flowsheet Title" VerticalAlignment="Center"
-                           Margin="0,4" />
+                           Margin="0,4,12,4" />
                 <TextBox   Grid.Row="0" Grid.Column="1" Name="TbTitle" Margin="0,4" />
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Flowsheet Author" VerticalAlignment="Center"
-                           Margin="0,4" />
+                           Margin="0,4,12,4" />
                 <TextBox   Grid.Row="1" Grid.Column="1" Name="TbAuthor" Margin="0,4" />
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Process Type" VerticalAlignment="Center"
-                           Margin="0,4" />
+                           Margin="0,4,12,4" />
                 <ComboBox  Grid.Row="2" Grid.Column="1" Name="CbProcessType" Margin="0,4"
                            HorizontalAlignment="Stretch">
                   <ComboBoxItem Content="Physical Separation" />
@@ -474,9 +475,10 @@
                   <ComboBoxItem Content="Unspecified" />
                 </ComboBox>
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Process Description" VerticalAlignment="Top"
-                           Margin="0,8,0,4" />
+                           Margin="0,8,12,4" />
                 <TextBox   Grid.Row="3" Grid.Column="1" Name="TbProcessDescription" Margin="0,4"
-                           AcceptsReturn="True" TextWrapping="Wrap" Height="110" />
+                           AcceptsReturn="True" TextWrapping="Wrap" Height="NaN" MinHeight="110" MaxHeight="280"
+                           VerticalContentAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto" />
               </Grid>
 
               <TextBlock DockPanel.Dock="Top" Text="Key Compounds" FontWeight="SemiBold"

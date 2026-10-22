@@ -520,9 +520,10 @@ public sealed class SpreadsheetToolbar : DockPanel
         // value in the property's own unit instead of a conversion from "" (which
         // would throw and show INVALID ARGS / ERROR).
         var unit = dialog.SelectedUnit ?? "";
+        var objectReference = SpreadsheetPanel.GetObjectReference(_flowsheet, dialog.SelectedObjectId);
         cell.Formula = string.IsNullOrEmpty(unit)
-            ? SpreadsheetPanel.FormulaCall("GETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey)
-            : SpreadsheetPanel.FormulaCall("GETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, unit);
+            ? SpreadsheetPanel.FormulaCall("GETPROPVAL", objectReference, dialog.SelectedPropertyKey)
+            : SpreadsheetPanel.FormulaCall("GETPROPVAL", objectReference, dialog.SelectedPropertyKey, unit);
 
         sheet.Recalculate();
         ReadCell();
@@ -544,9 +545,10 @@ public sealed class SpreadsheetToolbar : DockPanel
         var current = string.IsNullOrEmpty(cell.Formula) ? cell.Data?.ToString() ?? "" : cell.Formula;
 
         var unit = dialog.SelectedUnit ?? "";
+        var objectReference = SpreadsheetPanel.GetObjectReference(_flowsheet, dialog.SelectedObjectId);
         cell.Formula = string.IsNullOrEmpty(unit)
-            ? SpreadsheetPanel.FormulaCall("SETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current)
-            : SpreadsheetPanel.FormulaCall("SETPROPVAL", dialog.SelectedObjectId, dialog.SelectedPropertyKey, current, unit);
+            ? SpreadsheetPanel.FormulaCall("SETPROPVAL", objectReference, dialog.SelectedPropertyKey, current)
+            : SpreadsheetPanel.FormulaCall("SETPROPVAL", objectReference, dialog.SelectedPropertyKey, current, unit);
 
         sheet.Recalculate();
         ReadCell();

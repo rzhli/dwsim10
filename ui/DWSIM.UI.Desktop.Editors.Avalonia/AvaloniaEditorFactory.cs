@@ -100,6 +100,10 @@ namespace DWSIM.UI.Desktop.Editors
             // OpenEditorFor calls ArmAfterEdit() after the panel is in the tree.
             GeneralEditorsAvalonia.Populate(simobj, panel);
 
+            var customProperties = simobj is DWSIM.UnitOperations.Reactors.Reactor_BioReactor bioreactor
+                ? BioReactorEditor.BuildCustomProperties(bioreactor)
+                : AvaloniaTabBuilders.BuildCustomProperties(simobj);
+
             return new ObjectEditorDescriptor
             {
                 ShowConnections      = true,
@@ -109,7 +113,7 @@ namespace DWSIM.UI.Desktop.Editors
                 ShowUtilities        = true,
                 PropertiesContent       = panel,
                 ConnectionsContent      = AvaloniaTabBuilders.BuildConnections(simobj),
-                CustomPropertiesContent = AvaloniaTabBuilders.BuildCustomProperties(simobj),
+                CustomPropertiesContent = customProperties,
                 DynamicsContent         = simobj.SupportsDynamicMode ? AvaloniaTabBuilders.BuildDynamics(simobj) : null,
                 ResultsContent          = AvaloniaTabBuilders.BuildResults(simobj),
                 AppearanceContent       = AvaloniaTabBuilders.BuildAppearance(simobj, RedrawRequested),

@@ -915,8 +915,9 @@ public class PropertyPackageEditorWindow : Window
             || (_pp is PengRobinsonPropertyPackage && _pp is not PengRobinsonLKPropertyPackage);
         ToolTip.SetTip(cbSolidCp, cbSolidCp.IsEnabled
             ? "Calculate solid-phase enthalpy and entropy from solid heat-capacity data. " +
-              "Requires valid solid heat-capacity data for each solid compound. " +
-              "Configure solid-phase equilibrium separately under Equilibrium Calculations and Advanced Settings."
+              "This setting applies to every stream using this property package, including pure-fluid branches. " +
+              "Requires valid solid heat-capacity data and consistent solid/liquid caloric references. " +
+              "It does not enable solid-phase equilibrium; configure that separately under Equilibrium Calculations and Advanced Settings."
             : "This property package does not support solid enthalpy and entropy from heat-capacity data.");
         panel.Children.Add(cbSolidCp);
 

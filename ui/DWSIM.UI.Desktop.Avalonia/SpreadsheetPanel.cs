@@ -98,6 +98,30 @@ public sealed class SpreadsheetPanel
         return function + "(" + string.Join(FormulaExtension.ParameterSeparator, quoted) + ")";
     }
 
+    /// <summary>Returns a spreadsheet reference that survives an object's internal ID changing.</summary>
+    public static string GetObjectReference(IFlowsheet flowsheet, string objectId)
+    {
+        return flowsheet.SimulationObjects.TryGetValue(objectId, out var obj)
+            && !string.IsNullOrWhiteSpace(obj.GraphicObject?.Tag)
+                ? obj.GraphicObject.Tag
+                : objectId;
+    }
+
+    private ISimulationObject ResolveSpreadsheetObject(string idOrTag)
+    {
+        if (_flowsheet.SimulationObjects.TryGetValue(idOrTag, out var obj)) return obj;
+
+        ISimulationObject? match = null;
+        foreach (var candidate in _flowsheet.SimulationObjects.Values)
+        {
+            if (!string.Equals(candidate.GraphicObject?.Tag, idOrTag, StringComparison.OrdinalIgnoreCase)) continue;
+            if (match != null) throw new InvalidOperationException($"More than one object has the tag '{idOrTag}'.");
+            match = candidate;
+        }
+
+        return match ?? throw new KeyNotFoundException($"The given key '{idOrTag}' was not present in the dictionary.");
+    }
+
     // -----------------------------------------------------------------
     // Custom DWSIM formula functions
     // -----------------------------------------------------------------
@@ -108,7 +132,7 @@ public sealed class SpreadsheetPanel
         {
             try
             {
-                return _flowsheet.SimulationObjects[args[0].ToString()!].GraphicObject.Tag;
+                return ResolveSpreadsheetObject(args[0].ToString()!).GraphicObject.Tag;
             }
             catch (Exception ex) { return "ERROR: " + ex.Message; }
         };
@@ -119,7 +143,7 @@ public sealed class SpreadsheetPanel
             {
                 try
                 {
-                    return _flowsheet.SimulationObjects[args[0].ToString()!]
+                    return ResolveSpreadsheetObject(args[0].ToString()!)
                         .GetPropertyValue(args[1].ToString()!);
                 }
                 catch (Exception ex) { return "ERROR: " + ex.Message; }
@@ -128,7 +152,7 @@ public sealed class SpreadsheetPanel
             {
                 try
                 {
-                    var obj = _flowsheet.SimulationObjects[args[0].ToString()!];
+                    var obj = ResolveSpreadsheetObject(args[0].ToString()!);
                     var val = obj.GetPropertyValue(args[1].ToString()!);
                     var fromUnits = obj.GetPropertyUnit(args[1].ToString()!);
                     var toUnits = args[2].ToString()!;
@@ -154,11 +178,11 @@ public sealed class SpreadsheetPanel
                     wcell.Formula = args[2].ToString()!.Trim('"');
                     ws.RecalcCell(tr, tc);
                     var val = wcell.Data ?? (object)wcell.Formula;
-                    _flowsheet.SimulationObjects[args[0].ToString()!]
+                    ResolveSpreadsheetObject(args[0].ToString()!)
                         .SetPropertyValue(args[1].ToString()!, val);
                     wcell.Formula = null;
                     wcell.Data = null;
-                    return $"EXPORT OK [{_flowsheet.SimulationObjects[args[0].ToString()!].GraphicObject.Tag}, {args[1]} = {val}]";
+                    return $"EXPORT OK [{ResolveSpreadsheetObject(args[0].ToString()!).GraphicObject.Tag}, {args[1]} = {val}]";
                 }
                 catch (Exception ex) { return "ERROR: " + ex.Message; }
             }
@@ -167,7 +191,7 @@ public sealed class SpreadsheetPanel
                 try
                 {
                     if (!Loaded) return "NOT READY";
-                    var obj = _flowsheet.SimulationObjects[args[0].ToString()!];
+                    var obj = ResolveSpreadsheetObject(args[0].ToString()!);
                     var prop = args[1].ToString()!;
                     var ws = cell.Worksheet;
                     int tr = ws.RowCount - 1, tc = ws.ColumnCount - 1;
@@ -194,7 +218,7 @@ public sealed class SpreadsheetPanel
             {
                 try
                 {
-                    return _flowsheet.SimulationObjects[args[0].ToString()!]
+                    return ResolveSpreadsheetObject(args[0].ToString()!)
                         .GetPropertyUnit(args[1].ToString()!);
                 }
                 catch (Exception ex) { return "ERROR: " + ex.Message; }
@@ -221,7 +245,7 @@ public sealed class SpreadsheetPanel
             {
                 try
                 {
-                    return _flowsheet.SimulationObjects[args[0].ToString()!].GraphicObject.Tag;
+                    return ResolveSpreadsheetObject(args[0].ToString()!).GraphicObject.Tag;
                 }
                 catch (Exception ex) { return "ERROR: " + ex.Message; }
             }

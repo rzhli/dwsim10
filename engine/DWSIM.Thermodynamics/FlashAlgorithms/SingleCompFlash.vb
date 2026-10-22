@@ -182,10 +182,17 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                     'pure liquid
                     V = 0.0
                     S = 0.0
-                    T = New Brent().BrentOpt2(Tfus * 0.9, Tsat, 10, 0.000001, 100,
-                                              Function(Tx)
-                                                  Return OBJ_FUNC_PH_FLASH(H, "PT", Tx, P, Vz, PP, False, Nothing)(0)
-                                              End Function)
+                    If PP.SolidPhaseEnthalpy_UsesCp Then
+                        'The phase is already liquid. Do not let a PT objective below Tfus
+                        'switch to a Cp-based solid reference and mistake that jump for a root.
+                        T = SolveLiquidTemperature(Tfus, Tsat, H,
+                                                   Function(Tx) PP.DW_CalcEnthalpy(Vz, Tx, P, State.Liquid), "enthalpy")
+                    Else
+                        T = New Brent().BrentOpt2(Tfus * 0.9, Tsat, 10, 0.000001, 100,
+                                                  Function(Tx)
+                                                      Return OBJ_FUNC_PH_FLASH(H, "PT", Tx, P, Vz, PP, False, Nothing)(0)
+                                                  End Function)
+                    End If
                 ElseIf H < HfusL And H >= HfusS And Tfus > 0 And Abs(Hfus) > 0.0001 Then
                     'partial freezing from liquid
                     V = 0.0
@@ -269,10 +276,15 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 'pure liquid
                 V = 0.0
                 Sx = 0.0
-                T = New Brent().BrentOpt2(Tfus * 0.9, Tsat, 10, 0.000001, 100,
-                                          Function(Tx)
-                                              Return OBJ_FUNC_PS_FLASH(S, "PT", Tx, P, Vz, PP, False, Nothing)(0)
-                                          End Function)
+                If PP.SolidPhaseEnthalpy_UsesCp Then
+                    T = SolveLiquidTemperature(Tfus, Tsat, S,
+                                               Function(Tx) PP.DW_CalcEntropy(Vz, Tx, P, State.Liquid), "entropy")
+                Else
+                    T = New Brent().BrentOpt2(Tfus * 0.9, Tsat, 10, 0.000001, 100,
+                                              Function(Tx)
+                                                  Return OBJ_FUNC_PS_FLASH(S, "PT", Tx, P, Vz, PP, False, Nothing)(0)
+                                              End Function)
+                End If
             ElseIf S < SfusL And S >= SfusS And Tfus > 0 Then
                 'partial freezing from liquid
                 V = 0.0
@@ -329,6 +341,46 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             Else
                 Return New Object() {0.0, V, Vz, Vz, Tsat, 0.0, UnitK(Vz), 0.0, Vz, 1.0 - V, Vz} 'solid + vapor
             End If
+
+        End Function
+
+        ''' <summary>
+        ''' Inverts the already-selected liquid branch with Cp-based solid properties enabled.
+        ''' Accepts endpoint roots explicitly and checks the property residual only on this path.
+        ''' </summary>
+        Private Shared Function SolveLiquidTemperature(Tmin As Double, Tmax As Double, target As Double,
+                                                       liquidProperty As Func(Of Double, Double), propertyName As String) As Double
+
+            If Double.IsNaN(target) OrElse Double.IsInfinity(target) OrElse
+                Double.IsNaN(Tmin) OrElse Double.IsInfinity(Tmin) OrElse
+                Double.IsNaN(Tmax) OrElse Double.IsInfinity(Tmax) OrElse
+                Tmin <= 0.0 OrElse Tmax < Tmin Then
+                Throw New ArgumentException("Invalid liquid temperature interval or specified " & propertyName & " in single-compound flash.")
+            End If
+
+            Dim tolerance = Math.Max(0.00001, Math.Abs(target) * 0.00000001)
+            Dim residual As Func(Of Double, Double) =
+                Function(Tx)
+                    Dim value = liquidProperty(Tx) - target
+                    If Double.IsNaN(value) OrElse Double.IsInfinity(value) Then
+                        Throw New ArithmeticException("Non-finite liquid " & propertyName & " residual in single-compound flash.")
+                    End If
+                    Return value
+                End Function
+
+            Dim rmin = residual(Tmin)
+            If Math.Abs(rmin) <= tolerance Then Return Tmin
+            Dim rmax = residual(Tmax)
+            If Math.Abs(rmax) <= tolerance Then Return Tmax
+            If Math.Sign(rmin) = Math.Sign(rmax) Then
+                Throw New Exception(String.Format("Single-compound flash: specified {0} ({1:G17}) is not bracketed on the liquid branch between {2:G17} K and {3:G17} K. Check the property data and caloric reference settings.", propertyName, target, Tmin, Tmax))
+            End If
+
+            Dim T = MathNet.Numerics.RootFinding.Brent.FindRoot(residual, Tmin, Tmax, 0.00000001, 100)
+            If Math.Abs(residual(T)) > tolerance Then
+                Throw New Exception("Single-compound flash did not recover the specified liquid " & propertyName & ". Check the property data and caloric reference settings.")
+            End If
+            Return T
 
         End Function
 

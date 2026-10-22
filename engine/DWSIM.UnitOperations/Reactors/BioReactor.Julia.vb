@@ -19,7 +19,15 @@ Namespace Reactors
         Public Property Result_Xylitol_gL As Double
         Public Property Result_JuliaClosureGas_kg_s As Double
         Public Property JuliaInitialBiomass_gL As Double = 0.01
+        <System.Xml.Serialization.XmlIgnore, Newtonsoft.Json.JsonIgnore>
         Public Property Result_JuliaVolume_m3 As Double
+            Get
+                Return Result_WorkingVolume_m3
+            End Get
+            Set(value As Double)
+                Result_WorkingVolume_m3 = value
+            End Set
+        End Property
         Public Property Result_JuliaResidenceTime_s As Double
         Public Property Result_JuliaDilutionRate_h As Double
         ''' <summary>Scaled CSTR balance residual at which a continuous Julia run stops; passed to the script as operation.steady_tolerance.</summary>
@@ -28,7 +36,6 @@ Namespace Reactors
         Public Property JuliaMaxIntegrationTime_s As Double = 0.0
         ''' <summary>Time at which the Julia trajectory ended (s): the duration in batch/fed-batch, the steady-state stop in continuous mode.</summary>
         Public Property Result_JuliaIntegrationTime_s As Double
-
         ''' <summary>
         ''' Runs Julia batch, variable-volume fed-batch or steady-state CSTR balances.
         ''' Batch charge and fed-batch feed streams carry cycle-average mass flows.
@@ -85,22 +92,22 @@ Namespace Reactors
             Dim temperature = feed.Phases(0).Properties.temperature.GetValueOrDefault()
             If ThermalMode = BioReactorThermalMode.DefinedOutletTemperature Then temperature = OutletTemperature
             If ThermalMode = BioReactorThermalMode.Adiabatic OrElse Math.Abs(temperature - 303.15) > 0.01 Then
-                Throw New InvalidOperationException("The paper's Julia model requires 30 C, controlled pH 5 and a fixed temperature. Select a 30 C outlet setpoint; an adiabatic model is not provided.")
+                Throw New InvalidOperationException("The paper's Julia model requires 30 C, controlled pH 5 and a fixed temperature. Select Isothermal with the inlet at 30 C, or Defined Outlet Temperature at 30 C; an adiabatic model is not provided.")
             End If
             Dim pressure = feed.Phases(0).Properties.pressure.GetValueOrDefault() - DeltaP.GetValueOrDefault()
             If pressure <= 0.0 Then Throw New InvalidOperationException("Outlet pressure must be positive.")
 
-            Dim charge = PrepareJuliaFeed(feed, temperature, pressure)
+            Dim charge = PrepareFeedAtConditions(feed, temperature, pressure)
             Dim compounds = charge.Phases(0).Compounds
             If roles.Any(Function(n) Not compounds.ContainsKey(n)) Then
                 Throw New InvalidOperationException("One of the selected Julia co-fermentation compounds is missing from the feed.")
             End If
-            Dim flow = JuliaFeedVolumeFlow(charge)
+            Dim flow = FeedVolumeFlow(charge)
             If Not continuous Then
                 Dim expectedFlow = Volume / BatchDuration
                 If Math.Abs(flow / expectedFlow - 1.0) > If(fedBatch, 0.000001, 0.01) Then
                     Throw New InvalidOperationException(String.Format(CultureInfo.InvariantCulture,
-                        "The first inlet represents the initial charge averaged over a cycle. For {0:G8} m3 and {1:G8} h, set its flow to {2:G8} m3/h at 30 C (current {3:G8}). Changing duration also changes this required average flow; preserve feed composition when adjusting upstream streams.",
+                        "The first inlet represents the initial charge averaged over a cycle. For {0:G8} m3 and {1:G8} h, set its flow to {2:G8} m3/h at 30 C (current {3:G8}). Click Apply Initial Charge Average to First Inlet after changing volume or duration; this preserves composition. For an upstream-controlled inlet, adjust its source.",
                         Volume, BatchDuration / 3600.0, expectedFlow * 3600.0, flow * 3600.0))
                 End If
             End If
@@ -108,13 +115,14 @@ Namespace Reactors
             Dim feedConcentrations = If(continuous, DirectCast(initial.Clone(), Double()), New Double(4) {})
             Dim feedingFlow = If(continuous, flow, 0.0)
             Dim inletMass = compounds.ToDictionary(Function(kv) kv.Key, Function(kv) kv.Value.MassFlow.GetValueOrDefault())
+            Dim scheduledCharge = If(fedBatch AndAlso UseFeedSchedule, PrepareScheduledFeed(flow, temperature, pressure), Nothing)
             If fedBatch AndAlso GraphicObject.InputConnectors(1).IsAttached Then
                 Dim feedingStream = DirectCast(FlowSheet.SimulationObjects(
                     GraphicObject.InputConnectors(1).AttachedConnector.AttachedFrom.Name), MaterialStream)
                 inletEnthalpyFlow += feedingStream.Phases(0).Properties.massflow.GetValueOrDefault() *
                                      feedingStream.Phases(0).Properties.enthalpy.GetValueOrDefault()
-                Dim feedingCharge = PrepareJuliaFeed(feedingStream, temperature, pressure)
-                feedingFlow = JuliaFeedVolumeFlow(feedingCharge)
+                Dim feedingCharge = If(scheduledCharge, PrepareFeedAtConditions(feedingStream, temperature, pressure))
+                feedingFlow = FeedVolumeFlow(feedingCharge)
                 Dim feedingCompounds = feedingCharge.Phases(0).Compounds
                 If roles.Any(Function(n) Not feedingCompounds.ContainsKey(n)) Then
                     Throw New InvalidOperationException("A selected co-fermentation compound is missing from the supplemental feed.")
@@ -209,29 +217,6 @@ Namespace Reactors
             FlowSheet.ShowMessage(GraphicObject.Tag & ": Julia user script completed. CO2 is a total-mass closure surrogate; duty is a DWSIM enthalpy closure, not a paper heat prediction.", IFlowsheet.MessageType.Information)
         End Sub
 
-        Private Function PrepareJuliaFeed(feed As MaterialStream, temperature As Double, pressure As Double) As MaterialStream
-            Dim charge = DirectCast(feed.Clone(), MaterialStream)
-            charge.SetFlowsheet(FlowSheet)
-            charge.SetPropertyPackage(PropertyPackage)
-            charge.Phases(0).Properties.temperature = temperature
-            charge.Phases(0).Properties.pressure = pressure
-            charge.SpecType = StreamSpec.Temperature_and_Pressure
-            charge.DefinedFlow = FlowSpec.Mass
-            charge.OverrideSingleCompoundFlashBehavior = True
-            PropertyPackage.CurrentMaterialStream = charge
-            charge.Calculate(True, True)
-            Return charge
-        End Function
-
-        Private Shared Function JuliaFeedVolumeFlow(feed As MaterialStream) As Double
-            Dim flow = feed.Phases(1).Properties.volumetric_flow.GetValueOrDefault()
-            If flow <= 0.0 Then flow = feed.Phases(0).Properties.volumetric_flow.GetValueOrDefault()
-            If Not Double.IsFinite(flow) OrElse flow <= 0.0 Then
-                Throw New InvalidOperationException("Connected Julia feed streams must have positive volumetric flow at the reactor temperature.")
-            End If
-            Return flow
-        End Function
-
         Private Function RunJuliaModel(modelSource As String, initial As Double(), feed As Double(),
                                        feedingFlow As Double, duration As Double) As BioReactorTrajectoryResult
             Dim directory = Environment.CurrentDirectory
@@ -246,10 +231,11 @@ Namespace Reactors
             source.AppendLine("        model = Module(gensym(:DWSIMBioKinetics))")
             source.AppendLine("        Base.include_string(model, String(base64decode(""" & Convert.ToBase64String(Encoding.UTF8.GetBytes(modelSource)) & """)), " & JuliaString(Path.Combine(directory, "bioreactor_model.jl")) & ")")
             source.AppendLine("        entrypoint = if isdefined(model, :run_bioreactor)")
-            source.AppendLine("            getfield(model, :run_bioreactor)")
+            source.AppendLine("            Base.invokelatest(getfield, model, :run_bioreactor)")
             ' Compatibility with the first saved Model C scripts, before the public entry point.
-            source.AppendLine("        elseif isdefined(model, :ZMobilis2019) && isdefined(getfield(model, :ZMobilis2019), :run_bioreactor)")
-            source.AppendLine("            getfield(getfield(model, :ZMobilis2019), :run_bioreactor)")
+            source.AppendLine("        elseif isdefined(model, :ZMobilis2019) && isdefined(Base.invokelatest(getfield, model, :ZMobilis2019), :run_bioreactor)")
+            source.AppendLine("            kinetic_model = Base.invokelatest(getfield, model, :ZMobilis2019)")
+            source.AppendLine("            Base.invokelatest(getfield, kinetic_model, :run_bioreactor)")
             source.AppendLine("        else")
             source.AppendLine("            error(""Define run_bioreactor(initial, duration_h, output_path) in the selected Julia script."")")
             source.AppendLine("        end")
@@ -258,13 +244,23 @@ Namespace Reactors
             source.AppendLine("        global _dwsim_bioreactor_model_hash = """ & hash & """")
             source.AppendLine("    end")
             Dim mode = If(OperatingMode = BioReactorMode.Continuous, "continuous", If(OperatingMode = BioReactorMode.FedBatch, "fed_batch", "batch"))
-            source.AppendLine("    initial = [" & String.Join(",", initial.Select(Function(v) v.ToString("R", ci))) & "]")
-            source.AppendLine("    duration_h = " & (duration / 3600.0).ToString("R", ci))
+            Dim useSchedule = OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule
+            Dim pulses = If(useSchedule, FeedPulses, New List(Of BioReactorFeedPulse))
+            Dim pulseType = "NamedTuple{(:start_h, :amount_m3, :rate_m3_h), Tuple{Float64, Float64, Float64}}"
+            Dim pulseValues = String.Join(",", pulses.Select(
+                Function(p) "(start_h=Float64(" & p.StartTime_h.ToString("R", ci) & "), amount_m3=Float64(" & p.Volume_m3.ToString("R", ci) &
+                            "), rate_m3_h=Float64(" & p.Rate_m3_h.ToString("R", ci) & "))"))
+            Dim pulseArray = pulseType & "[" & pulseValues & "]"
+            source.AppendLine("    initial = Float64[" & String.Join(",", initial.Select(Function(v) v.ToString("R", ci))) & "]")
+            source.AppendLine("    duration_h = Float64(" & (duration / 3600.0).ToString("R", ci) & ")")
             source.AppendLine("    output_path = " & JuliaString(outputPath))
-            source.AppendLine("    operation = (mode=:" & mode & ", volume_m3=" & Volume.ToString("R", ci) &
-                              ", duration_h=duration_h, feed_flow_m3_h=" & (feedingFlow * 3600.0).ToString("R", ci) &
-                              ", feed_g_L=[" & String.Join(",", feed.Select(Function(v) v.ToString("R", ci))) & "]" &
-                              ", steady_tolerance=" & JuliaSteadyStateTolerance.ToString("R", ci) & ")")
+            source.AppendLine("    operation = (mode=:" & mode & ", volume_m3=Float64(" & Volume.ToString("R", ci) & ")" &
+                              ", duration_h=duration_h, feed_flow_m3_h=Float64(" & (feedingFlow * 3600.0).ToString("R", ci) & ")" &
+                              ", feed_g_L=Float64[" & String.Join(",", feed.Select(Function(v) v.ToString("R", ci))) & "]" &
+                              ", use_feed_schedule=" & If(useSchedule, "true", "false") &
+                              ", feed_total_m3=Float64(" & If(useSchedule, pulses.Sum(Function(p) p.Volume_m3), feedingFlow * duration).ToString("R", ci) & ")" &
+                              ", feed_pulses=" & pulseArray &
+                              ", steady_tolerance=Float64(" & JuliaSteadyStateTolerance.ToString("R", ci) & "))")
             source.AppendLine("    if Base.invokelatest(applicable, _dwsim_bioreactor_entrypoint, initial, duration_h, output_path, operation)")
             source.AppendLine("        Base.invokelatest(_dwsim_bioreactor_entrypoint, initial, duration_h, output_path, operation)")
             source.AppendLine("    elseif operation.mode == :batch")
@@ -309,6 +305,12 @@ Namespace Reactors
                     End If
                     If OperatingMode <> BioReactorMode.FedBatch AndAlso Math.Abs(brothVolume - Volume) > 0.0000001 * Math.Max(1.0, Volume) Then
                         Throw New InvalidDataException("Batch and Continuous operation require constant working volume.")
+                    End If
+                    If OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule Then
+                        Dim scheduledVolume = Volume + GetScheduledFeedVolume(row(0) * 3600.0)
+                        If Math.Abs(brothVolume - scheduledVolume) > 0.000001 * Math.Max(1.0, scheduledVolume) Then
+                            Throw New InvalidDataException("The Julia trajectory does not follow the editor's feed pulses. Update the selected script's feed_rate_m3_h and feed_switch_times_h to use operation.use_feed_schedule and operation.feed_pulses.")
+                        End If
                     End If
                     result.BrothVolume.Add(brothVolume)
                 Next
@@ -357,7 +359,13 @@ Namespace Reactors
                                   "; stopped at " & (Result_JuliaIntegrationTime_s / 3600.0).ToString(numberformat, ci) & " h.")
             Else
                 report.AppendLine("Fermentation duration: " & (BatchDuration / 3600.0).ToString(numberformat, ci) & " h; streams represent cycle-average material flows.")
-                If OperatingMode = BioReactorMode.FedBatch Then report.AppendLine("Variable broth volume; supplemental feed rate is defined by the Julia script.")
+                If OperatingMode = BioReactorMode.FedBatch Then
+                    If UseFeedSchedule Then
+                        AppendFeedScheduleReport(report, ci)
+                    Else
+                        report.AppendLine("Variable broth volume; supplemental feed rate is defined by the Julia script.")
+                    End If
+                End If
             End If
             Dim labels = {"Biomass", "Glucose", "Xylose", "Ethanol", "Xylitol"}
             Dim values = {Result_X_gL, Result_S_gL, Result_Xylose_gL, Result_P_gL, Result_Xylitol_gL}

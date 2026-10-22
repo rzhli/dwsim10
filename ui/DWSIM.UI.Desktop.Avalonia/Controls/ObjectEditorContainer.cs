@@ -20,8 +20,27 @@ namespace DWSIM.UI.Desktop.Avalonia.Controls;
 /// </summary>
 public class ObjectEditorContainer : ContentControl
 {
+    private TabControl? _tabs;
+
     /// <summary>Display name shown on the host EditorHolder tab.</summary>
     public string ObjectName { get; }
+
+    /// <summary>The current outer editor tab, retained when the same editor is refreshed.</summary>
+    internal string? SelectedTabHeader => (_tabs?.SelectedItem as TabItem)?.Header?.ToString();
+
+    internal void SelectTab(string? header)
+    {
+        if (_tabs == null || string.IsNullOrWhiteSpace(header)) return;
+        for (var i = 0; i < _tabs.Items.Count; i++)
+        {
+            if (_tabs.Items[i] is TabItem tab &&
+                string.Equals(tab.Header?.ToString(), header, StringComparison.Ordinal))
+            {
+                _tabs.SelectedIndex = i;
+                return;
+            }
+        }
+    }
 
     /// <summary>Raised when the user closes this editor via the close button.</summary>
     public event EventHandler? EditorCloseRequested;
@@ -57,6 +76,7 @@ public class ObjectEditorContainer : ContentControl
         }
 
         var tc = new TabControl();
+        _tabs = tc;
 
         if (d.ShowConnections)
             tc.Items.Add(MakeTab("Connections", d.ConnectionsContent ?? MakePlaceholder("Connections editor")));
@@ -219,9 +239,18 @@ public class EditorHolder : Grid
 
     public void OpenEditor(ObjectEditorContainer editor)
     {
+        var selectedTab = _currentEditor != null &&
+                          string.Equals(_currentName, editor.ObjectName, StringComparison.Ordinal)
+            ? _currentEditor.SelectedTabHeader
+            : null;
+
         // Remove the previous editor from the Grid, if any
         if (_currentEditor != null)
             Children.Remove(_currentEditor);
+
+        // UpdateOpenEditForms recreates the editor after an edit/solve. Keep the
+        // user's current page when that refresh is for the same simulation object.
+        editor.SelectTab(selectedTab);
 
         _currentName = editor.ObjectName;
         _headerLabel.Text = editor.ObjectName;

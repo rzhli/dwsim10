@@ -111,6 +111,17 @@ namespace DWSIM.UI.Desktop.Editors
             // Use the ConnectorName as label; fall back to a short positional name if the
             // name is empty or looks like a GUID (some objects auto-generate connector IDs).
             var cname = connector.ConnectorName;
+            if (simobj is DWSIM.UnitOperations.Reactors.Reactor_BioReactor bioreactor && isInput)
+            {
+                var inletIndex = simobj.GraphicObject.InputConnectors.IndexOf(connector);
+                if (inletIndex == 0 && (bioreactor.OperatingMode == DWSIM.UnitOperations.Reactors.BioReactorMode.FedBatch ||
+                    (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaCoFermentation &&
+                     bioreactor.OperatingMode != DWSIM.UnitOperations.Reactors.BioReactorMode.Continuous)))
+                    cname = "Initial Charge (Cycle Average)";
+                else if (inletIndex == 1 && (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaCoFermentation ||
+                    (bioreactor.OperatingMode == DWSIM.UnitOperations.Reactors.BioReactorMode.FedBatch && bioreactor.UseFeedSchedule)))
+                    cname = "Supplemental Feed";
+            }
             if (string.IsNullOrWhiteSpace(cname) || cname.Length > 30 || Guid.TryParse(cname.Split('|')[0].TrimStart("AQ-".ToCharArray()), out _))
                 cname = (isInput ? "In" : "Out") + (isEnergy ? " (Energy)" : "");
             string label = cname;
