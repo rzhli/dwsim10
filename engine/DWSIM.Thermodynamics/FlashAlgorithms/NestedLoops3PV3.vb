@@ -159,19 +159,26 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                     Else
 
-                        result = _nl.Flash_PT(Vz, P, T, PP, ReuseKI, PrevKi)
+                        result = SolveVLE(Vz, P, T, PP, ReuseKI, PrevKi)
                         nlres = result
 
                     End If
 
                 Else
 
-                    result = _nl.Flash_PT(Vz, P, T, PP, ReuseKI, PrevKi)
+                    result = SolveVLE(Vz, P, T, PP, ReuseKI, PrevKi)
                     nlres = result
 
                 End If
 
             Else
+
+                'A liquid-liquid result (V = 0) leaves no vapour composition to start Flash_PT_3P from: its K-values
+                'came out NaN and it threw, so inside a PH loop every second temperature of a mixture with two liquids
+                'and no vapour failed, and UniversalFlash answered with its ideal fail-safe (water/n-octane/n-heptane
+                'at 30 bar: 395 K with an enthalpy 243 kJ/kg off the one asked for, instead of 400 K). Such a result
+                'is solved from scratch; CheckPhases still tests the liquids for a vapour.
+                If prevres IsNot Nothing AndAlso Not (prevres.V > 0.0 AndAlso prevres.Vy IsNot Nothing AndAlso prevres.Vy.Sum() > 0.0) Then prevres = Nothing
 
                 If prevres IsNot Nothing Then
 
@@ -181,7 +188,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                 Else
 
-                    result = _nl.Flash_PT(Vz, P, T, PP, False, Nothing)
+                    result = SolveVLE(Vz, P, T, PP, False, Nothing)
                     nlres = result
 
                     L = result(0)
@@ -361,6 +368,43 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
             Return best
 
+        End Function
+
+        ''' <summary>
+        ''' The two-phase flash Flash_PT builds on; when it does not converge, the two-phase result of lowest Gibbs
+        ''' energy seeded from the stability test of the feed, measured against the feed as one phase, or that one
+        ''' phase when nothing is below it.
+        ''' </summary>
+        ''' <remarks>
+        ''' Next to a three-phase state the plain two-phase solve can cycle between the liquid branches and give up:
+        ''' water + condensate + gas at 307 K threw from 14.16 to 14.21 bar while 14.15 and 14.22 bar solved. The
+        ''' exception sent UniversalFlash to its ideal fail-safe, water and condensate in one Raoult liquid with an
+        ''' enthalpy 327 kJ/kg above the three-phase one, and a vessel whose volume flash crossed that window jumped
+        ''' from 34 to 125 C. Seeded from the stability test, the two-phase solve converges and the liquid split
+        ''' and CheckPhases take it to the three phases as usual. Only a call that threw before goes this way.
+        ''' </remarks>
+        Private Function SolveVLE(Vz As Double(), P As Double, T As Double, PP As PropertyPackages.PropertyPackage, ReuseKI As Boolean, PrevKi As Double()) As Object
+            Try
+                Return _nl.Flash_PT(Vz, P, T, PP, ReuseKI, PrevKi)
+            Catch ex As Exception
+                Dim feed As Object
+                If GibbsTerm(1.0, Vz, State.Liquid, T, P, PP) <= GibbsTerm(1.0, Vz, State.Vapor, T, P, PP) Then
+                    'the incipient vapour (Wilson) seeds the vapour of Flash_PT_3P, which cannot start from none
+                    Dim Kw = PP.DW_CalcKvalue_Ideal_Wilson(T, P)
+                    Dim yw = Vz.MultiplyY(Kw)
+                    yw = yw.MultiplyConstY(1.0 / yw.Sum())
+                    feed = New Object() {1.0, 0.0, Vz.Clone(), yw, 0, 0.0, PP.RET_NullVector(), 0.0, PP.RET_NullVector()}
+                Else
+                    feed = New Object() {0.0, 1.0, PP.RET_NullVector(), Vz.Clone(), 0, 0.0, PP.RET_NullVector(), 0.0, PP.RET_NullVector()}
+                End If
+                Dim r As Object = VLEFromFeedStability(Vz, P, T, PP, feed)
+                If r IsNot Nothing Then Return r
+                'no two-phase state below the feed: a stable feed is one phase, and a liquid feed may still split
+                'into two liquids, which the liquid split after this call finds (80 % water with condensate and gas
+                'at 400 K and 30 bar: the seeded two-phase solves end all liquid, the split gives the three phases)
+                If feed(0) > 0.0 OrElse StabTest(T, P, Vz, PP.RET_VTC, PP)(0) Then Return feed
+                Throw
+            End Try
         End Function
 
         ''' <summary>
@@ -750,7 +794,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
             L1 = L1est
             L2 = L2est
 
-            WriteDebugInfo("PT Flash [NL-3PV3]: Iteration #" & ecount & ", VF = " & V & ", L1 = " & L1 & ", L2 = " & L2)
+            If Settings.DebugLevel > 0 Then WriteDebugInfo("PT Flash [NL-3PV3]: Iteration #" & ecount & ", VF = " & V & ", L1 = " & L1 & ", L2 = " & L2)
 
             Dim F1 = 0.0#, F2 = 0.0#
             Dim dF1dL1 = 0.0#, dF1dL2 = 0.0#, dF2dL1 = 0.0#, dF2dL2 = 0.0#
@@ -964,7 +1008,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                 ecount += 1
 
-                WriteDebugInfo("PT Flash [NL-3PV3]: Iteration #" & ecount & ", VF = " & V & ", L1 = " & L1 & ", L2 = " & L2)
+                If Settings.DebugLevel > 0 Then WriteDebugInfo("PT Flash [NL-3PV3]: Iteration #" & ecount & ", VF = " & V & ", L1 = " & L1 & ", L2 = " & L2)
 
             Loop
 
@@ -2170,6 +2214,13 @@ out:
             itol = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Internal_Loop_Tolerance).ToDoubleFromInvariant
             maxit_i = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_Internal_Iterations)
 
+            'The loop below hands its iterates to SimpleLLE through Vx1EST and Vx2EST, element by element: on the
+            'caller's arrays that overwrote them, and the caller's arrays can be the feed itself (Flash_PV passes
+            'prevres, and a NestedLoops answer of one liquid returns the feed array as that liquid). Water/propane at
+            '20 bar left the caller's mixture at 0.96 propane, and every later flash on it was of the wrong mixture.
+            Vx1EST = Vx1EST.Clone()
+            Vx2EST = Vx2EST.Clone()
+
             n = Vz.Length - 1
 
             proppack = PP
@@ -2382,6 +2433,13 @@ out:        L1 = L1 * (1 - V) 'calculate global phase fractions
             maxit_e = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_External_Iterations)
             itol = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Internal_Loop_Tolerance).ToDoubleFromInvariant
             maxit_i = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_Internal_Iterations)
+
+            'The loop below hands its iterates to SimpleLLE through Vx1EST and Vx2EST, element by element: on the
+            'caller's arrays that overwrote them, and the caller's arrays can be the feed itself (Flash_PV passes
+            'prevres, and a NestedLoops answer of one liquid returns the feed array as that liquid). Water/propane at
+            '20 bar left the caller's mixture at 0.96 propane, and every later flash on it was of the wrong mixture.
+            Vx1EST = Vx1EST.Clone()
+            Vx2EST = Vx2EST.Clone()
 
             n = Vz.Length - 1
 
