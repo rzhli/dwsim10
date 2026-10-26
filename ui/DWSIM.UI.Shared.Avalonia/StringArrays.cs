@@ -129,7 +129,8 @@ namespace DWSIM.UI.Shared.Avalonia
         }
         public static String[] csepspectype()
         {
-            return new String[] { "% Inlet Mass Flow", "% Inlet Mass Flow", "Absolute Mass Flow", "Absolute Mole Flow" };
+            // Both component separator editors use the SeparationSpec enum value as the index.
+            return new String[] { "Absolute Mass Flow", "Absolute Mole Flow", "% Inlet Mass Flow", "% Inlet Mole Flow" };
         }
         public static String[] cspecunit()
         {

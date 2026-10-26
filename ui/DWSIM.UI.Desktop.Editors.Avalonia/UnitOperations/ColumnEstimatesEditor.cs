@@ -92,8 +92,8 @@ namespace DWSIM.UI.Desktop.Editors
         }
 
         /// <summary>
-        /// One stage of a composition grid. The compounds are reached by name, so the grid can
-        /// bind a column per compound without knowing them at compile time.
+        /// One stage of a composition grid. Numeric indexes map to compound names without
+        /// putting the names into Avalonia binding expressions.
         /// </summary>
         private sealed class CompositionRow : INotifyPropertyChanged
         {
@@ -101,14 +101,19 @@ namespace DWSIM.UI.Desktop.Editors
             private readonly int _index;
             private readonly bool _vapor;
             private readonly string _nf;
+            private readonly IReadOnlyList<string> _compounds;
 
-            public CompositionRow(Column column, int index, bool vapor, string nf)
+            public CompositionRow(Column column, int index, bool vapor, string nf,
+                                  IReadOnlyList<string> compounds)
             {
                 _column = column;
                 _index = index;
                 _vapor = vapor;
                 _nf = nf;
+                _compounds = compounds;
             }
+
+            public string Stage => _column.Stages[_index].Name;
 
             private List<Dictionary<string, Parameter>> Source
             {
@@ -120,12 +125,11 @@ namespace DWSIM.UI.Desktop.Editors
                 }
             }
 
-            public string this[string key]
+            public string this[int compoundIndex]
             {
                 get
                 {
-                    if (key == "Stage") return _column.Stages[_index].Name;
-
+                    var key = _compounds[compoundIndex];
                     var source = Source;
                     if (source == null || _index >= source.Count) return "";
                     if (!source[_index].ContainsKey(key)) return "";
@@ -134,8 +138,7 @@ namespace DWSIM.UI.Desktop.Editors
                 }
                 set
                 {
-                    if (key == "Stage") return;
-
+                    var key = _compounds[compoundIndex];
                     var source = Source;
                     if (source == null || _index >= source.Count) return;
                     if (!source[_index].ContainsKey(key)) return;
@@ -204,8 +207,8 @@ namespace DWSIM.UI.Desktop.Editors
             for (int i = 0; i < column.Stages.Count; i++)
             {
                 flowRows.Add(new FlowRow(column, i, su, nf));
-                liquidRows.Add(new CompositionRow(column, i, vapor: false, nf: nf));
-                vaporRows.Add(new CompositionRow(column, i, vapor: true, nf: nf));
+                liquidRows.Add(new CompositionRow(column, i, vapor: false, nf: nf, compounds: compounds));
+                vaporRows.Add(new CompositionRow(column, i, vapor: true, nf: nf, compounds: compounds));
             }
 
             var tabs = new TabControl { Height = 340 };
@@ -296,10 +299,10 @@ namespace DWSIM.UI.Desktop.Editors
         {
             var grid = Grid();
             grid.ItemsSource = rows;
-            grid.Columns.Add(TextColumn("Stage", "[Stage]", 1.4, readOnly: true));
+            grid.Columns.Add(TextColumn("Stage", "Stage", 1.4, readOnly: true));
 
-            foreach (var compound in compounds)
-                grid.Columns.Add(TextColumn(compound, "[" + compound + "]", 1.0));
+            for (int j = 0; j < compounds.Count; j++)
+                grid.Columns.Add(TextColumn(compounds[j], "[" + j + "]", 1.0));
 
             return grid;
         }

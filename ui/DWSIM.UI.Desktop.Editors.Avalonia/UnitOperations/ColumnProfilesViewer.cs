@@ -31,6 +31,12 @@ namespace DWSIM.UI.Desktop.Editors
             public string VaporFlow { get; set; } = "";
         }
 
+        private sealed class CompositionRow
+        {
+            public string Stage { get; set; } = "";
+            public string[] Amounts { get; set; } = Array.Empty<string>();
+        }
+
         public static void Show(Column column)
         {
             var flowsheet = column.GetFlowsheet();
@@ -104,15 +110,19 @@ namespace DWSIM.UI.Desktop.Editors
             var compounds = column.GetFlowsheet().SelectedCompounds.Keys.ToList();
             var source = Compositions(column, vapor);
 
-            var rows = new List<Dictionary<string, string>>();
+            var rows = new List<CompositionRow>();
 
             for (int i = 0; i < column.Stages.Count; i++)
             {
-                var row = new Dictionary<string, string> { { "Stage", column.Stages[i].Name } };
+                var row = new CompositionRow
+                {
+                    Stage = column.Stages[i].Name,
+                    Amounts = new string[compounds.Count]
+                };
                 var stage = source != null && i < source.Count ? source[i] as double[] : null;
 
                 for (int j = 0; j < compounds.Count; j++)
-                    row[compounds[j]] = stage != null && j < stage.Length
+                    row.Amounts[j] = stage != null && j < stage.Length
                         ? stage[j].ToString(nf, CultureInfo.CurrentCulture)
                         : "";
 
@@ -121,9 +131,11 @@ namespace DWSIM.UI.Desktop.Editors
 
             var grid = Grid();
             grid.ItemsSource = rows;
-            grid.Columns.Add(Column("Stage", "[Stage]", 1.4));
-            foreach (var compound in compounds)
-                grid.Columns.Add(Column(compound, "[" + compound + "]", 1.0));
+            grid.Columns.Add(Column("Stage", "Stage", 1.4));
+            // Compound names can contain spaces, commas and brackets. Keep them out of
+            // binding expressions, which Avalonia parses only when the tab is displayed.
+            for (int j = 0; j < compounds.Count; j++)
+                grid.Columns.Add(Column(compounds[j], "Amounts[" + j + "]", 1.0));
 
             return grid;
         }
