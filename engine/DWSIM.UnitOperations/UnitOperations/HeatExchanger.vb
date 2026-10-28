@@ -2343,12 +2343,12 @@ Namespace UnitOperations
 
                         Q = MaxHeatExchange
 
-                        H11 = H10 - (Math.Sign(Q1) * Q - HeatLoss) / StIn1.GetMassFlow()
+                        H11 = H10 - Math.Sign(Q1) * Q / StIn0.GetMassFlow()
 
-                        StIn1.PropertyPackage.CurrentMaterialStream = StIn1
+                        StIn0.PropertyPackage.CurrentMaterialStream = StIn0
                         IObj?.SetCurrent()
-                        tmp = StIn1.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.PressureEnthalpy, P1 - DP1, H11, T11)
-                        T11 = OverriddenTemperature(StIn1, P1 - DP1, H11, tmp.CalculatedTemperature.GetValueOrDefault())
+                        tmp = StIn0.PropertyPackage.CalculateEquilibrium2(FlashCalculationType.PressureEnthalpy, P1 - DP1, H11, T11)
+                        T11 = OverriddenTemperature(StIn0, P1 - DP1, H11, tmp.CalculatedTemperature.GetValueOrDefault())
 
                     End If
 
@@ -2398,6 +2398,9 @@ Namespace UnitOperations
 
                     Dim Q1, H10, H11, H20, H21, VF0, T10, T11, T20, T21, DP1, DP2 As Double
 
+                    T10 = StIn1.GetTemperature()
+                    T20 = StIn0.GetTemperature()
+
                     If T10 > T20 Then
                         P1 = Ph1
                         P2 = Pc1
@@ -2413,7 +2416,6 @@ Namespace UnitOperations
                     A = Area
 
                     VF0 = StIn1.GetPhase("Vapor").Properties.molarfraction.GetValueOrDefault()
-                    T10 = StIn1.GetTemperature()
                     H10 = StIn1.GetMassEnthalpy()
 
                     StIn1.PropertyPackage.CurrentMaterialStream = StIn1
@@ -2429,7 +2431,7 @@ Namespace UnitOperations
 
                         Q = MaxHeatExchange
 
-                        H11 = H10 - (Math.Sign(Q1) * Q - HeatLoss) / StIn1.GetMassFlow()
+                        H11 = H10 - Math.Sign(Q1) * Q / StIn1.GetMassFlow()
 
                         StIn1.PropertyPackage.CurrentMaterialStream = StIn1
                         IObj?.SetCurrent()
@@ -2438,7 +2440,6 @@ Namespace UnitOperations
 
                     End If
 
-                    T20 = StIn0.GetTemperature()
                     H20 = StIn0.GetMassEnthalpy()
                     H21 = H20 + (Math.Sign(Q1) * Q - HeatLoss) / StIn0.GetMassFlow()
 
