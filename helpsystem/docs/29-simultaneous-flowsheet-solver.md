@@ -305,9 +305,13 @@ The outlet's moles are the inlet's plus what the reactions make in the reactor a
 
 A distillation column or an absorber (without rate-based efficiencies, secondary specifications, a free water product or an external solver) gives its products from its feeds with its own solver, warm from the last solution, and its derivatives from the Naphtali-Sandholm solver started at that solution: the derivatives of every stage's flows, temperatures and compositions with respect to the feeds' moles and enthalpies and to the two specifications, by the implicit function theorem on the MESH equations. Finite differences would cost two column solves per feed variable.
 
+###### Spec blocks
+
+An active Spec block is an equation: its target property becomes an unknown, equal to the block's expression of the source (X) and of the target itself (Y) in the units of the flowsheet, held between the block's limits when it has both.
+
 ###### Black boxes
 
-A unit operation in another mode, an Expander, a Tank, a Component Separator, a Shortcut Column or a PFR (whose integration along its length is its own) enters through its own calculation: its inlets are put at their variables and flashed there, the unit is calculated, and its residuals are
+A unit operation in another mode, an Expander, a Tank, a Component Separator, a Shortcut Column, a PFR (whose integration along its length is its own) or a column the derivatives above do not cover (secondary specifications, rate-based efficiencies, an external solver) or a CAPE-OPEN unit operation (one call at a time, as a ChemSep column needs) enters through its own calculation: its inlets are put at their variables and flashed there, the unit is calculated, and its residuals are
 
 
 <a id="eq:eo_blackbox"></a>
@@ -317,15 +321,19 @@ A unit operation in another mode, an Expander, a Tank, a Component Separator, a 
 \]
 
 
-with derivatives by central differences of 0.1 %. The unit's own convergence noise makes these slower than the units with equations.
+with derivatives by central differences of 0.1 %, one-sided where the unit's own solver fails on the other side (and none where it fails on both, as a ChemSep column does for a compound absent from a feed). The unit's own convergence noise makes these slower than the units with equations. A CAPE-OPEN unit whose solver stops on a message box is calculated once more; a second failure is an error.
 
 ###### Adjusts and design specifications
 
 Each active Adjust and each active design specification adds an unknown, the property it manipulates, and an equation, the controlled property at its target over the tolerance (the Adjust's own tolerance). The manipulated property is a number the unit's equations read (an outlet temperature, a pressure drop, a split ratio, a feed's flow) or, for a black box, a property written into the unit before it is calculated.
 
+###### Streams of one compound
+
+The engine flashes a stream of one compound at its pressure and enthalpy. In one phase, its temperature and pressure give the enthalpy, and the stream enters like any other. In two phases, its temperature is the saturation one and leaves the enthalpy free; so does an azeotrope at its bubble point.
+
 ###### The simultaneous solver takes over
 
-A flowsheet with a stream of a package that treats it as one compound (Steam Tables, single-compound streams, the CoolProp incompressible mixtures), a unit operation outside the table and the black-box list (columns outside the ones above, CAPE-OPEN units, Spec blocks), two liquid phases in a flash, or a Newton iteration that does not converge is handed to the simultaneous solver, with a message that gives the reason.
+A flowsheet with a stream of a package that takes every stream for one fluid (Steam Tables, CoolProp, seawater), a stream of one compound in two phases, a unit operation outside the table and the black-box list (a Python script unit, for one), two liquid phases in a flash, or a Newton iteration that does not converge (or stalls: five iterations that do not halve the sum of the squared residuals) is handed to the simultaneous solver, with a message that gives the reason. A loop with no make-up of what it loses (a glycol loop whose only losses go to the products) has no well-defined inventory at steady state, and the Newton steps stall on it.
 
 ###### After the solve
 
