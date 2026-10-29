@@ -137,7 +137,7 @@ On 59 flowsheets from the samples and the case library, solved as saved and agai
 
 #### Design Specifications, Optimization and Data Reconciliation
 
-With the simultaneous solver, the converged flowsheet is a model that can be solved for targets, optimized and fitted to plant data (Patreon Edition). The three problems are set up in one window, **Design Specifications, Optimization and Reconciliation**, opened from the `Flowsheet Analysis` menu in the classic interface and from the `Tools` menu in the cross-platform one. Each row of its tables picks an object and one of its properties from lists; the numbers are typed and shown in the units of the flowsheet. The problem, with the results of its last run, is saved with the file.
+With the simultaneous solver, the converged flowsheet is a model that can be solved for targets, optimized and fitted to plant data (Patreon Edition). The three problems are set up in one window, **Design Specifications, Optimization and Reconciliation**, opened from the `Flowsheet Analysis` menu in both interfaces. Each row of its tables picks an object and one of its properties from lists; the numbers are typed and shown in the units of the flowsheet. The problem, with the results of its last run, is saved with the file.
 
 The figures below come from a flash plant: two hydrocarbon feeds mixed, cooled and separated into vapor and liquid.
 
@@ -284,7 +284,7 @@ The phase equilibrium is a submodel: the PT flash of the property package, with 
 | Gibbs Reactor | reacting in the vapor, in the liquid, or in the phases the flash gives |
 | CSTR | one outlet; isothermal, adiabatic or at an outlet temperature; kinetic and catalytic reactions with expression rates |
 | PFR | isothermal, adiabatic, at an outlet temperature or with the energy stream's duty; kinetic and catalytic reactions with expression rates, in one phase; the profile along the length as unknowns (below) |
-| Pipe Segment | length given; heat given, an overall coefficient against the surroundings, or no heat balance; the profile along the length as unknowns (below) |
+| Pipe Segment | length or outlet temperature given; heat given, an overall coefficient against the surroundings (given or estimated from the fluid's properties at each cell's inlet), solar radiation on the projected area, or no heat balance; the profile along the length as unknowns (below) |
 | Distillation Column, Absorber | the MESH equations of the Naphtali-Sandholm solver, each stage's temperature and flows unknowns of the system (below) |
 
 Feeds keep their state, and a Recycle block makes its outlet equal to its inlet. Controllers, switches and inputs act in dynamic simulation only and are left out.
