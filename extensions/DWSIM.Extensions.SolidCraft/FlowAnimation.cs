@@ -36,7 +36,7 @@ namespace DWSIM.Extensions.SolidCraft
         const int Steps = 40;
 
         // more bands than this makes the run slow and the picture busy: the spacing is widened
-        const int MaxBands = 300;
+        const int MaxBands = 150;
 
         const string BandColor = "#fff36b";
 
@@ -78,7 +78,7 @@ namespace DWSIM.Extensions.SolidCraft
                         SolidCraftScript.Add(cmds, "component.create", subject, new JObject { ["name"] = name, ["parent"] = "root", ["grounded"] = false });
                         SolidCraftScript.Add(cmds, "solid.cylinder", subject, new JObject
                         {
-                            ["diameter"] = SolidCraftScript.Round(run.OuterDiameter * 1.5),
+                            ["diameter"] = SolidCraftScript.Round(Math.Max(run.OuterDiameter * 1.5, run.OuterDiameter + 2 * run.Insulation + 30)),
                             ["height"] = SolidCraftScript.Round(band),
                             ["base"] = new JArray((at - dir * (band / 2)).ToArray()),
                             ["axis"] = Axis(dir),
@@ -96,6 +96,7 @@ namespace DWSIM.Extensions.SolidCraft
                             ["a"] = new JObject { ["occurrence"] = line, ["point"] = new JArray(at.ToArray()), ["z"] = Axis(dir) },
                             ["b"] = new JObject { ["occurrence"] = name + ":1", ["point"] = new JArray(at.ToArray()), ["z"] = Axis(dir) },
                             // the slide of one loop, kept here for the study (not a SolidCraft parameter)
+                            ["$study"] = StudyName,
                             ["$travel"] = SolidCraftScript.Round(spacing)
                         });
                     }
@@ -107,8 +108,8 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 ["study"] = StudyName,
                 ["path"] = gifPath,
-                ["width"] = 1280,
-                ["height"] = 800,
+                ["width"] = 1024,
+                ["height"] = 640,
                 ["fps"] = 20,
                 ["samples"] = Steps,
                 ["grid"] = false,
@@ -119,25 +120,27 @@ namespace DWSIM.Extensions.SolidCraft
         }
 
         /// <summary>
-        /// Fills in the keys of the motion study from the joints still in the script (the runner
-        /// leaves out the bands it cannot make) and strips the private travel field.
+        /// Fills in the keys of each motion study (the flow and the dynamic replay) from the joints
+        /// still in the script that belong to it (the runner leaves out what it cannot make): a flow
+        /// band slides one spacing per loop, a replay marker follows its own points.
         /// </summary>
         public static void Prepare(List<SolidCraftScript.Command> cmds)
         {
-            var keys = new JArray();
-            foreach (var c in cmds.Where(c => c.Name == "joint.create"))
+            foreach (var study in cmds.Where(c => c.Name == "motion.study"))
             {
-                var travel = c.Params["$travel"];
-                if (travel == null) continue;
-                keys.Add(new JObject
+                var name = (string)study.Params["name"];
+                var keys = new JArray();
+                foreach (var c in cmds.Where(c => c.Name == "joint.create" && (string)c.Params["$study"] == name))
                 {
-                    ["joint"] = c.Params["name"],
-                    ["points"] = new JArray(new JArray(0, 0), new JArray(Steps, travel))
-                });
-            }
-            foreach (var c in cmds)
-            {
-                if (c.Name == "motion.study") c.Params["keys"] = keys;
+                    var points = c.Params["$points"] as JArray;
+                    var travel = c.Params["$travel"];
+                    keys.Add(new JObject
+                    {
+                        ["joint"] = c.Params["name"],
+                        ["points"] = points != null ? points.DeepClone() : new JArray(new JArray(0, 0), new JArray(Steps, travel))
+                    });
+                }
+                study.Params["keys"] = keys;
             }
         }
 
@@ -148,14 +151,19 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 var p = (JObject)c.Params.DeepClone();
                 p.Remove("$travel");
+                p.Remove("$study");
+                p.Remove("$points");
                 return new SolidCraftScript.Command { Name = c.Name, Params = p, Subject = c.Subject };
             }).ToList();
         }
 
         static string JointName(PipeRun run, int k) => "flow " + run.Tag + " " + k;
 
-        /// <summary>Band spacing, mm: 0.5 s of travel at the line velocity, within 300 mm and 4 m.</summary>
-        static double Spacing(PipeRun run, double factor) => Math.Min(Math.Max(run.Velocity * 500, 300), 4000) * factor;
+        /// <summary>
+        /// Band spacing, mm: 0.5 s of travel at the line velocity, within 1.2 m (closer bands turn a
+        /// small line into a string of beads) and 4 m.
+        /// </summary>
+        static double Spacing(PipeRun run, double factor) => Math.Min(Math.Max(run.Velocity * 500, 1200), 4000) * factor;
 
         static int Count(double length, double spacing) => (int)Math.Floor(length / spacing);
 
@@ -166,7 +174,7 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 var d = run.Path[i] - run.Path[i - 1];
                 var l = d.Length;
-                var margin = run.OuterDiameter;
+                var margin = 2.5 * run.OuterDiameter;   // clear of the bends
                 if (l <= 2 * margin) continue;
                 var dir = d.Normalized();
                 yield return Tuple.Create(run.Path[i - 1] + dir * margin, dir, l - 2 * margin);

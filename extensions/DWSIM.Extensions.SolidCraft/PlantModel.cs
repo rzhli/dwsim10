@@ -39,13 +39,36 @@ namespace DWSIM.Extensions.SolidCraft
 
         public static double Dot(Vec3 a, Vec3 b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 
-        public double[] ToArray() => new[] { Math.Round(X, 1), Math.Round(Y, 1), Math.Round(Z, 1) };
+        /// <summary>
+        /// Whole millimetres: SolidCraft fails to sweep a straight pipe tens of metres from the origin
+        /// when its ends carry fractions of a millimetre (42958.4 fails where 42958 works).
+        /// </summary>
+        public double[] ToArray() => new[] { Math.Round(X), Math.Round(Y), Math.Round(Z) };
 
         public static readonly Vec3 PlusX = new Vec3(1, 0, 0), MinusX = new Vec3(-1, 0, 0);
+
+        /// <summary>The vector turned about Z by a whole number of quarter turns (degrees, counterclockwise from above).</summary>
+        public Vec3 TurnedZ(int degrees)
+        {
+            switch (((degrees / 90) % 4 + 4) % 4)
+            {
+                case 1: return new Vec3(-Y, X, Z);
+                case 2: return new Vec3(-X, -Y, Z);
+                case 3: return new Vec3(Y, -X, Z);
+                default: return this;
+            }
+        }
         public static readonly Vec3 PlusZ = new Vec3(0, 0, 1), MinusZ = new Vec3(0, 0, -1);
     }
 
-    public enum PrimitiveKind { Cylinder, Box, Sphere }
+    public enum PrimitiveKind { Cylinder, Box, Sphere, Torus, Head }
+
+    /// <summary>Where an item stands in the 3D model: its origin on the ground (mm) and its turn about Z (degrees).</summary>
+    public class Placement
+    {
+        public double X, Y, Z;
+        public int Rot;
+    }
 
     /// <summary>One solid of an equipment item, in the item's local coordinates.</summary>
     public class Primitive
@@ -67,6 +90,18 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Cylinder axis: X, Y or Z.</summary>
         public string Axis = "Z";
 
+        /// <summary>The cylinder axis as a vector, once the part has been turned; null to use <see cref="Axis"/>.</summary>
+        public Vec3? AxisVector;
+
+        /// <summary>Head: depth along its axis (<see cref="AxisVector"/>, outward from the shell), mm; the diameter is the shell's.</summary>
+        public double Depth;
+
+        /// <summary>Torus radii (major to the tube centre, minor of the tube), about a vertical axis.</summary>
+        public double Major, Minor;
+
+        /// <summary>Platforms, ladders and rails: lines pass through their openings, so the clash check leaves them out.</summary>
+        public bool NoClash;
+
         /// <summary>Cylinder and sphere diameter.</summary>
         public double Diameter;
 
@@ -81,6 +116,9 @@ namespace DWSIM.Extensions.SolidCraft
 
         public static Primitive Box(string name, Vec3 centre, double sx, double sy, double sz, string color, bool metallic = false)
             => new Primitive { Kind = PrimitiveKind.Box, Name = name, Point = centre, SizeX = sx, SizeY = sy, SizeZ = sz, Color = color, Metallic = metallic };
+
+        public static Primitive Torus(string name, Vec3 centre, double major, double minor, string color)
+            => new Primitive { Kind = PrimitiveKind.Torus, Name = name, Point = centre, Major = major, Minor = minor, Color = color, NoClash = true };
 
         public static Primitive Sphere(string name, Vec3 centre, double diameter, string color, bool metallic = false)
             => new Primitive { Kind = PrimitiveKind.Sphere, Name = name, Point = centre, Diameter = diameter, Color = color, Metallic = metallic };
@@ -115,6 +153,9 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Vertical cylinder: the top is a hemispherical head of radius HalfX.</summary>
         public bool HeadedTop;
 
+        /// <summary>Depth of the top head of a vertical cylinder, or of the end heads of a horizontal one, mm.</summary>
+        public double HeadDepth;
+
         public double ZCentre => (ZBottom + ZTop) / 2;
 
         /// <summary>
@@ -145,7 +186,7 @@ namespace DWSIM.Extensions.SolidCraft
                 {
                     case EnvelopeKind.VerticalCylinder:
                         var x = (u - 0.5) * HalfX;
-                        var z = HeadedTop ? ZTop - HalfX + Math.Sqrt(Math.Max(0, HalfX * HalfX - x * x)) : ZTop;
+                        var z = HeadedTop ? ZTop - HeadDepth + HeadDepth * Math.Sqrt(Math.Max(0, 1 - x * x / (HalfX * HalfX))) : ZTop;
                         position = new Vec3(x, 0, z);
                         break;
                     case EnvelopeKind.HorizontalCylinder:
@@ -200,7 +241,7 @@ namespace DWSIM.Extensions.SolidCraft
                     position = new Vec3(left ? -HalfX : HalfX, 0, ZCentre);
                     break;
                 case EnvelopeKind.VerticalCylinder:
-                    var top = HeadedTop ? ZTop - HalfX : ZTop;
+                    var top = HeadedTop ? ZTop - HeadDepth : ZTop;
                     zs = Clamp(zs, ZBottom + Math.Min(300, 0.1 * h), top - Math.Min(300, 0.1 * h));
                     position = new Vec3(left ? -HalfX : HalfX, 0, zs);
                     break;
@@ -243,6 +284,51 @@ namespace DWSIM.Extensions.SolidCraft
 
         /// <summary>Half the footprint along X and Y, for the layout. Defaults to the envelope.</summary>
         public double FootprintX, FootprintY;
+
+        /// <summary>Turn about Z, in quarter turns (0, 90, 180, 270), and whether the place comes from a saved layout.</summary>
+        public int Rotation;
+        public bool Placed;
+
+        /// <summary>A transmitter or an indicator: placed at its measuring point on every export.</summary>
+        public bool IsInstrument;
+
+        /// <summary>
+        /// Turns the item about its origin by quarter turns: parts, the column's own lines and the
+        /// footprint. The envelope stays in the item's own frame; nozzles are turned as they are placed.
+        /// </summary>
+        public void Turn(int degrees)
+        {
+            Rotation = ((degrees % 360) + 360) % 360;
+            if (Rotation == 0) return;
+            var odd = (Rotation / 90) % 2 == 1;
+            foreach (var p in Parts)
+            {
+                p.Point = p.Point.TurnedZ(Rotation);
+                if (p.AxisVector.HasValue)
+                {
+                    p.AxisVector = p.AxisVector.Value.TurnedZ(Rotation);
+                }
+                else if (p.Kind == PrimitiveKind.Cylinder)
+                {
+                    var axis = p.Axis == "X" ? Vec3.PlusX : p.Axis == "Y" ? new Vec3(0, 1, 0) : Vec3.PlusZ;
+                    p.AxisVector = axis.TurnedZ(Rotation);
+                }
+                if (p.Kind == PrimitiveKind.Box && odd)
+                {
+                    var sx = p.SizeX;
+                    p.SizeX = p.SizeY;
+                    p.SizeY = sx;
+                }
+            }
+            foreach (var run in InternalPipes)
+                for (var i = 0; i < run.Path.Count; i++) run.Path[i] = run.Path[i].TurnedZ(Rotation);
+            if (odd)
+            {
+                var fx = FootprintX;
+                FootprintX = FootprintY;
+                FootprintY = fx;
+            }
+        }
     }
 
     /// <summary>A pipe between two nozzles, or from a nozzle to the battery limit.</summary>
@@ -259,14 +345,53 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Mean velocity in the line, m/s (0 when the stream has no flow).</summary>
         public double Velocity;
 
+        /// <summary>Where the line comes from and goes to: an item's tag, or "battery limit".</summary>
+        public string From = "battery limit", To = "battery limit";
+
+        /// <summary>The fluid: K, Pa, kg/s, kg/m3 (homogeneous) and Pa.s.</summary>
+        public double Temperature, Pressure, MassFlow, Density, Viscosity;
+
+        /// <summary>Insulation thickness, mm (0 for none), and what it is for: "hot" or "cold".</summary>
+        public double Insulation;
+        public string InsulationService = "";
+
+        /// <summary>The hydraulics along the route (see <see cref="LineHydraulics"/>); NaN until worked out.</summary>
+        public LineHydraulics.Result Hydraulics;
+
         /// <summary>Operating conditions of the stream, saved as properties of the line.</summary>
         public Dictionary<string, string> Properties = new Dictionary<string, string>();
 
         /// <summary>The 3D label along the line; null for none.</summary>
         public string Label;
 
-        /// <summary>The run ends at the battery limit: draw a flange there.</summary>
-        public bool OpenEnd, OpenStart;
+        /// <summary>Flanges along the line: the face position and the direction the flange faces.</summary>
+        public List<Tuple<Vec3, Vec3>> Flanges = new List<Tuple<Vec3, Vec3>>();
+
+        /// <summary>
+        /// The line runs on the pipe rack: its path is laid out once every rack line is known, from
+        /// the nozzles (A, B) and the points just off them (A1, B1).
+        /// </summary>
+        internal bool OnRack;
+        internal Vec3 A, A1, B, B1;
+
+        /// <summary>The line joins two items, so it can go on the rack when its direct route runs into something.</summary>
+        internal bool CanRack;
+
+        /// <summary>
+        /// For a nozzle on the top or the bottom of an item: the Y, clear of the item on the rack
+        /// side, where the line turns to go up or down; NaN for a side nozzle.
+        /// </summary>
+        internal double AClearY = double.NaN, BClearY = double.NaN;
+    }
+
+    /// <summary>A single-tier pipe rack along X: the lines run on top of its beams, one lane each.</summary>
+    public class PipeRack
+    {
+        /// <summary>Ends along X, the -Y side, the width along Y and the top of the steel, mm.</summary>
+        public double X0, X1, Y0, Width, Top;
+
+        public const double BayLength = 6000;
+        public const double BeamHeight = 250;
     }
 
     public class PlantModel
@@ -275,6 +400,12 @@ namespace DWSIM.Extensions.SolidCraft
         public List<EquipmentItem> Equipment = new List<EquipmentItem>();
         public List<PipeRun> Pipes = new List<PipeRun>();
         public List<string> Warnings = new List<string>();
+
+        /// <summary>The pipe rack, when a line runs on it.</summary>
+        public PipeRack Rack;
+
+        /// <summary>What the export draws.</summary>
+        public ExportOptions Options = new ExportOptions();
 
         /// <summary>mm of plot plan per unit of canvas, and the canvas point placed at the world origin.</summary>
         public double Scale, CanvasOriginX, CanvasOriginY;

@@ -35,13 +35,12 @@ namespace DWSIM.Extensions.SolidCraft
     /// </summary>
     public static class PlantModelBuilder
     {
-        // the gap kept between the footprints of neighbouring items when the canvas is scaled
-        const double LayoutGap = 2000;
-
-        public static PlantModel Build(IFlowsheet fs, string name)
+        public static PlantModel Build(IFlowsheet fs, string name, IDictionary<string, Placement> layout = null, ExportOptions options = null)
         {
-            var model = new PlantModel { Name = name };
+            var model = new PlantModel { Name = name, Options = options ?? new ExportOptions() };
+            Options = model.Options;
             var byGraphic = new Dictionary<string, EquipmentItem>();
+            ControlledValves = Instruments.ControlledValves(fs);
 
             foreach (var obj in fs.SimulationObjects.Values.OrderBy(o => o.GraphicObject?.Tag))
             {
@@ -68,6 +67,14 @@ namespace DWSIM.Extensions.SolidCraft
                 if (item.FootprintX <= 0) item.FootprintX = item.Envelope.HalfX;
                 if (item.FootprintY <= 0) item.FootprintY = item.Envelope.HalfY;
 
+                // an item placed in SolidCraft before keeps its place and turn
+                if (layout != null && layout.TryGetValue(obj.Name, out var placed))
+                {
+                    item.Turn(placed.Rot);
+                    item.Origin = new Vec3(placed.X, placed.Y, placed.Z);
+                    item.Placed = true;
+                }
+
                 model.Equipment.Add(item);
                 byGraphic[go.Name] = item;
             }
@@ -79,6 +86,7 @@ namespace DWSIM.Extensions.SolidCraft
                 foreach (var p in item.InternalPipes)
                 {
                     p.Tag = item.Tag + " " + p.Tag;
+                    p.From = p.To = item.Tag;
                     p.Path = p.Path.Select(v => v + item.Origin).ToList();
                     model.Pipes.Add(p);
                 }
@@ -103,6 +111,35 @@ namespace DWSIM.Extensions.SolidCraft
                     model.Warnings.Add(go.Tag + ": no pipe (" + ex.Message + ").");
                 }
             }
+
+            if (!model.Options.Insulation)
+                foreach (var run in model.Pipes)
+                {
+                    run.Insulation = 0;
+                    run.InsulationService = "";
+                    run.Properties.Remove("Insulation (mm)");
+                }
+
+            LayOutRack(model);
+            model.Pipes.RemoveAll(r => r.Path.Count < 2);
+
+            // the hydraulics along each route, kept with the line in SolidCraft too
+            foreach (var run in model.Pipes)
+            {
+                var h = run.Hydraulics = LineHydraulics.Compute(run);
+                run.Properties["Length (m)"] = Fmt(h.Length, "0.#");
+                run.Properties["Bends"] = h.Bends.ToString(CultureInfo.InvariantCulture);
+                if (!double.IsNaN(h.Total))
+                {
+                    run.Properties["Pressure drop (bar)"] = Fmt(h.Total, "0.####") + " (friction and fittings " + Fmt(h.Friction, "0.####") + ", static " + Fmt(h.Static, "0.####") + ")";
+                    if (h.Check.Length > 0) run.Properties["Check"] = h.Check;
+                }
+            }
+
+            // transmitters and indicators where the controllers and gauges measure
+            if (model.Options.Instruments)
+                try { Instruments.Add(model, fs); }
+            catch (Exception ex) { model.Warnings.Add("instruments left out (" + ex.Message + ")."); }
 
             return model;
         }
@@ -137,9 +174,18 @@ namespace DWSIM.Extensions.SolidCraft
 
         #region Equipment
 
+        /// <summary>The valves a controller moves, set for the build in progress.</summary>
+        [ThreadStatic] static Dictionary<string, string> ControlledValves;
+
+        /// <summary>What the build in progress draws.</summary>
+        [ThreadStatic] static ExportOptions Options;
+
         static EquipmentItem CreateItem(ISimulationObject obj, ObjectType type, List<string> warnings)
         {
             var tag = obj.GraphicObject.Tag;
+
+            // a relief valve comes from the external catalogue: recognised by its class
+            if (obj.GetType().Name == "ReliefValve") return EquipmentTemplates.ReliefValve();
 
             switch (type)
             {
@@ -211,6 +257,12 @@ namespace DWSIM.Extensions.SolidCraft
                     }
 
                 case ObjectType.Valve:
+                    if (ControlledValves != null && ControlledValves.TryGetValue(obj.Name, out var loop))
+                    {
+                        var cv = EquipmentTemplates.ControlValve();
+                        cv.Properties["Service"] = "Control valve (" + loop + "V)";
+                        return cv;
+                    }
                     return EquipmentTemplates.InlineValve(false);
 
                 case ObjectType.OrificePlate:
@@ -234,7 +286,7 @@ namespace DWSIM.Extensions.SolidCraft
                         var estimated = !(v > 0);
                         if (estimated) v = 1;
                         var d = Clamp(Math.Pow(4 * v / (1.5 * Math.PI), 1.0 / 3), 0.5, 8) * 1000;
-                        var item = EquipmentTemplates.VerticalVessel(d, 1.5 * d, 1000 + d / 2, EquipmentTemplates.Reactor);
+                        var item = EquipmentTemplates.VerticalVessel(d, 1.5 * d, 1000 + d / 2, EquipmentTemplates.Reactor, 0.5);
                         var top = item.Envelope.ZTop;
                         item.Parts.Add(Primitive.Cylinder("agitator drive", new Vec3(0, 0, top - 0.05 * d), "Z", 0.25 * d, 0.35 * d, EquipmentTemplates.Motor));
                         Describe(item, "Volume (m3)", v, estimated);
@@ -251,7 +303,7 @@ namespace DWSIM.Extensions.SolidCraft
                         if (n > 1)
                         {
                             var ds = Clamp(1.3 * dt * Math.Sqrt(n) + 100, 300, 6000);
-                            item = EquipmentTemplates.VerticalVessel(ds, Clamp(l, 1000, 30000), 2000 + ds / 2, EquipmentTemplates.Reactor);
+                            item = EquipmentTemplates.VerticalVessel(ds, Clamp(l, 1000, 30000), 2000 + ds / 2, EquipmentTemplates.Reactor, 0.5);
                         }
                         else
                         {
@@ -272,15 +324,39 @@ namespace DWSIM.Extensions.SolidCraft
                         var estimated = !(v > 0);
                         if (estimated) v = Clamp(InletVolumetricFlow(obj) * 600, 1, 500);
                         var d = Clamp(Math.Pow(4 * v / (3 * Math.PI), 1.0 / 3), 0.6, 8) * 1000;
-                        var item = EquipmentTemplates.VerticalVessel(d, 3 * d, 1000 + d / 2, EquipmentTemplates.Reactor);
+                        var item = EquipmentTemplates.VerticalVessel(d, 3 * d, 1000 + d / 2, EquipmentTemplates.Reactor, 0.5);
                         Describe(item, "Volume (m3)", v, estimated);
                         if (estimated) warnings.Add(tag + ": volume estimated for 10 min of the inlet flow.");
                         return item;
                     }
 
                 default:
-                    return EquipmentTemplates.Block(2000, 2000, 2500);
+                    return Generic(obj, warnings);
             }
+        }
+
+        /// <summary>
+        /// A unit operation with no model of its own (Plus units, CAPE-OPEN, scripts): a vessel when
+        /// its dimensions give a diameter, a height or a volume, otherwise a block.
+        /// </summary>
+        static EquipmentItem Generic(ISimulationObject obj, List<string> warnings)
+        {
+            var d = DimensionValue(obj, DimensionName.Diameter);
+            var h = DimensionValue(obj, DimensionName.Height);
+            if (!(h > 0)) h = DimensionValue(obj, DimensionName.Length);
+            var v = DimensionValue(obj, DimensionName.Volume);
+            if (d > 0 && d < 20) d *= 1000;        // diameters come in m or mm
+            if (h > 0 && h < 100) h *= 1000;
+            if (!(d > 0) && v > 0) d = Math.Pow(4 * v / (3 * Math.PI), 1.0 / 3) * 1000;
+            if (d > 0)
+            {
+                if (!(h > 0)) h = v > 0 ? v / (Math.PI * Math.Pow(d / 1000, 2) / 4) * 1000 : 3 * d;
+                var item = EquipmentTemplates.VerticalVessel(Clamp(d, 300, 10000), Clamp(h, 500, 60000), 1000 + d / 4, EquipmentTemplates.Generic, 0.5);
+                Describe(item, "Diameter (mm)", d, false);
+                Describe(item, "Height (mm)", h, false);
+                return item;
+            }
+            return EquipmentTemplates.Block(2000, 2000, 2500);
         }
 
         static EquipmentItem CreateVessel(ISimulationObject obj, string tag, List<string> warnings)
@@ -303,9 +379,12 @@ namespace DWSIM.Extensions.SolidCraft
                 warnings.Add(tag + ": diameter and length estimated from the outlet streams (Souders-Brown, 5 min of liquid).");
             }
 
+            var heads = EquipmentTemplates.HeadRatio((obj as Vessel)?.HeadType);
             var item = horizontal
-                ? EquipmentTemplates.HorizontalVessel(d, l, 1000, EquipmentTemplates.Steel)
-                : EquipmentTemplates.VerticalVessel(d, l, 1000 + d / 2, EquipmentTemplates.Steel);
+                ? EquipmentTemplates.HorizontalVessel(d, l, 1000, EquipmentTemplates.Steel, heads)
+                : EquipmentTemplates.VerticalVessel(d, l, 1000 + d / 2, EquipmentTemplates.Steel, heads);
+            if (Options == null || Options.Platforms) EquipmentTemplates.AddPlatforms(item, d);
+            item.Properties["Heads"] = (obj as Vessel)?.HeadType ?? "Hemispherical";
             item.Properties["Orientation"] = horizontal ? "Horizontal" : "Vertical";
             Describe(item, "Diameter (mm)", d, estimated);
             Describe(item, "Length T/T (mm)", l, estimated);
@@ -388,8 +467,9 @@ namespace DWSIM.Extensions.SolidCraft
             if (!(h > 0)) h = stages * 600 + 2000;
             h = Math.Max(h, 3 * d);
 
-            var item = EquipmentTemplates.VerticalVessel(d, h, 3000, EquipmentTemplates.ColumnShell);
+            var item = EquipmentTemplates.VerticalVessel(d, h, 3000, EquipmentTemplates.ColumnShell, 0.5);
             EquipmentTemplates.AddColumnAuxiliaries(item, d, condenser, reboiler);
+            if (Options == null || Options.Platforms) EquipmentTemplates.AddPlatforms(item, d);
             item.Properties["Stages"] = stages.ToString(CultureInfo.InvariantCulture);
             Describe(item, "Diameter (mm)", d, estimated);
             Describe(item, "Height T/T (mm)", h, false);
@@ -590,6 +670,32 @@ namespace DWSIM.Extensions.SolidCraft
                 run.Properties["Vapor fraction"] = Fmt(vf, "0.####");
                 run.Properties["Velocity (m/s)"] = Fmt(run.Velocity, "0.##");
                 if (p > 0) run.Label += "  " + Fmt(t, "0.#") + " °C  " + Fmt(p, "0.##") + " bar";
+
+                // the fluid for the line hydraulics: homogeneous density from the flows, and the
+                // viscosity of the phase present (mass-weighted between the phases when both are)
+                run.Temperature = Finite(ms.GetTemperature());
+                run.Pressure = Finite(ms.GetPressure());
+                run.MassFlow = Finite(ms.GetMassFlow());
+                run.Density = q > 0 ? run.MassFlow / q : 0;
+                var mul = Finite(ms.Phases[1].Properties.viscosity.GetValueOrDefault());
+                var muv = Finite(ms.Phases[2].Properties.viscosity.GetValueOrDefault());
+                var x = Finite(ms.Phases[2].Properties.massfraction.GetValueOrDefault());
+                run.Viscosity = vf > 0.995 ? muv : vf < 0.005 ? mul : x * muv + (1 - x) * mul;
+
+                // insulation for heat conservation above 60 C and against heat gain and condensation
+                // below 0 C, thicker the further from ambient (typical thicknesses for small lines)
+                if (t > 60)
+                {
+                    run.InsulationService = "hot";
+                    run.Insulation = t < 150 ? 40 : t < 250 ? 65 : 90;
+                }
+                else if (t < 0)
+                {
+                    run.InsulationService = "cold";
+                    run.Insulation = t > -50 ? 50 : t > -100 ? 80 : 120;
+                }
+                if (run.Insulation > 0)
+                    run.Properties["Insulation (mm)"] = Fmt(run.Insulation, "0") + " (" + run.InsulationService + ")";
             }
             return run;
         }
@@ -622,33 +728,42 @@ namespace DWSIM.Extensions.SolidCraft
             if (from == null && to == null) return null;
 
             var run = SizePipe(ms, sgo.Tag);
-            var stub = Math.Max(500, 3 * run.OuterDiameter);
+            if (from != null) run.From = from.Tag;
+            if (to != null) run.To = to.Tag;
+            var stub = Math.Max(800, 4 * run.OuterDiameter);
             var path = new List<Vec3>();
+
+            // the flanged nozzles where the line meets its items
+            if (from != null) run.Flanges.Add(Tuple.Create(pa + da * NozzleNeck(run), da));
+            if (to != null) run.Flanges.Add(Tuple.Create(pb + db * NozzleNeck(run), db));
 
             if (from != null && to != null)
             {
                 var a1 = Lift(pa + da * stub, run);
                 var b1 = Lift(pb + db * stub, run);
-                path.Add(pa);
-                path.Add(a1);
+                run.CanRack = true;
+                run.A = pa; run.A1 = a1; run.B = pb; run.B1 = b1;
+                // a top or bottom nozzle sits over the item: on the rack the line first steps clear of it
+                if (Math.Abs(da.Z) > 0.5) run.AClearY = from.Origin.Y + from.FootprintY + 800 + run.OuterDiameter / 2 + run.Insulation;
+                if (Math.Abs(db.Z) > 0.5) run.BClearY = to.Origin.Y + to.FootprintY + 800 + run.OuterDiameter / 2 + run.Insulation;
                 if (da.X > 0.5 && db.X < -0.5 && b1.X > a1.X + 1)
                 {
                     // facing nozzles, the common left-to-right flow: a Z-shaped run at nozzle height
                     var mx = (a1.X + b1.X) / 2;
+                    path.Add(pa);
+                    path.Add(a1);
                     path.Add(new Vec3(mx, a1.Y, a1.Z));
                     path.Add(new Vec3(mx, b1.Y, a1.Z));
                     path.Add(new Vec3(mx, b1.Y, b1.Z));
+                    path.Add(b1);
+                    path.Add(pb);
                 }
                 else
                 {
-                    // otherwise over the top, each line on its own level so parallel runs do not meet
-                    var zr = Math.Max(a1.Z, b1.Z) + 1000 + (index % 5) * 350;
-                    path.Add(new Vec3(a1.X, a1.Y, zr));
-                    path.Add(new Vec3(b1.X, a1.Y, zr));
-                    path.Add(new Vec3(b1.X, b1.Y, zr));
+                    // otherwise on the pipe rack, laid out once every rack line is known
+                    run.OnRack = true;
+                    return run;
                 }
-                path.Add(b1);
-                path.Add(pb);
             }
             else
             {
@@ -663,17 +778,126 @@ namespace DWSIM.Extensions.SolidCraft
                     var dir = Math.Abs(d.X) > 0.5 ? d.X : (from != null ? 1 : -1);
                     end.X = p1.X + Math.Sign(dir) * 1500;
                 }
+                // a side nozzle whose stream icon lies behind the item: the line would cross the
+                // item to get there, so it ends straight out of the nozzle instead
+                var flat = new Vec3(d.X, d.Y, 0);
+                if (flat.Length > 0.5 && Vec3.Dot(end - p1, flat) < 500)
+                    end = p1 + flat.Normalized() * 1500;
                 path.Add(p);
                 path.Add(p1);
                 path.Add(new Vec3(end.X, p1.Y, p1.Z));
                 path.Add(end);
                 if (to != null) path.Reverse();
-                run.OpenStart = to != null;
-                run.OpenEnd = from != null;
+
+                // a blind flange at the battery limit, facing out of the line
+                var last = Simplify(from != null ? path : Enumerable.Reverse(path).ToList());
+                if (last.Count >= 2)
+                    run.Flanges.Add(Tuple.Create(last[last.Count - 1], (last[last.Count - 1] - last[last.Count - 2]).Normalized()));
             }
 
             run.Path = Simplify(path);
             return run.Path.Count >= 2 ? run : null;
+        }
+
+        /// <summary>Distance from the shell to the nozzle flange face, mm.</summary>
+        static double NozzleNeck(PipeRun run) => Math.Max(150, 1.5 * run.OuterDiameter);
+
+        /// <summary>
+        /// Lays the rack lines out: the rack runs along X behind the plant (on its +Y side, away from
+        /// the iso view), each line on its own lane on top of the beams. A line rises (or drops) from
+        /// its nozzle to a transfer level over the rack, crosses to its lane, drops onto the rack,
+        /// runs along it and leaves the same way. A direct line that runs through an item goes on the
+        /// rack too, and each rack line tries other transfer levels and other places to rise and
+        /// drop until its route keeps clear of the items and of the lines already laid.
+        /// </summary>
+        static void LayOutRack(PlantModel model)
+        {
+            var solids = ClashCheck.Solids(model);
+            foreach (var run in model.Pipes.Where(r => r.CanRack && !r.OnRack))
+                if (solids.Sum(kv => ClashCheck.Inside(run, run.Path, kv.Key, kv.Value, out _)) > 0) run.OnRack = true;
+
+            var lines = model.Pipes.Where(r => r.OnRack).ToList();
+            if (lines.Count == 0) return;
+
+            const double gap = 150;
+            var top = model.Options.RackHeight * 1000;
+            var visible = model.Equipment.Where(e => e.Visible).ToList();
+            var y0 = (visible.Count > 0 ? visible.Max(e => e.Origin.Y + e.FootprintY) : 0) + 3000;
+            // lanes as wide as the line with its insulation
+            var width = Math.Max(2000, lines.Sum(r => r.OuterDiameter + 2 * r.Insulation + gap) + 2 * gap);
+            var biggest = lines.Max(r => r.OuterDiameter + 2 * r.Insulation);
+            var transfer = top + Math.Max(900, biggest + 600);
+            var tierStep = biggest + 300;
+
+            // the candidates in order of preference: the plain route first, then other levels and shifts
+            var shifts = new[] { 0.0, 1500, -1500, 3000, -3000 };
+            var candidates = (from tier in new[] { 0, 1, 2 }
+                              from dxa in shifts
+                              from dxb in shifts
+                              orderby Math.Abs(dxa) + Math.Abs(dxb) + tier * 1000.0
+                              select new { tier, dxa, dxb }).ToList();
+
+            var laid = model.Pipes.Where(r => !r.OnRack).ToList();
+            var y = y0 + gap;
+            foreach (var run in lines)
+            {
+                var lane = y + run.OuterDiameter / 2 + run.Insulation;
+                y += run.OuterDiameter + 2 * run.Insulation + gap;
+                var zl = top + run.OuterDiameter / 2;
+
+                List<Vec3> best = null;
+                var bestPenalty = double.MaxValue;
+                foreach (var c in candidates)
+                {
+                    var path = RackPath(run, lane, zl, transfer + c.tier * tierStep, c.dxa, c.dxb);
+                    var penalty = ClashCheck.Penalty(run, path, solids, laid);
+                    if (penalty < bestPenalty)
+                    {
+                        best = path;
+                        bestPenalty = penalty;
+                    }
+                    if (penalty <= 0) break;
+                }
+                run.Path = best;
+                laid.Add(run);
+            }
+
+            var xs = lines.SelectMany(r => r.Path.Where(v => v.Z >= top - 1).Select(v => v.X)).ToList();
+            model.Rack = new PipeRack
+            {
+                X0 = xs.Min() - 1500,
+                X1 = xs.Max() + 1500,
+                Y0 = y0,
+                Width = width,
+                Top = top
+            };
+        }
+
+        /// <summary>
+        /// A rack route: off the nozzle, aside to rise <paramref name="dxa"/> along X (and clear of the
+        /// item for a top or bottom nozzle), up to the transfer level, across to the lane, down onto
+        /// it, along it, and back the same way to the other nozzle.
+        /// </summary>
+        static List<Vec3> RackPath(PipeRun run, double lane, double zl, double zt, double dxa, double dxb)
+        {
+            var ya = double.IsNaN(run.AClearY) ? run.A1.Y : run.AClearY;
+            var yb = double.IsNaN(run.BClearY) ? run.B1.Y : run.BClearY;
+            double xa = run.A1.X + dxa, xb = run.B1.X + dxb;
+            return Simplify(new List<Vec3>
+            {
+                run.A, run.A1,
+                new Vec3(run.A1.X, ya, run.A1.Z),
+                new Vec3(xa, ya, run.A1.Z),
+                new Vec3(xa, ya, zt),
+                new Vec3(xa, lane, zt),
+                new Vec3(xa, lane, zl),
+                new Vec3(xb, lane, zl),
+                new Vec3(xb, lane, zt),
+                new Vec3(xb, yb, zt),
+                new Vec3(xb, yb, run.B1.Z),
+                new Vec3(run.B1.X, yb, run.B1.Z),
+                run.B1, run.B
+            });
         }
 
         /// <summary>Keeps a pipe off the ground.</summary>
@@ -744,7 +968,8 @@ namespace DWSIM.Extensions.SolidCraft
                 if (go.FlippedV) v = 1 - v;
             }
             item.Envelope.Locate(u, v, out var local, out direction);
-            position = item.Origin + local;
+            position = item.Origin + local.TurnedZ(item.Rotation);
+            direction = direction.TurnedZ(item.Rotation);
         }
 
         #endregion
@@ -753,11 +978,12 @@ namespace DWSIM.Extensions.SolidCraft
 
         /// <summary>
         /// Scales the canvas to the plot plan: the smallest scale that keeps every pair of items at
-        /// least <see cref="LayoutGap"/> apart along X or Y, so the flowsheet arrangement is kept.
+        /// least the item gap of the options apart along X or Y, so the flowsheet arrangement is kept.
         /// </summary>
         static void Layout(PlantModel model)
         {
             var items = model.Equipment;
+            var gap = model.Options.ItemGap * 1000;
             double scale = 15;
             for (var i = 0; i < items.Count; i++)
             {
@@ -768,18 +994,19 @@ namespace DWSIM.Extensions.SolidCraft
                     var dx = Math.Abs(a.CanvasX - b.CanvasX);
                     var dy = Math.Abs(a.CanvasY - b.CanvasY);
                     if (dx < 1 && dy < 1) continue;
-                    var sx = dx >= 1 ? (a.FootprintX + b.FootprintX + LayoutGap) / dx : double.MaxValue;
-                    var sy = dy >= 1 ? (a.FootprintY + b.FootprintY + LayoutGap) / dy : double.MaxValue;
+                    var sx = dx >= 1 ? (a.FootprintX + b.FootprintX + gap) / dx : double.MaxValue;
+                    var sy = dy >= 1 ? (a.FootprintY + b.FootprintY + gap) / dy : double.MaxValue;
                     scale = Math.Max(scale, Math.Min(sx, sy));
                 }
             }
             model.Scale = Math.Min(scale, 600);
             if (scale > 600) model.Warnings.Add("Some icons overlap on the flowsheet; their equipment overlaps too.");
 
-            model.CanvasOriginX = items.Count > 0 ? items.Min(e => e.CanvasX) : 0;
-            model.CanvasOriginY = items.Count > 0 ? items.Min(e => e.CanvasY) : 0;
+            // the plant centred on the origin, so the coordinates stay as small as they can
+            model.CanvasOriginX = items.Count > 0 ? (items.Min(e => e.CanvasX) + items.Max(e => e.CanvasX)) / 2 : 0;
+            model.CanvasOriginY = items.Count > 0 ? (items.Min(e => e.CanvasY) + items.Max(e => e.CanvasY)) / 2 : 0;
 
-            foreach (var item in items)
+            foreach (var item in items.Where(e => !e.Placed))
                 item.Origin = ToWorld(model, item.CanvasX, item.CanvasY);
         }
 

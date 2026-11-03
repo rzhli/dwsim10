@@ -59,7 +59,17 @@ namespace DWSIM.Extensions.SolidCraft
                     ["org.dwsim.flowsheet"] = new JObject
                     {
                         ["name"] = model.Name,
-                        ["scale_mm_per_canvas_unit"] = Math.Round(model.Scale, 2)
+                        ["scale_mm_per_canvas_unit"] = Math.Round(model.Scale, 2),
+                        // where each item was put: moving an item in SolidCraft changes its
+                        // occurrence's transform from here, which the next export reads back
+                        ["placements"] = new JObject(model.Equipment.Where(e => e.Visible && !e.IsInstrument).Select(e =>
+                            new JProperty(e.Tag, new JObject
+                            {
+                                ["x"] = Math.Round(e.Origin.X),
+                                ["y"] = Math.Round(e.Origin.Y),
+                                ["z"] = Math.Round(e.Origin.Z),
+                                ["rot"] = e.Rotation
+                            })))
                     }
                 }
             });
@@ -67,7 +77,8 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var item in model.Equipment.Where(e => e.Visible))
             {
                 var subject = item.Tag;
-                Add(cmds, "component.create", subject, new JObject { ["name"] = item.Tag, ["parent"] = "root", ["grounded"] = true });
+                // not grounded, so it can be moved in SolidCraft and the move read back
+                Add(cmds, "component.create", subject, new JObject { ["name"] = item.Tag, ["parent"] = "root", ["grounded"] = false });
 
                 foreach (var part in item.Parts)
                 {
@@ -83,7 +94,7 @@ namespace DWSIM.Extensions.SolidCraft
                                 ["diameter"] = Round(p.Diameter),
                                 ["height"] = Round(p.Height),
                                 ["base"] = new JArray(p.Point.ToArray()),
-                                ["axis"] = p.Axis,
+                                ["axis"] = p.AxisVector.HasValue ? (JToken)Dir(p.AxisVector.Value) : p.Axis,
                                 ["body_name"] = body
                             });
                             break;
@@ -107,6 +118,45 @@ namespace DWSIM.Extensions.SolidCraft
                                 ["body_name"] = body
                             });
                             break;
+                        case PrimitiveKind.Head:
+                            if (!(p.Diameter > 0 && p.Depth > 0) || !p.AxisVector.HasValue) continue;
+                            {
+                                // a quarter ellipse in a plane through the axis, turned about it: a
+                                // scaled sphere would not go into the STEP file
+                                var axis = p.AxisVector.Value;
+                                var across = Math.Abs(axis.Z) > 0.5 ? Vec3.PlusX : new Vec3(-axis.Y, axis.X, 0);
+                                var headSketch = "Head " + item.Tag + " " + part.Name;
+                                var r = Round(p.Diameter / 2);
+                                Add(cmds, "sketch.create", subject, new JObject
+                                {
+                                    ["name"] = headSketch,
+                                    ["plane"] = new JObject { ["origin"] = new JArray(p.Point.ToArray()), ["x_dir"] = Dir(across), ["y_dir"] = Dir(axis) }
+                                });
+                                Add(cmds, "sketch.ellipse", subject, new JObject { ["center"] = new JArray(0, 0), ["major"] = new JArray(r, 0), ["minor_radius"] = Round(p.Depth) });
+                                Add(cmds, "sketch.line", subject, new JObject { ["points"] = new JArray(new JArray(0, 0), new JArray(r, 0)) });
+                                Add(cmds, "sketch.line", subject, new JObject { ["points"] = new JArray(new JArray(0, 0), new JArray(0, Round(p.Depth))) });
+                                Add(cmds, "sketch.finish", subject, new JObject());
+                                Add(cmds, "solid.revolve", subject, new JObject
+                                {
+                                    ["sketch"] = headSketch,
+                                    ["profiles"] = new JArray(new JObject { ["point"] = new JArray(Round(r / 3), Round(p.Depth / 3)) }),
+                                    ["axis"] = "y",
+                                    ["angle"] = 360,
+                                    ["body_name"] = body
+                                });
+                                sketches.Add(headSketch);
+                            }
+                            break;
+                        case PrimitiveKind.Torus:
+                            if (!(p.Major > p.Minor && p.Minor > 0)) continue;
+                            Add(cmds, "solid.torus", subject, new JObject
+                            {
+                                ["major"] = Round(p.Major),
+                                ["minor"] = Round(p.Minor),
+                                ["center"] = new JArray(p.Point.ToArray()),
+                                ["body_name"] = body
+                            });
+                            break;
                     }
                     Add(cmds, "appearance.assign", subject, Look(body, p));
                     if (p.Material != null)
@@ -123,6 +173,8 @@ namespace DWSIM.Extensions.SolidCraft
                 });
             }
 
+            if (model.Rack != null) AddRack(cmds, model.Rack, sketches);
+
             var n = 0;
             foreach (var run in model.Pipes)
             {
@@ -131,29 +183,51 @@ namespace DWSIM.Extensions.SolidCraft
                 var component = LineComponent(run);
                 var sketch = "Route " + n + " " + run.Tag;
                 var body = run.Tag + " " + run.Size;
-                var curves = new JArray(Enumerable.Range(1, run.Path.Count - 1).Select(i => "w" + i));
 
                 Add(cmds, "component.create", subject, new JObject { ["name"] = component, ["parent"] = "root", ["grounded"] = true });
                 Add(cmds, "sketch.create", subject, new JObject { ["plane"] = "XY", ["name"] = sketch });
                 Add(cmds, "sketch.options", subject, new JObject { ["sketch_3d"] = true });
-                Add(cmds, "sketch.line3d", subject, new JObject { ["points"] = new JArray(run.Path.Select(v => new JArray(v.ToArray()))) });
+                var elbows = AddRoute(cmds, subject, run, out var straights);
                 Add(cmds, "sketch.finish", subject, new JObject());
-                Add(cmds, "solid.pipe", subject, new JObject
-                {
-                    ["path_sketch"] = sketch,
-                    ["path"] = curves,
-                    ["diameter"] = run.OuterDiameter,
-                    ["wall"] = run.Wall,
-                    ["body_name"] = body
-                });
                 sketches.Add(sketch);
 
-                // painted carbon steel: the colour tells the phase
-                Add(cmds, "appearance.assign", subject, Look(body, new Primitive { Color = run.Color, Metallic = true, Look = "" }));
-                Add(cmds, "material.assign", subject, new JObject { ["bodies"] = new JArray(body), ["material"] = "Steel" });
+                // each straight run its own pipe, each bend its own elbow: a sweep through a bend
+                // comes out as thousands of spline patches (10 MB of STEP for two bends), a revolved
+                // elbow as an exact torus
+                var bodies = new JArray();
+                for (var k = 1; k <= straights; k++)
+                {
+                    var piece = body + " " + k;
+                    Add(cmds, "solid.pipe", subject, new JObject
+                    {
+                        ["path_sketch"] = sketch,
+                        ["path"] = new JArray("w" + k),
+                        ["diameter"] = run.OuterDiameter,
+                        ["wall"] = run.Wall,
+                        ["body_name"] = piece
+                    });
+                    bodies.Add(piece);
+                }
+                for (var k = 0; k < elbows.Count; k++)
+                {
+                    var name = "Elbow " + n + "." + (k + 1) + " " + run.Tag;
+                    var piece = body + " elbow " + (k + 1);
+                    AddElbow(cmds, subject, run, elbows[k], name, piece);
+                    sketches.Add(name);
+                    bodies.Add(piece);
+                }
 
-                if (run.OpenStart) AddFlange(cmds, subject, run, run.Path[0], run.Path[1], body + " flange in");
-                if (run.OpenEnd) AddFlange(cmds, subject, run, run.Path[run.Path.Count - 1], run.Path[run.Path.Count - 2], body + " flange out");
+                // painted carbon steel: the colour tells the phase
+                var look = Look(body, new Primitive { Color = run.Color, Metallic = true, Look = "" });
+                look["bodies"] = bodies;
+                Add(cmds, "appearance.assign", subject, look);
+                Add(cmds, "material.assign", subject, new JObject { ["bodies"] = bodies.DeepClone(), ["material"] = "Steel" });
+
+                for (var f = 0; f < run.Flanges.Count; f++)
+                    AddFlange(cmds, subject, run, run.Flanges[f].Item1, run.Flanges[f].Item2, body + " flange " + (f + 1));
+
+                // its own subject: a jacket SolidCraft cannot make is left out without the line
+                if (run.Insulation > 0) AddInsulation(cmds, "insulation " + run.Tag, run, sketch, straights, elbows, n, body, sketches);
 
                 var props = new JObject();
                 foreach (var kv in run.Properties) props[kv.Key] = kv.Value;
@@ -169,6 +243,77 @@ namespace DWSIM.Extensions.SolidCraft
             if (sketches.Count > 0)
                 Add(cmds, "browser.visibility", "the sketches", new JObject { ["visible"] = false, ["items"] = new JArray(sketches) });
 
+            return cmds;
+        }
+
+        /// <summary>
+        /// The operating data of every item and line as component properties: what a data update
+        /// sends to the open model, without building anything again.
+        /// </summary>
+        public static List<Command> DataCommands(PlantModel model)
+        {
+            var cmds = new List<Command>();
+            foreach (var item in model.Equipment.Where(e => e.Visible))
+            {
+                var props = new JObject { ["DWSIM object"] = item.Description };
+                foreach (var kv in item.Properties) props[kv.Key] = kv.Value;
+                Add(cmds, "component.metadata.set", item.Tag, new JObject { ["component"] = item.Tag, ["description"] = item.Description, ["properties"] = props });
+            }
+            foreach (var run in model.Pipes)
+            {
+                var props = new JObject();
+                foreach (var kv in run.Properties) props[kv.Key] = kv.Value;
+                Add(cmds, "component.metadata.set", "line " + run.Tag, new JObject
+                {
+                    ["component"] = LineComponent(run),
+                    ["description"] = "Line " + run.Tag + " (" + run.Size + ", " + run.Phase.ToLowerInvariant() + ")",
+                    ["properties"] = props
+                });
+            }
+            return cmds;
+        }
+
+        public const string RenderSetup = "DWSIM Plant";
+
+        /// <summary>
+        /// A render setup for a picture of the whole plant: path tracing on the GPU in a plant HDR
+        /// environment, the camera at the iso angle fitted to the model.
+        /// </summary>
+        public static List<Command> CreateRenderSetup(PlantModel model)
+        {
+            var cmds = new List<Command>();
+            var pts = new List<Vec3>();
+            foreach (var e in model.Equipment.Where(e => e.Visible))
+            {
+                pts.Add(e.Origin + new Vec3(-e.FootprintX, -e.FootprintY, 0));
+                pts.Add(e.Origin + new Vec3(e.FootprintX, e.FootprintY, e.Envelope.ZTop));
+                if (model.Options.Labels && !string.IsNullOrEmpty(e.Label))
+                {
+                    // the label over the item (see CreateLabels)
+                    var height = Clamp(0.25 * 2 * e.Envelope.HalfX, 150, 500);
+                    var top = e.Envelope.ZTop + (e.IsInstrument ? 250 : 1500) + (e.Label.Split('\n').Length + 0.5) * 1.6 * height;
+                    var half = e.Label.Split('\n').Max(l => l.Length) * 0.35 * height;
+                    pts.Add(e.Origin + new Vec3(-half, 0, top));
+                    pts.Add(e.Origin + new Vec3(half, 0, top));
+                }
+            }
+            foreach (var r in model.Pipes) pts.AddRange(r.Path);
+            if (pts.Count == 0) return cmds;
+            var lo = new Vec3(pts.Min(p => p.X), pts.Min(p => p.Y), pts.Min(p => p.Z));
+            var hi = new Vec3(pts.Max(p => p.X), pts.Max(p => p.Y), pts.Max(p => p.Z));
+            var centre = (lo + hi) * 0.5;
+            const double fov = 0.7;
+            var distance = (hi - lo).Length / 2 / Math.Tan(fov / 2) * 1.1;
+            Add(cmds, "render.settings.set", "the render", new JObject
+            {
+                ["name"] = RenderSetup,
+                ["set"] = new JObject
+                {
+                    ["job"] = new JObject { ["method"] = "gpu_path" },
+                    ["camera"] = new JObject { ["target"] = new JArray(centre.ToArray()), ["yaw"] = -0.785, ["pitch"] = 0.55, ["distance"] = Math.Round(distance), ["fov"] = fov }
+                }
+            });
+            Add(cmds, "render.library.environment.apply", "the render", new JObject { ["id"] = "HDR-008", ["name"] = RenderSetup });
             return cmds;
         }
 
@@ -189,7 +334,7 @@ namespace DWSIM.Extensions.SolidCraft
                 var subject = "label " + item.Tag;
                 var height = Clamp(0.25 * 2 * item.Envelope.HalfX, 150, 500);
                 var lines = item.Label.Split('\n').Length;
-                var origin = item.Origin + new Vec3(0, 0, item.Envelope.ZTop + 1500 + (lines - 1) * 1.6 * height);
+                var origin = item.Origin + new Vec3(0, 0, item.Envelope.ZTop + (item.IsInstrument ? 250 : 1500) + (lines - 1) * 1.6 * height);
                 var name = "Label " + item.Tag;
                 Add(cmds, "component.activate", subject, new JObject { ["component"] = item.Tag });
                 AddLabel(cmds, subject, name, item.Label, origin, Vec3.PlusX, height, item.Tag + " label");
@@ -266,16 +411,184 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Approximate width of the longest line of a text, for a sans-serif face.</summary>
         static double TextWidth(string text, double height) => 0.62 * height * text.Split('\n').Max(l => l.Length);
 
-        /// <summary>A blind flange at the battery limit, square to the last segment of the line.</summary>
-        static void AddFlange(List<Command> cmds, string subject, PipeRun run, Vec3 end, Vec3 previous, string body)
+        /// <summary>A bend: where it starts, the direction it starts in, the way to its centre, its radius and angle.</summary>
+        class Elbow
         {
-            var dir = (end - previous).Normalized();
-            const double thickness = 60;
+            public Vec3 Start, Along, ToCentre;
+            public double Radius, Degrees;
+        }
+
+        /// <summary>
+        /// The straight runs of a line in its 3D sketch, w1 to wN in order (<paramref name="straights"/>),
+        /// and the long-radius bends between them (1.5 times the outside diameter, smaller where the
+        /// runs are short; a corner too tight for a bend of at least one diameter stays sharp).
+        /// </summary>
+        static List<Elbow> AddRoute(List<Command> cmds, string subject, PipeRun run, out int straights)
+        {
+            var pts = run.Path;
+            var elbows = new List<Elbow>();
+            var count = 0;
+            var current = pts[0];
+
+            for (var i = 1; i < pts.Count - 1; i++)
+            {
+                var a = (pts[i] - pts[i - 1]).Normalized();
+                var b = (pts[i + 1] - pts[i]).Normalized();
+                var cos = Math.Max(-1, Math.Min(1, Vec3.Dot(a, b)));
+                var theta = Math.Acos(cos);
+                var tanHalf = Math.Tan(theta / 2);
+
+                // tangent length that fits: at most 45 % of each neighbouring run, the incoming one
+                // counted from where the previous bend ended
+                var room = Math.Min((pts[i] - current).Length, 0.45 * (pts[i + 1] - pts[i]).Length);
+                var preferred = Math.Max(1.5 * run.OuterDiameter, 1.1 * (run.OuterDiameter / 2 + run.Insulation));
+                var radius = Math.Min(preferred, tanHalf > 1e-6 ? room / tanHalf : 0);
+                if (theta < 0.01 || radius < run.OuterDiameter)
+                {
+                    // no room for a bend: a sharp corner, the two runs stopping 2 mm short of it
+                    // (3D lines that share an end are joined into one wire, and a pipe along a
+                    // wire that is not flat fails)
+                    if ((pts[i] - current).Length > 5) count += Line(cmds, subject, current, pts[i] - a * 2);
+                    current = pts[i] + b * 2;
+                    continue;
+                }
+
+                var t = radius * tanHalf;
+                var start = pts[i] - a * t;
+                var end = pts[i] + b * t;
+
+                if ((start - current).Length > 1) count += Line(cmds, subject, current, start);
+                elbows.Add(new Elbow { Start = start, Along = a, ToCentre = (b - a * cos).Normalized(), Radius = radius, Degrees = theta * 180 / Math.PI });
+                current = end;
+            }
+
+            var last = pts[pts.Count - 1];
+            if ((last - current).Length > 1) count += Line(cmds, subject, current, last);
+            straights = count;
+            return elbows;
+        }
+
+        /// <summary>
+        /// An elbow: the pipe's ring section, drawn square to the line where the bend starts, turned
+        /// about the bend's centre (an exact torus in the STEP file).
+        /// </summary>
+        static void AddElbow(List<Command> cmds, string subject, PipeRun run, Elbow e, string sketch, string body)
+            => AddElbow(cmds, subject, run.OuterDiameter, run.OuterDiameter - 2 * run.Wall, e, sketch, body);
+
+        static void AddElbow(List<Command> cmds, string subject, double outer, double inner, Elbow e, string sketch, string body)
+        {
+            // sketch x towards the centre and y their cross product, so the sketch faces along the line
+            var y = Cross(e.Along, e.ToCentre);
+            Add(cmds, "sketch.create", subject, new JObject
+            {
+                ["name"] = sketch,
+                ["plane"] = new JObject
+                {
+                    ["origin"] = new JArray(e.Start.ToArray()),
+                    ["x_dir"] = Dir(e.ToCentre),
+                    ["y_dir"] = Dir(y)
+                }
+            });
+            Add(cmds, "sketch.circle.center", subject, new JObject { ["center"] = new JArray(0, 0), ["diameter"] = Round(outer) });
+            Add(cmds, "sketch.circle.center", subject, new JObject { ["center"] = new JArray(0, 0), ["diameter"] = Round(inner) });
+            Add(cmds, "sketch.finish", subject, new JObject());
+            Add(cmds, "solid.revolve", subject, new JObject
+            {
+                ["sketch"] = sketch,
+                ["axis"] = new JObject { ["origin"] = new JArray((e.Start + e.ToCentre * e.Radius).ToArray()), ["dir"] = Dir(y) },
+                ["angle"] = Math.Round(e.Degrees, 4),
+                ["body_name"] = body
+            });
+        }
+
+        /// <summary>
+        /// The insulation of a line: a sleeve over each straight run and each bend with an aluminium
+        /// cladding finish. A bend too tight for the sleeve (its radius under the sleeve's) is left bare.
+        /// </summary>
+        static void AddInsulation(List<Command> cmds, string subject, PipeRun run, string sketch, int straights, List<Elbow> elbows, int n, string body, List<string> sketches)
+        {
+            var outer = run.OuterDiameter + 2 * run.Insulation;
+            var jackets = new JArray();
+            for (var k = 1; k <= straights; k++)
+            {
+                var piece = body + " insulation " + k;
+                Add(cmds, "solid.pipe", subject, new JObject
+                {
+                    ["path_sketch"] = sketch,
+                    ["path"] = new JArray("w" + k),
+                    ["diameter"] = Round(outer),
+                    ["wall"] = Round(run.Insulation),
+                    ["body_name"] = piece
+                });
+                jackets.Add(piece);
+            }
+            for (var k = 0; k < elbows.Count; k++)
+            {
+                if (elbows[k].Radius <= outer / 2 + 5) continue;
+                var name = "Insulation " + n + "." + (k + 1) + " " + run.Tag;
+                var piece = body + " insulation elbow " + (k + 1);
+                AddElbow(cmds, subject, outer, run.OuterDiameter, elbows[k], name, piece);
+                sketches.Add(name);
+                jackets.Add(piece);
+            }
+            if (jackets.Count > 0)
+                Add(cmds, "appearance.assign", subject, new JObject { ["bodies"] = jackets, ["appearance"] = "starter.metal.aluminum-bead-blast" });
+        }
+
+        static Vec3 Cross(Vec3 a, Vec3 b) => new Vec3(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
+
+        static JArray Dir(Vec3 d) => new JArray(Math.Round(d.X, 6), Math.Round(d.Y, 6), Math.Round(d.Z, 6));
+
+        /// <summary>
+        /// The pipe rack: a bent (two columns and a cross beam) every bay, tied by a beam along each
+        /// side, all I-beams drawn as frame members on one 3D sketch.
+        /// </summary>
+        static void AddRack(List<Command> cmds, PipeRack rack, List<string> sketches)
+        {
+            const string subject = "the pipe rack", name = "Pipe Rack", sketch = "Pipe Rack frame";
+            var zb = rack.Top - PipeRack.BeamHeight / 2;
+            double ya = rack.Y0, yb = rack.Y0 + rack.Width;
+            var bays = Math.Max(1, (int)Math.Ceiling((rack.X1 - rack.X0) / PipeRack.BayLength));
+            var bay = (rack.X1 - rack.X0) / bays;
+
+            Add(cmds, "component.create", subject, new JObject { ["name"] = name, ["parent"] = "root", ["grounded"] = true });
+            Add(cmds, "sketch.create", subject, new JObject { ["plane"] = "XY", ["name"] = sketch });
+            Add(cmds, "sketch.options", subject, new JObject { ["sketch_3d"] = true });
+            for (var i = 0; i <= bays; i++)
+            {
+                var x = rack.X0 + i * bay;
+                Line(cmds, subject, new Vec3(x, ya, 0), new Vec3(x, ya, zb));
+                Line(cmds, subject, new Vec3(x, yb, 0), new Vec3(x, yb, zb));
+                Line(cmds, subject, new Vec3(x, ya, zb), new Vec3(x, yb, zb));
+            }
+            Line(cmds, subject, new Vec3(rack.X0, ya, zb), new Vec3(rack.X1, ya, zb));
+            Line(cmds, subject, new Vec3(rack.X0, yb, zb), new Vec3(rack.X1, yb, zb));
+            Add(cmds, "sketch.finish", subject, new JObject());
+            Add(cmds, "frame.member", subject, new JObject
+            {
+                ["sketch"] = sketch,
+                ["profile"] = new JObject { ["kind"] = "i_beam", ["height"] = PipeRack.BeamHeight, ["width"] = 150, ["web"] = 8, ["flange"] = 12 },
+                ["body_name"] = "Pipe Rack beam"
+            });
+            Add(cmds, "appearance.assign", subject, new JObject { ["components"] = new JArray(name), ["color"] = EquipmentTemplates.Skirt });
+            sketches.Add(sketch);
+        }
+
+        static int Line(List<Command> cmds, string subject, Vec3 from, Vec3 to)
+        {
+            Add(cmds, "sketch.line3d", subject, new JObject { ["points"] = new JArray(new JArray(from.ToArray()), new JArray(to.ToArray())) });
+            return 1;
+        }
+
+        /// <summary>A flange: a disc centred on its face, square to the line.</summary>
+        static void AddFlange(List<Command> cmds, string subject, PipeRun run, Vec3 face, Vec3 dir, string body)
+        {
+            var thickness = Math.Max(30, 0.25 * run.OuterDiameter);
             Add(cmds, "solid.cylinder", subject, new JObject
             {
                 ["diameter"] = Round(run.OuterDiameter * 1.7),
-                ["height"] = thickness,
-                ["base"] = new JArray(end.ToArray()),
+                ["height"] = Round(thickness),
+                ["base"] = new JArray((face - dir * (thickness / 2)).ToArray()),
                 ["axis"] = new JArray(Math.Round(dir.X, 6), Math.Round(dir.Y, 6), Math.Round(dir.Z, 6)),
                 ["body_name"] = body
             });

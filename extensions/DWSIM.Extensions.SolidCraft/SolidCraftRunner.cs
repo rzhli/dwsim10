@@ -23,6 +23,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using Newtonsoft.Json.Linq;
 
 namespace DWSIM.Extensions.SolidCraft
 {
@@ -32,7 +33,7 @@ namespace DWSIM.Extensions.SolidCraft
         public class Result
         {
             public bool Success;
-            public string Design, Step, Picture, Script, Animation;
+            public string Design, Step, Picture, Script, Animation, Render;
             public List<string> Skipped = new List<string>();
             public string Error, AnimationError;
         }
@@ -44,12 +45,14 @@ namespace DWSIM.Extensions.SolidCraft
         static readonly Regex StepPattern = new Regex(@"step (\d+) \(([^)]*)\):\s*(.*)");
 
         /// <summary>
-        /// The folder of solidcraft-cli: SOLIDCRAFT_HOME, the usual install folders, then the PATH.
-        /// Null when SolidCraft is not installed.
+        /// The folder of solidcraft-cli: the one set in the settings, SOLIDCRAFT_HOME, the usual
+        /// install folders, then the PATH. Null when SolidCraft is not installed.
         /// </summary>
         public static string FindInstallFolder()
         {
             var candidates = new List<string>();
+            var configured = GlobalSettings.Settings.SolidCraftPath;
+            if (!string.IsNullOrWhiteSpace(configured)) candidates.Add(configured.Trim());
             var env = Environment.GetEnvironmentVariable("SOLIDCRAFT_HOME");
             if (!string.IsNullOrWhiteSpace(env)) candidates.Add(env);
 
@@ -94,6 +97,7 @@ namespace DWSIM.Extensions.SolidCraft
             res.Success = res.Error == null && File.Exists(res.Design);
             if (!res.Success) return res;
 
+            if (extras != null) extras = WithoutFailedLines(extras, res.Skipped);
             if (extras != null && extras.Count > 0)
             {
                 var gif = outputBase + " - flow.gif";
@@ -111,6 +115,16 @@ namespace DWSIM.Extensions.SolidCraft
 
             Execute(cli, "snapshot --in " + Quote(res.Design) + " --out " + Quote(res.Picture) + " --width 1600 --height 1000 --view iso", 300, out _);
             if (!File.Exists(res.Picture)) res.Picture = null;
+
+            // the photorealistic picture, when the extras set a render up
+            if (extras != null && extras.Any(c => c.Name == "render.settings.set") && res.AnimationError == null)
+            {
+                var render = outputBase + " - render.png";
+                if (File.Exists(render)) File.Delete(render);
+                Execute(cli, "render " + Quote(res.Design) + " --setup " + Quote(SolidCraftScript.RenderSetup) + " --out " + Quote(render) +
+                    " --width 1600 --height 1000 --overwrite --timeout 600", 660, out _);
+                if (File.Exists(render) && new FileInfo(render).Length > 20000) res.Render = render;
+            }
 
             return res;
         }
@@ -141,10 +155,15 @@ namespace DWSIM.Extensions.SolidCraft
 
                 var failed = cmds[i];
                 skipped.Add(failed.Subject + " (" + failed.Name + "): " + m.Groups[3].Value.Trim());
-                if (failed.Subject.StartsWith("line ") || failed.Subject.StartsWith("label ") || failed.Subject.StartsWith("flow "))
+                if (failed.Subject.StartsWith("line ") || failed.Subject.StartsWith("label ") || failed.Subject.StartsWith("flow ") || failed.Subject.StartsWith("insulation ") || failed.Subject.StartsWith("replay "))
                 {
-                    // the commands of a line, a label or a band need each other: leave all of them out
-                    cmds.RemoveAll(c => c.Subject == failed.Subject);
+                    // the commands of a line, a label, a band or a jacket need each other: leave all of them
+                    // out, and their sketches out of the command that hides the sketches
+                    // a line takes its jacket with it
+                    var jacket = failed.Subject.StartsWith("line ") ? "insulation " + failed.Subject.Substring(5) : null;
+                    var gone = cmds.Where(c => c.Subject == failed.Subject || c.Subject == jacket).ToList();
+                    cmds.RemoveAll(c => c.Subject == failed.Subject || c.Subject == jacket);
+                    ForgetSketches(cmds, gone);
                 }
                 else
                 {
@@ -153,6 +172,68 @@ namespace DWSIM.Extensions.SolidCraft
                     while (i < cmds.Count && (cmds[i].Name == "appearance.assign" || cmds[i].Name == "material.assign") && cmds[i].Subject == failed.Subject)
                         cmds.RemoveAt(i);
                 }
+            }
+        }
+
+        /// <summary>Runs commands on the saved design and saves it again; returns null on success, else the error.</summary>
+        public static string UpdateDesign(string folder, List<SolidCraftScript.Command> commands, string outputBase, List<string> skipped)
+        {
+            var cli = Path.Combine(folder, Exe("solidcraft-cli"));
+            var updated = outputBase + ".update.sc";
+            if (File.Exists(updated)) File.Delete(updated);
+            var error = RunStage(cli, commands, outputBase + " - data update.json", outputBase + ".sc", updated, null, null, skipped);
+            if (error != null) return error;
+            File.Delete(outputBase + ".sc");
+            File.Move(updated, outputBase + ".sc");
+            return null;
+        }
+
+        /// <summary>Takes the sketches the removed commands would have made out of the browser.visibility lists.</summary>
+        static void ForgetSketches(List<SolidCraftScript.Command> cmds, List<SolidCraftScript.Command> removed)
+        {
+            var names = new HashSet<string>(removed.Where(c => c.Name == "sketch.create").Select(c => (string)c.Params["name"]));
+            if (names.Count == 0) return;
+            foreach (var c in cmds.Where(c => c.Name == "browser.visibility"))
+            {
+                if (!(c.Params["items"] is JArray items)) continue;
+                foreach (var item in items.Where(i => names.Contains((string)i)).ToList()) item.Remove();
+            }
+        }
+
+        /// <summary>Leaves out the labels and flow bands of the lines the model run had to leave out.</summary>
+        static List<SolidCraftScript.Command> WithoutFailedLines(List<SolidCraftScript.Command> extras, List<string> skipped)
+        {
+            var tags = skipped.Where(s => s.StartsWith("line ")).Select(s => s.Substring(5, s.IndexOf(" (", StringComparison.Ordinal) - 5)).ToList();
+            if (tags.Count == 0) return extras;
+            var kept = extras.Where(c => !tags.Any(t => c.Subject == "label " + t || c.Subject.StartsWith("flow " + t + " "))).ToList();
+            ForgetSketches(kept, extras.Except(kept).ToList());
+            return kept;
+        }
+
+        /// <summary>
+        /// Runs read-only commands on a design and returns their results in order; null when the
+        /// design cannot be read. The design itself is not changed.
+        /// </summary>
+        public static JArray Query(string folder, string design, JArray commands)
+        {
+            var cli = Path.Combine(folder, Exe("solidcraft-cli"));
+            var script = Path.Combine(Path.GetTempPath(), "dwsim-solidcraft-query-" + Guid.NewGuid().ToString("N") + ".json");
+            var output = Path.ChangeExtension(script, ".out.json");
+            try
+            {
+                File.WriteAllText(script, new JObject { ["commands"] = commands }.ToString(), new UTF8Encoding(false));
+                var exit = Execute(cli, "run " + Quote(script) + " --in " + Quote(design) + " --results --json-out " + Quote(output), 300, out _);
+                if (exit != 0 || !File.Exists(output)) return null;
+                return JToken.Parse(File.ReadAllText(output)) as JArray;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+            finally
+            {
+                try { File.Delete(script); } catch { }
+                try { File.Delete(output); } catch { }
             }
         }
 
