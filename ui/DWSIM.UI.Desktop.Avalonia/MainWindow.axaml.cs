@@ -431,8 +431,10 @@ public partial class MainWindow : Window
 
         try
         {
+            // the list, or the copy from last time when the Case Library cannot be reached (note says so)
+            string note = null;
             var list = await System.Threading.Tasks.Task.Run(
-                () => DWSIM.SharedClasses.CaseLibraryFlowsheets.GetCaseLibraryFlowsheets());
+                () => DWSIM.SharedClasses.CaseLibraryFlowsheets.GetCaseLibraryFlowsheets(ref note));
 
             CaseLibraryList.Items.Clear();
 
@@ -442,13 +444,15 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (note != null) CaseLibraryList.Items.Add("(" + note + ")");
             foreach (var flowsheet in list)
                 CaseLibraryList.Items.Add(new CaseLibraryItem(flowsheet));
         }
         catch (Exception ex)
         {
             CaseLibraryList.Items.Clear();
-            CaseLibraryList.Items.Add("(Could not reach the Case Library: " + ex.Message + ")");
+            // the message names what failed and why
+            CaseLibraryList.Items.Add("(" + ex.Message + ")");
         }
     }
 
@@ -461,8 +465,13 @@ public partial class MainWindow : Window
 
         var info = item.Flowsheet;
 
+        // a case this DWSIM cannot open says what it needs
+        var missing = info.MissingComponents;
         var message = $"Title: {info.Title}\nCategory: {info.Category}\n\n" +
-                      "Download and open this case?";
+                      (missing.Count > 0
+                          ? "This case uses components of DWSIM Patreon Edition that this DWSIM does not have: " + string.Join(", ", missing) +
+                            ". It will not open here.\n\nDownload and try to open it anyway?"
+                          : "Download and open this case?");
 
         if (!await ConfirmAsync("Open Case Library Flowsheet", message)) return;
 
