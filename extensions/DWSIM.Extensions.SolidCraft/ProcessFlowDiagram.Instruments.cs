@@ -30,18 +30,13 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Radius of an instrument bubble, mm on the sheet.</summary>
         const double Bubble = 5;
 
-        /// <summary>The lines of the 3D model by stream tag: their sizes and insulation, for the line numbers.</summary>
-        static Dictionary<string, PipeRun> LineData(IFlowsheet fs)
+        /// <summary>The P&amp;ID line number and number alone of each material stream, by tag, as the P&amp;ID shows them.</summary>
+        internal static Dictionary<string, (string Number, string Id)> LineNumbers(IFlowsheet fs, Dictionary<string, PipeRun> data)
         {
-            try
-            {
-                var model = PlantModelBuilder.Build(fs, "P&ID", PlantLayout.Load(fs), ExportOptions.Load());
-                return model.Pipes.GroupBy(r => r.Tag).ToDictionary(g => g.Key, g => g.First());
-            }
-            catch (Exception)
-            {
-                return new Dictionary<string, PipeRun>();
-            }
+            var map = new Dictionary<string, (string, string)>();
+            foreach (var l in Lines(fs).Where(l => !l.Energy && l.Tag != null))
+                map[l.Tag] = (LineNumber(l, data), l.Id);
+            return map;
         }
 
         /// <summary>A line number: nominal size, fluid code (P, process), number, and H or C for hot or cold insulation.</summary>
@@ -71,12 +66,13 @@ namespace DWSIM.Extensions.SolidCraft
             var onLine = new Dictionary<Line, int>();
             var onUnit = new Dictionary<string, int>();
             var bubbles = new List<Pt>();
-            var seq = 100;
+            var loops = InstrumentLoops(fs).ToDictionary(x => x.Obj.Name, x => x.Loop);
 
             // the bubbles are placed first and drawn, then the signals are routed round them
             var toDraw = new List<(Pt At, string Letters, string Loop, bool Shared, string What)>();
             var signals = new List<(Pt From, Pt To, bool ToBubble, bool FromAbove, string What)>();
             var setpoints = new List<(Pt At, string Text, string What)>();
+            var alarms = new List<(Pt At, string Text, string What)>();
 
             Pt Center(Unit u) => T(u.Go.X + u.Go.Width / 2.0, u.Go.Y + u.Go.Height / 2.0);
             Pt Half(Unit u) => outline.TryGetValue(u.Obj.Name, out var h) ? h : new Pt(u.Go.Width * k / 2, u.Go.Height * k / 2);
@@ -155,13 +151,22 @@ namespace DWSIM.Extensions.SolidCraft
                     measured = gauge.SelectedObjectID;
                     letter = Instruments.Letter(fs, gauge.SelectedPropertyType, gauge.SelectedProperty, go.Tag);
                 }
-                var loop = Loop(go.Tag, ref seq);
+                var loop = loops[obj.Name];
                 var what = "instrument " + go.Tag;
                 if (!Measure(measured, what, out var at)) continue;
 
                 if (!isController)
                 {
                     toDraw.Add((at, letter + "I", loop, false, what));
+                    // the alarms set on the gauge: the high ones over its right, the low ones under it
+                    var gu = string.IsNullOrEmpty(gauge.SelectedPropertyUnits) ? "" : " " + gauge.SelectedPropertyUnits;
+                    var highs = new List<string>(); var lows = new List<string>();
+                    if (gauge.VeryHighAlarmEnabled) highs.Add(letter + "AHH " + Fmt(gauge.VeryHighAlarmValue) + gu);
+                    if (gauge.HighAlarmEnabled) highs.Add(letter + "AH " + Fmt(gauge.HighAlarmValue) + gu);
+                    if (gauge.LowAlarmEnabled) lows.Add(letter + "AL " + Fmt(gauge.LowAlarmValue) + gu);
+                    if (gauge.VeryLowAlarmEnabled) lows.Add(letter + "ALL " + Fmt(gauge.VeryLowAlarmValue) + gu);
+                    for (var i = 0; i < highs.Count; i++) alarms.Add((new Pt(at.X + Bubble + 1, at.Y + Bubble * 0.5 + (highs.Count - 1 - i) * 2.4), highs[i], what));
+                    for (var i = 0; i < lows.Count; i++) alarms.Add((new Pt(at.X + Bubble + 1, at.Y - Bubble * 0.5 - i * 2.4), lows[i], what));
                     continue;
                 }
 
@@ -213,6 +218,75 @@ namespace DWSIM.Extensions.SolidCraft
                 signals.Add((ctl, target, false, fromAbove, what));
             }
 
+            // the switches: a hand switch on the control system, through an interlock to what it
+            // acts on, with the values it sets
+            var interlocks = new List<(Pt At, string Number, string What)>();
+            var switchNotes = new List<(Pt At, string Text, string What)>();
+            var iseq = 0;
+            foreach (var obj in fs.SimulationObjects.Values.OrderBy(o => o.GraphicObject?.Tag))
+            {
+                if (!(obj is ISwitch sw) || obj.GraphicObject == null) continue;
+                var go = obj.GraphicObject;
+                var what = "switch " + go.Tag;
+                var number = Loop(go.Tag, ref iseq);
+                var icon = T(go.X + go.Width / 2.0, go.Y + go.Height / 2.0);
+                var hs = Place(icon, 0, -12, 8);
+                if (!Free(hs)) hs = Place(icon, 0, 12, 8);
+                bubbles.Add(hs);
+                var dia = Place(new Pt(hs.X, hs.Y - 2 * Bubble - 4), 12, 0, 6);
+                bubbles.Add(dia);
+                toDraw.Add((hs, "HS", number, true, what));
+                interlocks.Add((dia, number, what));
+                var su = string.IsNullOrEmpty(sw.SelectedPropertyUnits) ? "" : " " + sw.SelectedPropertyUnits;
+                string property = sw.SelectedProperty ?? "";
+                try { property = fs.GetTranslatedString(property, "en") ?? property; } catch (Exception) { }
+                switchNotes.Add((new Pt(dia.X, dia.Y - Bubble - 1), "ON " + Fmt(sw.OnValue) + " / OFF " + Fmt(sw.OffValue) + su, what));
+                signals.Add((hs, dia, true, false, what));
+                var id = sw.SelectedObjectID;
+                if (string.IsNullOrEmpty(id)) continue;
+                if (unitOf.TryGetValue(id, out var u))
+                {
+                    var c = Center(u);
+                    double w = u.Go.Width * k, h = u.Go.Height * k;
+                    Pt target;
+                    if (u.Symbol == Symbol.Valve && actuated.ContainsKey(id)) { ActuatorTop(w, h, out var stemTop, out var r); target = new Pt(c.X, c.Y + stemTop + r); }
+                    else target = new Pt(c.X, c.Y + Half(u).Y);
+                    signals.Add((dia, target, false, true, what));
+                }
+                else if (lineOf.TryGetValue(id, out var line) && routes.TryGetValue(line, out var route) && route.Count >= 2)
+                {
+                    var target = Along(route, 0.6, out var horizontal);
+                    signals.Add((dia, target, false, horizontal, what));
+                }
+            }
+
+            foreach (var b in interlocks)
+            {
+                // the interlock: a diamond with I over its number
+                const double r = Bubble;
+                C("layer.current", new JObject { ["name"] = "INSTRUMENT" }, b.What);
+                C("pline", new JObject { ["vertices"] = new JArray(A(new Pt(b.At.X - r, b.At.Y)), A(new Pt(b.At.X, b.At.Y + r)), A(new Pt(b.At.X + r, b.At.Y)), A(new Pt(b.At.X, b.At.Y - r))), ["closed"] = true }, b.What);
+                C("layer.current", new JObject { ["name"] = "TEXT" }, b.What);
+                C("text", new JObject { ["at"] = new JArray(b.At.X, Math.Round(b.At.Y + 1.2, 2)), ["text"] = "I", ["height"] = 1.8, ["justify"] = "MC" }, b.What);
+                C("text", new JObject { ["at"] = new JArray(b.At.X, Math.Round(b.At.Y - 1.6, 2)), ["text"] = b.Number, ["height"] = b.Number.Length > 3 ? 1.4 : 1.6, ["justify"] = "MC" }, b.What);
+                router.Block(new Router.Box(b.At.X - r, b.At.Y - r, b.At.X + r, b.At.Y + r));
+            }
+            foreach (var t in switchNotes)
+            {
+                const double h = 1.8;
+                C("layer.current", new JObject { ["name"] = "TEXT" }, t.What);
+                C("text", new JObject { ["at"] = A(t.At), ["text"] = t.Text, ["height"] = h, ["justify"] = "TC" }, t.What);
+                var half = t.Text.Length * h * 0.45;
+                router.Block(new Router.Box(t.At.X - half, t.At.Y - h, t.At.X + half, t.At.Y));
+            }
+            foreach (var t in alarms)
+            {
+                const double h = 1.8;
+                C("layer.current", new JObject { ["name"] = "TEXT" }, t.What);
+                C("text", new JObject { ["at"] = A(t.At), ["text"] = t.Text, ["height"] = h, ["justify"] = "ML" }, t.What);
+                router.Block(new Router.Box(t.At.X, t.At.Y - h / 2, t.At.X + t.Text.Length * h * 0.9, t.At.Y + h / 2));
+            }
+
             foreach (var b in toDraw)
             {
                 DrawBubble(cmds, b.At, b.Letters, b.Loop, b.Shared, b.What);
@@ -226,6 +300,29 @@ namespace DWSIM.Extensions.SolidCraft
                 router.Block(new Router.Box(t.At.X, t.At.Y - h, t.At.X + t.Text.Length * h * 0.9, t.At.Y + h));
             }
             foreach (var s in signals) Signal(cmds, router, s.From, s.To, s.ToBubble, s.What, s.FromAbove);
+        }
+
+        /// <summary>
+        /// The controllers and gauges of the flowsheet in tag order, with the first letter of what
+        /// they measure and their loop number (the digits of their tag, else numbered from 101).
+        /// </summary>
+        internal static List<(ISimulationObject Obj, string Letter, string Loop, bool Controller)> InstrumentLoops(IFlowsheet fs)
+        {
+            var list = new List<(ISimulationObject, string, string, bool)>();
+            var seq = 100;
+            foreach (var obj in fs.SimulationObjects.Values.OrderBy(o => o.GraphicObject?.Tag))
+            {
+                var go = obj.GraphicObject;
+                if (go == null) continue;
+                var isController = go.ObjectType.ToString().StartsWith("Controller_") && obj is IAdjust;
+                var gauge = obj as IIndicator;
+                if (!isController && gauge == null) continue;
+                var letter = isController
+                    ? Instruments.Letter(fs, ((IAdjust)obj).ControlledObjectData?.UnitsType ?? UnitOfMeasure.none, ((IAdjust)obj).ControlledObjectData?.PropertyName, go.Tag)
+                    : Instruments.Letter(fs, gauge.SelectedPropertyType, gauge.SelectedProperty, go.Tag);
+                list.Add((obj, letter, Loop(go.Tag, ref seq), isController));
+            }
+            return list;
         }
 
         /// <summary>The loop number: the digits of the instrument's tag, or the next free number.</summary>
