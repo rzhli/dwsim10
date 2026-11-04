@@ -55,8 +55,6 @@ Public Interface IFlowsheetOptions
 
     Property VisibleProperties As Dictionary(Of String, List(Of String))
 
-    Property SimultaneousAdjustSolverEnabled As Boolean
-
     ''' <summary>Which solver takes the flowsheet: the sequential one, a registered flowsheet solver, or whichever fits (see Enums.SolverStrategy).</summary>
     Property SolverStrategy As Enums.SolverStrategy
 
@@ -93,6 +91,9 @@ Public Interface IFlowsheetOptions
     Property FlowsheetMultiSelectMode As Boolean
 
     Property CompoundOrderingMode As CompoundOrdering
+
+    ''' <summary>Compound names in the order shown when <see cref="CompoundOrderingMode"/> is Custom.</summary>
+    Property CustomCompoundOrder As List(Of String)
 
     Property SkipEquilibriumCalculationOnDefinedStreams As Boolean
 

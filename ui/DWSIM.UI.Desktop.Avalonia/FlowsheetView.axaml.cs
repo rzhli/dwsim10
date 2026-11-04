@@ -459,11 +459,6 @@ public partial class FlowsheetView : UserControl
                 BtnCalculatorActive.IsChecked = !BtnCalculatorActive.IsChecked.GetValueOrDefault();
                 e.Handled = true;
             }
-            else if (e.Key == Key.F7)
-            {
-                BtnSimultAdjust.IsChecked = !BtnSimultAdjust.IsChecked.GetValueOrDefault();
-                e.Handled = true;
-            }
             else if (e.Key == Key.F8)
             {
                 MenuFlowsheetCheck.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
@@ -1229,8 +1224,6 @@ public partial class FlowsheetView : UserControl
     {
         // the toolbar toggles and the state selector belong to the flowsheet being opened
         BtnCalculatorActive.IsChecked = DWSIM.GlobalSettings.Settings.CalculatorActivated;
-        BtnSimultAdjust.IsChecked = _flowsheet?.FlowsheetOptions.SimultaneousAdjustSolverEnabled ?? false;
-        MenuSimultAdjust.IsChecked = BtnSimultAdjust.IsChecked.GetValueOrDefault();
         MenuCalculatorActive.IsChecked = BtnCalculatorActive.IsChecked.GetValueOrDefault();
         BtnDynamicsMode.IsChecked = _flowsheet?.DynamicMode ?? false;
         ShowSolverStrategy();
@@ -1251,6 +1244,8 @@ public partial class FlowsheetView : UserControl
         PaintCallback = (surf, _) =>
         {
             SyncSurfaceSize();
+            // the stream colour legend is drawn in screen space at the bitmap's own density
+            surface.OverlayScale = (float)Canvas.PixelsPerDip;
             var restoreTheme = FlowsheetObjectIcons.BeginDraw(_flowsheet);
             // the padlocks of locked objects show on screen only, never in exported images
             surface.DrawLockMarkers = true;
@@ -2081,19 +2076,6 @@ public partial class FlowsheetView : UserControl
 
         // Global Settings
         MenuGlobalSettings.Click += async (_, _) => { await new PreferencesWindow().ShowDialog(HostWindow); GlobalSettingsChanged?.Invoke(); };
-
-        // Simultaneous Adjust, on the toolbar as in the WinForms UI
-        BtnSimultAdjust.IsCheckedChanged += (_, _) =>
-        {
-            MenuSimultAdjust.IsChecked = BtnSimultAdjust.IsChecked.GetValueOrDefault();
-            if (_flowsheet == null) return;
-            _flowsheet.FlowsheetOptions.SimultaneousAdjustSolverEnabled =
-                BtnSimultAdjust.IsChecked.GetValueOrDefault();
-            var state = _flowsheet.FlowsheetOptions.SimultaneousAdjustSolverEnabled ? "enabled" : "disabled";
-            AppendLog($"Simultaneous Adjust Solver {state}.");
-        };
-        MenuSimultAdjust.Click += (_, _) =>
-            BtnSimultAdjust.IsChecked = MenuSimultAdjust.IsChecked;
 
         // Solver strategy: which solver takes the flowsheet when Solve is pressed (saved with the simulation)
         MenuStrategySequential.Click += (_, _) => SetSolverStrategy(Interfaces.Enums.SolverStrategy.SequentialModular);
@@ -3973,6 +3955,10 @@ public partial class FlowsheetView : UserControl
             int w = Math.Max(64, (int)Canvas.Bounds.Width);
             int h = Math.Max(64, (int)Canvas.Bounds.Height);
 
+            // the stream colour legend at the export's own density: 2 for the PNG, 1 for the vector formats
+            var screenOverlay = _surface.OverlayScale;
+            _surface.OverlayScale = format == FlowsheetExportFormat.Png ? 2.0f : 1.0f;
+            try
             {
                 switch (format)
                 {
@@ -4013,6 +3999,10 @@ public partial class FlowsheetView : UserControl
                         break;
                     }
                 }
+            }
+            finally
+            {
+                _surface.OverlayScale = screenOverlay;
             }
 
             AppendLog($"Flowsheet exported to {path}.");
@@ -4284,7 +4274,7 @@ public partial class FlowsheetView : UserControl
                             DWSIM.Interfaces.Enums.ExtenderCategory.Tools     => FindTopLevelMenu("Tools"),
                             DWSIM.Interfaces.Enums.ExtenderCategory.Utilities => FindTopLevelMenu("Utilities"),
                             DWSIM.Interfaces.Enums.ExtenderCategory.Dynamics  => FindTopLevelMenu("Dynamics"),
-                            DWSIM.Interfaces.Enums.ExtenderCategory.Optimization => FindTopLevelMenu("Tools"),
+                            DWSIM.Interfaces.Enums.ExtenderCategory.Optimization => FindTopLevelMenu("Flowsheet Analysis"),
                             DWSIM.Interfaces.Enums.ExtenderCategory.Results   => FindTopLevelMenu("Results"),
                             DWSIM.Interfaces.Enums.ExtenderCategory.Help      => FindTopLevelMenu("Help"),
                             // a collection filed under NewItem brings its own top-level menu, named after

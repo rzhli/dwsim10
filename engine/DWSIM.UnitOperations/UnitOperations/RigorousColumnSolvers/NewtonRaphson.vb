@@ -51,10 +51,18 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         Dim _specs As Dictionary(Of String, SepOps.ColumnSpec)
         Dim _bx, _dbx As Double()
         Dim _condtype As DistillationColumn.condtype
+
+        ''' <summary>The top stage is a condenser: a distillation column or a refluxed absorber. A reboiled absorber (a
+        ''' distillation column without its condenser) has a plain top stage, whatever condenser type it keeps.</summary>
+        Private Function HasCondenser() As Boolean
+            Return _coltype = Column.ColType.DistillationColumn OrElse _coltype = Column.ColType.RefluxedAbsorber
+        End Function
         Dim llextr As Boolean = False
         Dim _Kval()() As Double
         Dim _maxtchange, _Tj_ant(), _maxT, _maxvc, _maxlc As Double
         Dim _scalef As Double
+        'a total condenser's subcooling: the first stage's temperature is the subcooled liquid's (its enthalpies), and its
+        'equilibrium holds at the bubble point, this much above it (as in the bubble-point solver)
         Dim _subcoolingDeltaT As Double
 
         Private _gpuColumnEnabled As Boolean = False
@@ -313,7 +321,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Lj(i) = sumlkj(i)
             Next
 
-            If _coltype <> ColType.AbsorptionColumn And _condtype = condtype.Total_Condenser Then
+            If HasCondenser() And _condtype = condtype.Total_Condenser Then
                 sumvkj(0) = 0.0
                 Vj(0) = 0.0
             End If
@@ -349,11 +357,14 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             For i = 1 To ns
                 sumLSS += LSSj(i)
             Next
-            If _coltype <> ColType.AbsorptionColumn And _condtype = Column.condtype.Full_Reflux Then
+            If HasCondenser() And _condtype = Column.condtype.Full_Reflux Then
                 LSSj(0) = 0.0#
-            ElseIf _coltype <> ColType.AbsorptionColumn And _condtype = condtype.Total_Condenser Then
+            ElseIf HasCondenser() And _condtype = condtype.Total_Condenser Then
                 LSSj(0) = vc(0).Sum
                 yc(0) = _pp.DW_CalcBubT(xc(0), P(0), Tj(0), Nothing, False)(3)
+            ElseIf HasCondenser() AndAlso _condtype = condtype.Partial_Condenser AndAlso Not llextr AndAlso PartialCondenserDistillate.HasValue Then
+                'the liquid distillate of a partial condenser, as a caller that solves for it hands it over
+                LSSj(0) = PartialCondenserDistillate.Value
             Else
                 'For an extractor Vj(0) is the second liquid-phase product. It already
                 'carries the extract out; adding a liquid draw here counts that outlet twice.
@@ -398,20 +409,20 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                                              Else
                                                                  If _pp.ShouldUseKvalueMethod3 Then
                                                                      If ipar = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                                                                         tmp0 = _pp.DW_CalcKvalue3(xc(ipar).MultiplyConstY(Lj(ipar)), yc(ipar).MultiplyConstY(Vj(ipar)), Tj(ipar) - _subcoolingDeltaT, P(ipar))
+                                                                         tmp0 = _pp.DW_CalcKvalue3(xc(ipar).MultiplyConstY(Lj(ipar)), yc(ipar).MultiplyConstY(Vj(ipar)), Tj(ipar) + _subcoolingDeltaT, P(ipar))
                                                                      Else
                                                                          tmp0 = _pp.DW_CalcKvalue3(xc(ipar).MultiplyConstY(Lj(ipar)), yc(ipar).MultiplyConstY(Vj(ipar)), Tj(ipar), P(ipar))
                                                                      End If
                                                                  ElseIf _pp.ShouldUseKvalueMethod2 Then
                                                                      Dim zk = xc(ipar).MultiplyConstY(Lj(ipar)).AddY(yc(ipar).MultiplyConstY(Vj(ipar))).MultiplyConstY(1 / (Lj(ipar) + Vj(ipar)))
                                                                      If ipar = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                                                                         tmp0 = _pp.DW_CalcKvalue(zk, Tj(ipar) - _subcoolingDeltaT, P(ipar))
+                                                                         tmp0 = _pp.DW_CalcKvalue(zk, Tj(ipar) + _subcoolingDeltaT, P(ipar))
                                                                      Else
                                                                          tmp0 = _pp.DW_CalcKvalue(zk, Tj(ipar), P(ipar))
                                                                      End If
                                                                  Else
                                                                      If ipar = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                                                                         tmp0 = _pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar) - _subcoolingDeltaT, P(ipar))
+                                                                         tmp0 = _pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar) + _subcoolingDeltaT, P(ipar))
                                                                      Else
                                                                          tmp0 = _pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar), P(ipar))
                                                                      End If
@@ -706,7 +717,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     E_ant(i, j) = E(i, j)
                     H_ant(i) = H(i)
                     If i = 0 Then
-                        If _coltype <> ColType.AbsorptionColumn Then
+                        If HasCondenser() Then
                             If _condtype = Column.condtype.Full_Reflux Then
                                 M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - vc(i + 1)(j) - fc(i)(j)
                                 'no liquid leaves the stage (the bubble-point solver's model of full reflux)
@@ -898,20 +909,20 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             Else
                 If _pp.ShouldUseKvalueMethod3 Then
                     If i = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                        tmp0 = _pp.DW_CalcKvalue3(xc(i).MultiplyConstY(Lj(i)), yc(i).MultiplyConstY(Vj(i)), Tj(i) - _subcoolingDeltaT, P(i))
+                        tmp0 = _pp.DW_CalcKvalue3(xc(i).MultiplyConstY(Lj(i)), yc(i).MultiplyConstY(Vj(i)), Tj(i) + _subcoolingDeltaT, P(i))
                     Else
                         tmp0 = _pp.DW_CalcKvalue3(xc(i).MultiplyConstY(Lj(i)), yc(i).MultiplyConstY(Vj(i)), Tj(i), P(i))
                     End If
                 ElseIf _pp.ShouldUseKvalueMethod2 Then
                     Dim zk = xc(i).MultiplyConstY(Lj(i)).AddY(yc(i).MultiplyConstY(Vj(i))).MultiplyConstY(1 / (Lj(i) + Vj(i)))
                     If i = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                        tmp0 = _pp.DW_CalcKvalue(zk, Tj(i) - _subcoolingDeltaT, P(i))
+                        tmp0 = _pp.DW_CalcKvalue(zk, Tj(i) + _subcoolingDeltaT, P(i))
                     Else
                         tmp0 = _pp.DW_CalcKvalue(zk, Tj(i), P(i))
                     End If
                 Else
                     If i = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                        tmp0 = _pp.DW_CalcKvalue(xc(i), yc(i), Tj(i) - _subcoolingDeltaT, P(i))
+                        tmp0 = _pp.DW_CalcKvalue(xc(i), yc(i), Tj(i) + _subcoolingDeltaT, P(i))
                     Else
                         tmp0 = _pp.DW_CalcKvalue(xc(i), yc(i), Tj(i), P(i))
                     End If
@@ -1013,9 +1024,10 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             Dim g(nv - 1, nv - 1) As Double
 
             For i As Integer = 0 To ns
-                Dim dKdT = DirectCast(_pp.DW_CalcdKdT(_stxc(i), _styc(i), _stTj(i), P(i)), Double())
-                Dim dKnL = DirectCast(_pp.DW_CalcdKdComposition(_stxc(i), _styc(i), _stTj(i), P(i), PropertyPackages.State.Liquid), Double(,))
-                Dim dKnV = DirectCast(_pp.DW_CalcdKdComposition(_stxc(i), _styc(i), _stTj(i), P(i), PropertyPackages.State.Vapor), Double(,))
+                Dim TK As Double = _stTj(i) + If(i = 0 AndAlso Not llextr, _subcoolingDeltaT, 0.0)
+                Dim dKdT = DirectCast(_pp.DW_CalcdKdT(_stxc(i), _styc(i), TK, P(i)), Double())
+                Dim dKnL = DirectCast(_pp.DW_CalcdKdComposition(_stxc(i), _styc(i), TK, P(i), PropertyPackages.State.Liquid), Double(,))
+                Dim dKnV = DirectCast(_pp.DW_CalcdKdComposition(_stxc(i), _styc(i), TK, P(i), PropertyPackages.State.Vapor), Double(,))
                 Dim svsum As Double = _stsumv(i), slsum As Double = _stsuml(i), e As Double = _steff(i)
                 Dim sldraw As Double = _stSl(i), svdraw As Double = _stSv(i)
                 Dim bc As Integer = i * block
@@ -1365,6 +1377,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             End If
 
             'If CalcMode = 0 And esolv Is Nothing Then
+            If Not _captureOnly Then
             Try
                 'solve the column with the bubble point method (to convergence, with its fallbacks) to
                 'enhance the initial estimates. a warm-up cut to a few sweeps leaves some columns (the
@@ -1385,6 +1398,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Q = result(8)
             Catch ex As Exception
             End Try
+            End If
             'End If
 
             _Tj_ant = T.Clone
@@ -1468,8 +1482,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             Dim rebabs As Boolean = False, refabs As Boolean = False
             If TypeOf dc Is DistillationColumn Then
-                If DirectCast(dc, DistillationColumn).ReboiledAbsorber Then coltype = Column.ColType.ReboiledAbsorber
-                If DirectCast(dc, DistillationColumn).RefluxedAbsorber Then coltype = Column.ColType.RefluxedAbsorber
+                'no condenser and no reboiler (both moved out to flowsheet objects) is an absorber
+                Dim nocond = DirectCast(dc, DistillationColumn).ReboiledAbsorber, noreb = DirectCast(dc, DistillationColumn).RefluxedAbsorber
+                If nocond AndAlso noreb Then
+                    coltype = Column.ColType.AbsorptionColumn
+                ElseIf nocond Then
+                    coltype = Column.ColType.ReboiledAbsorber
+                ElseIf noreb Then
+                    coltype = Column.ColType.RefluxedAbsorber
+                End If
             End If
 
             Dim cv As New SystemsOfUnits.Converter
@@ -1645,6 +1666,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             IObj?.Paragraphs.Add(String.Format("Upper Bounds: {0}", ub.ToMathArrayString))
 
             _IObj = IObj
+
+            If _captureOnly Then
+                If _setupOnly Then
+                    _setupX = xvar
+                Else
+                    CaptureSensitivities(xvar, _captureTarget)
+                End If
+                Return Nothing
+            End If
 
             TryInitGpuColumn()
 
@@ -2060,6 +2090,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             ' streams are written from
             If _specs("C").SType = ColumnSpec.SpecType.Heat_Duty Then Q(0) = spval1
             If _specs("R").SType = ColumnSpec.SpecType.Heat_Duty Then Q(ns) = -spval2
+            If SensitivityCapture IsNot Nothing Then CaptureSensitivities(xvar, SensitivityCapture)
             Return New Object() {Tj, Vj, Lj, VSSj, LSSj, yc, xc, K, Q, ec, il_err, ic, el_err}
 
         End Function

@@ -404,10 +404,10 @@ Imports DWSIM.ExtensionMethods
     ''' <param name="fromidx">The output connector index on the upstream object.</param>
     ''' <param name="toidx">The input connector index on the downstream object.</param>
     Public Sub Connect(objFrom As ISimulationObject, objTo As ISimulationObject, fromidx As Integer, toidx As Integer) Implements IFlowsheet.Connect
-        If TypeOf objFrom Is IUnitOperation And TypeOf objTo Is IUnitOperation Then
+        If (TypeOf objFrom Is IUnitOperation Or TypeOf objFrom Is IRecycle) And (TypeOf objTo Is IUnitOperation Or TypeOf objTo Is IRecycle) Then
             Dim x = (objTo.GraphicObject.X + objFrom.GraphicObject.X + objFrom.GraphicObject.Width) / 2
             Dim y = (objTo.GraphicObject.Y + objFrom.GraphicObject.Y) / 2
-            Dim stream = AddObject(ObjectType.MaterialStream, x, y)
+            Dim stream = AddObject(ObjectType.MaterialStream, CInt(x), CInt(y), "")
             If objTo.GraphicObject.X < objFrom.GraphicObject.X Then stream.GraphicObject.FlippedH = True
             ConnectObjects(objFrom.GraphicObject, stream.GraphicObject, fromidx, 0)
             ConnectObjects(stream.GraphicObject, objTo.GraphicObject, 0, toidx)
@@ -792,30 +792,8 @@ Imports DWSIM.ExtensionMethods
     ''' <summary>Gets or sets the ordered dictionary of compounds currently selected for this flowsheet, sorted according to the configured ordering mode.</summary>
     Public Property SelectedCompounds As Dictionary(Of String, ICompoundConstantProperties) Implements IFlowsheet.SelectedCompounds
         Get
-            Select Case Options.CompoundOrderingMode
-                Case CompoundOrdering.CAS_ASC
-                    Return Options.SelectedComponents.OrderBy(Function(c) c.Value.CAS_Number).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.CAS_DESC
-                    Return Options.SelectedComponents.OrderByDescending(Function(c) c.Value.CAS_Number).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.MW_ASC
-                    Return Options.SelectedComponents.OrderBy(Function(c) c.Value.Molar_Weight).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.MW_DESC
-                    Return Options.SelectedComponents.OrderByDescending(Function(c) c.Value.Molar_Weight).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.Name_ASC
-                    Return Options.SelectedComponents.OrderBy(Function(c) c.Value.Name).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.Name_DESC
-                    Return Options.SelectedComponents.OrderByDescending(Function(c) c.Value.Name).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.NBP_ASC
-                    Return Options.SelectedComponents.OrderBy(Function(c) c.Value.NBP.GetValueOrDefault).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.NBP_DESC
-                    Return Options.SelectedComponents.OrderByDescending(Function(c) c.Value.NBP.GetValueOrDefault).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.TAG_ASC
-                    Return Options.SelectedComponents.OrderBy(Function(c) c.Value.Tag).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case CompoundOrdering.TAG_DESC
-                    Return Options.SelectedComponents.OrderByDescending(Function(c) c.Value.Tag).ToDictionary(Of String, ICompoundConstantProperties)(Function(k) k.Key, Function(k) k.Value)
-                Case Else
-                    Return Options.SelectedComponents
-            End Select
+            If Options.CompoundOrderingMode = CompoundOrdering.AsAdded Then Return Options.SelectedComponents
+            Return Options.SelectedComponents.InFlowsheetOrder(Function(c) c.Value, Options).ToDictionary(Function(k) k.Key, Function(k) k.Value)
         End Get
         Set(value As Dictionary(Of String, ICompoundConstantProperties))
             Options.SelectedComponents = value
