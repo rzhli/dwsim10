@@ -34,6 +34,10 @@ class Program
         // keeps that path on an encoding the runtime knows.
         PrepareTextEncodings();
 
+        // Tool extensions can reference property packages before a flowsheet exists.
+        // Enable the shared extenders/unitops/ppacks resolver before loading the main window.
+        DWSIM.Automation.FluentAPI.Flowsheet.RegisterAssemblyResolver();
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
