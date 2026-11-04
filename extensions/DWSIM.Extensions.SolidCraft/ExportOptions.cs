@@ -53,6 +53,34 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>The space the PFD and P&amp;ID lines keep from the items and from each other, mm on the sheet.</summary>
         public double LineClearance = 4;
 
+        /// <summary>The folder that holds cadcraft-cli, when the user chose one; empty to search for it.</summary>
+        public string CADCraftPath = "";
+
+        /// <summary>The size of the photorealistic picture, pixels.</summary>
+        public int RenderWidth = 1600;
+        public int RenderHeight = 1000;
+
+        /// <summary>Path tracing samples per pixel of the picture; 0 leaves SolidCraft's own.</summary>
+        public int RenderSamples = 0;
+
+        /// <summary>The files saved next to each drawing's DXF, which is always saved.</summary>
+        public bool SaveDwg = true, SavePdf = true, SavePng = true;
+
+        /// <summary>Export All Drawings also binds the PDFs into one drawing set with a drawing list.</summary>
+        public bool DrawingSet = true;
+
+        /// <summary>
+        /// The title block of the drawings: the project number (put before each document number), the
+        /// revision and its description, the document status, the people (an empty Prepared by leaves
+        /// the simulation's author), the department and area, and a logo drawing (DXF or DWG).
+        /// </summary>
+        public string ProjectNumber = "", Revision = "0", RevisionText = "ORIGINAL ISSUE", Status = "PRELIMINARY",
+            PreparedBy = "", CheckedBy = "", ApprovedBy = "", Department = "", Area = "", Logo = "";
+
+        /// <summary>The view of the photorealistic picture (see <see cref="CadTools.RenderViews"/>).</summary>
+        public string RenderView = "iso";
+
+        [JsonIgnore]
         public DrawingStyle Style => Enum.TryParse<DrawingStyle>(DrawingStandard, true, out var s) ? s : DrawingStyle.ISO;
 
         public static ExportOptions Load()
@@ -65,6 +93,11 @@ namespace DWSIM.Extensions.SolidCraft
                 o.RackHeight = Math.Max(2.5, Math.Min(30, o.RackHeight));
                 o.ItemGap = Math.Max(0.5, Math.Min(20, o.ItemGap));
                 o.LineClearance = Math.Max(1, Math.Min(15, o.LineClearance));
+                o.RenderWidth = Math.Max(320, Math.Min(7680, o.RenderWidth));
+                o.RenderHeight = Math.Max(200, Math.Min(4320, o.RenderHeight));
+                o.RenderSamples = Math.Max(0, Math.Min(16384, o.RenderSamples));
+                // the old "64 (draft)" entry is SolidCraft's own count
+                if (o.RenderSamples == CadTools.DefaultRenderSamples) o.RenderSamples = 0;
                 return o;
             }
             catch (Exception)

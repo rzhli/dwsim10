@@ -392,6 +392,8 @@ namespace DWSIM.Extensions.SolidCraft
                 ["name"] = "TITLE_BLOCK", ["file"] = tb.Replace('\\', '/'), ["at"] = new JArray(sheet.Width - mo, mo),
                 ["attribs"] = JObject.FromObject(DrawingSheets.Attributes(title, sheet, style))
             }, "the title block");
+            var logo = DrawingSheets.Logo(style, sheet.Width - mo, mo, "TITLE_LOGO");
+            if (logo != null) C("insert", logo);
 
             if (table.Count > 0)
             {
@@ -402,6 +404,7 @@ namespace DWSIM.Extensions.SolidCraft
             }
 
             File.Delete(outputBase + ".dxf");
+            CadJob.Report(pid ? "CADCraft: drawing the P&ID" : "CADCraft: drawing the process flow diagram");
             using (var session = new CADCraftSession(cadcraftFolder))
             {
                 if (session.Tool("new_drawing", new JObject { ["metric"] = true }, "new drawing") == null)
@@ -444,6 +447,7 @@ namespace DWSIM.Extensions.SolidCraft
 
                 if (pid)
                 {
+                    CadJob.Report("CADCraft: drawing the legend sheet");
                     try
                     {
                         Legend(session, outputBase, style, title, units, actuated,
@@ -452,6 +456,7 @@ namespace DWSIM.Extensions.SolidCraft
                             fs.SimulationObjects.Values.OfType<IIndicator>().Any(g => g.HighAlarmEnabled || g.LowAlarmEnabled || g.VeryHighAlarmEnabled || g.VeryLowAlarmEnabled),
                             fs.SimulationObjects.Values.OfType<ISwitch>().Any());
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { result.Failed.Add("legend: " + ex.Message); }
                 }
 
@@ -459,11 +464,7 @@ namespace DWSIM.Extensions.SolidCraft
                 result.Dwg = outputBase + ".dwg";
                 result.Pdf = outputBase + ".pdf";
                 result.Png = outputBase + ".png";
-                foreach (var f in new[] { result.Drawing, result.Dwg, result.Pdf, result.Png }) if (File.Exists(f)) File.Delete(f);
-                session.Execute("plot", new JObject { ["path"] = result.Pdf, ["layout"] = layout }, 300);
-                session.Execute("plot", new JObject { ["path"] = result.Png, ["layout"] = layout, ["device"] = "CADCraft PNG" }, 300);
-                session.Tool("save", new JObject { ["path"] = result.Dwg }, "save DWG");
-                session.Tool("save", new JObject { ["path"] = result.Drawing }, "save DXF");
+                DrawingSheets.Save(session, outputBase, layout, null);
                 result.Failed.AddRange(session.Failed);
             }
             try { Directory.Delete(temp, true); } catch (Exception) { }

@@ -244,6 +244,8 @@ namespace DWSIM.Extensions.SolidCraft
                 ["name"] = "TITLE_BLOCK", ["file"] = tb.Replace('\\', '/'), ["at"] = P(sheet.Width - mo, mo),
                 ["attribs"] = JObject.FromObject(DrawingSheets.Attributes(title, sheet, style))
             });
+            var logo = DrawingSheets.Logo(style, sheet.Width - mo, mo, "TITLE_LOGO");
+            if (logo != null) C("insert", logo);
 
             C("tablestyle", new JObject { ["name"] = "PP", ["textHeight"] = TextHeight, ["margin"] = 0.8, ["current"] = true });
             foreach (var cs in new[] { "Header", "Data" })
@@ -285,6 +287,7 @@ namespace DWSIM.Extensions.SolidCraft
             }
 
             File.Delete(outputBase + ".dxf");
+            CadJob.Report("CADCraft: drawing the plot plan");
             using (var session = new CADCraftSession(cadcraftFolder))
             {
                 if (session.Tool("new_drawing", new JObject { ["metric"] = true }, "new drawing") == null)
@@ -303,11 +306,7 @@ namespace DWSIM.Extensions.SolidCraft
                 if (handle != null)
                     session.Execute("viewport.set", new JObject { ["handle"] = handle, ["scale"] = 1.0 / S, ["locked"] = true, ["center"] = P((mx0 + mx1) / 2, (my0 + my1) / 2) });
 
-                foreach (var ext in new[] { ".dxf", ".dwg", ".pdf", ".png" }) if (File.Exists(outputBase + ext)) File.Delete(outputBase + ext);
-                session.Execute("plot", new JObject { ["path"] = outputBase + ".pdf", ["layout"] = "PLOT" }, 300);
-                session.Execute("plot", new JObject { ["path"] = outputBase + ".png", ["layout"] = "PLOT", ["device"] = "CADCraft PNG" }, 300);
-                session.Tool("save", new JObject { ["path"] = outputBase + ".dwg" }, "save DWG");
-                session.Tool("save", new JObject { ["path"] = outputBase + ".dxf" }, "save DXF");
+                DrawingSheets.Save(session, outputBase, "PLOT", null);
                 result.Failed.AddRange(session.Failed);
             }
             try { Directory.Delete(temp, true); } catch (Exception) { }

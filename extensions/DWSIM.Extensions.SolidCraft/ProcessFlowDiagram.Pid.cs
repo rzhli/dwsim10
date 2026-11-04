@@ -238,6 +238,8 @@ namespace DWSIM.Extensions.SolidCraft
                 ["name"] = "LEGEND_TITLE", ["file"] = tb.Replace('\\', '/'), ["at"] = new JArray(sheet.Width - mo, mo),
                 ["attribs"] = JObject.FromObject(DrawingSheets.Attributes(t2, sheet, style))
             });
+            var logo = DrawingSheets.Logo(style, sheet.Width - mo, mo, "LEGEND_LOGO");
+            if (logo != null) C("insert", logo);
 
             // the entries flow in rows of cells, each heading on a row of its own; cells over the
             // title block are skipped
@@ -397,8 +399,9 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var c in cmds) session.Execute(c.Name, c.Params);
             var pdf = outputBase + " legend.pdf"; var png = outputBase + " legend.png";
             foreach (var f in new[] { pdf, png }) if (File.Exists(f)) File.Delete(f);
-            session.Execute("plot", new JObject { ["path"] = pdf, ["layout"] = "LEGEND" }, 300);
-            session.Execute("plot", new JObject { ["path"] = png, ["layout"] = "LEGEND", ["device"] = "CADCraft PNG" }, 300);
+            var o = ExportOptions.Load();
+            if (o.SavePdf) session.Execute("plot", new JObject { ["path"] = pdf, ["layout"] = "LEGEND" }, 300);
+            if (o.SavePng) session.Execute("plot", new JObject { ["path"] = png, ["layout"] = "LEGEND", ["device"] = "CADCraft PNG" }, 300);
             if (File.Exists(pdf)) result.LegendPdf = pdf;
             if (File.Exists(png)) result.LegendPng = png;
         }

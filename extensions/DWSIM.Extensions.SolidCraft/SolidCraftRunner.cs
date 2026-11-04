@@ -18,6 +18,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -35,7 +36,7 @@ namespace DWSIM.Extensions.SolidCraft
             public bool Success;
             public string Design, Step, Picture, Script, Animation, Render;
             public List<string> Skipped = new List<string>();
-            public string Error, AnimationError;
+            public string Error, AnimationError, RenderError;
         }
 
         static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
@@ -81,7 +82,7 @@ namespace DWSIM.Extensions.SolidCraft
         /// flow animation (<paramref name="extras"/>) in a second run on that design, so they stay
         /// out of the STEP file and a failure there never costs the model, and takes a picture.
         /// </summary>
-        public static Result Run(string folder, List<SolidCraftScript.Command> model, List<SolidCraftScript.Command> extras, string outputBase)
+        public static Result Run(string folder, List<SolidCraftScript.Command> model, List<SolidCraftScript.Command> extras, string outputBase, ExportOptions options = null)
         {
             var cli = Path.Combine(folder, Exe("solidcraft-cli"));
             var res = new Result
@@ -92,6 +93,7 @@ namespace DWSIM.Extensions.SolidCraft
                 Picture = outputBase + ".png"
             };
 
+            CadJob.Report("SolidCraft: building the design and the STEP file");
             foreach (var f in new[] { res.Design, res.Step }) if (File.Exists(f)) File.Delete(f);
             res.Error = RunStage(cli, model, res.Script, null, res.Design, res.Step, null, res.Skipped);
             res.Success = res.Error == null && File.Exists(res.Design);
@@ -104,6 +106,7 @@ namespace DWSIM.Extensions.SolidCraft
                 var animated = outputBase + ".flow.sc";
                 if (File.Exists(gif)) File.Delete(gif);
                 if (File.Exists(animated)) File.Delete(animated);
+                CadJob.Report("SolidCraft: adding the labels and the animations");
                 res.AnimationError = RunStage(cli, extras, outputBase + " - labels and flow.json", res.Design, animated, null, FlowAnimation.Prepare, res.Skipped);
                 if (res.AnimationError == null && File.Exists(animated))
                 {
@@ -113,6 +116,7 @@ namespace DWSIM.Extensions.SolidCraft
                 }
             }
 
+            CadJob.Report("SolidCraft: taking the picture");
             Execute(cli, "snapshot --in " + Quote(res.Design) + " --out " + Quote(res.Picture) + " --width 1600 --height 1000 --view iso", 300, out _);
             if (!File.Exists(res.Picture)) res.Picture = null;
 
@@ -121,9 +125,17 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 var render = outputBase + " - render.png";
                 if (File.Exists(render)) File.Delete(render);
-                Execute(cli, "render " + Quote(res.Design) + " --setup " + Quote(SolidCraftScript.RenderSetup) + " --out " + Quote(render) +
-                    " --width 1600 --height 1000 --overwrite --timeout 600", 660, out _);
+                int width = options?.RenderWidth ?? 1600, height = options?.RenderHeight ?? 1000, samples = options?.RenderSamples ?? 0;
+                // the time grows with the pixels and the samples (they are in the setup, see CreateRenderSetup); the
+                // limit only stops a render that hangs, with room for a GPU much slower than the one the estimate is from
+                var estimate = CadTools.RenderSeconds(width, height, samples);
+                var timeout = (int)Math.Max(900, 8 * estimate);
+                CadJob.Report(string.Format(CultureInfo.InvariantCulture, "SolidCraft: rendering the photorealistic picture ({0} x {1}, {2} samples per pixel), {3}",
+                    width, height, samples > 0 ? samples : CadTools.DefaultRenderSamples, CadTools.RenderTimeText(width, height, samples)));
+                var exit = Execute(cli, "render " + Quote(res.Design) + " --setup " + Quote(SolidCraftScript.RenderSetup) + " --out " + Quote(render) +
+                    string.Format(CultureInfo.InvariantCulture, " --width {0} --height {1} --overwrite --timeout {2}", width, height, timeout), timeout + 60, out var output);
                 if (File.Exists(render) && new FileInfo(render).Length > 20000) res.Render = render;
+                else res.RenderError = exit == -1 ? output : output.Trim().Split('\n').LastOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "SolidCraft wrote no picture";
             }
 
             return res;
@@ -138,9 +150,11 @@ namespace DWSIM.Extensions.SolidCraft
             Action<List<SolidCraftScript.Command>> prepare, List<string> skipped, int maxSkips = 40)
         {
             var cmds = new List<SolidCraftScript.Command>(commands);
+            var what = CadJob.Current?.Step;
 
             for (var attempt = 0; ; attempt++)
             {
+                if (attempt > 0 && what != null) CadJob.Report(what + " (attempt " + (attempt + 1) + ", without the commands that failed)");
                 prepare?.Invoke(cmds);
                 File.WriteAllText(script, SolidCraftScript.ToJson(FlowAnimation.Clean(cmds)), new UTF8Encoding(false));
 
@@ -172,6 +186,36 @@ namespace DWSIM.Extensions.SolidCraft
                     while (i < cmds.Count && (cmds[i].Name == "appearance.assign" || cmds[i].Name == "material.assign") && cmds[i].Subject == failed.Subject)
                         cmds.RemoveAt(i);
                 }
+            }
+        }
+
+        /// <summary>
+        /// A quick picture of a saved design with the render setup <paramref name="setup"/> (the camera
+        /// of the view chosen, few samples): the setup goes into a copy of the design, which is then
+        /// rendered small. Returns null when <paramref name="picture"/> was written, else the error.
+        /// </summary>
+        public static string Preview(string folder, string design, List<SolidCraftScript.Command> setup, string picture, int width, int height)
+        {
+            var cli = Path.Combine(folder, Exe("solidcraft-cli"));
+            var temp = Path.Combine(Path.GetTempPath(), "dwsim-render-preview-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(temp);
+            try
+            {
+                CadJob.Report("SolidCraft: setting the view up");
+                var script = Path.Combine(temp, "setup.json");
+                var copy = Path.Combine(temp, "preview.sc");
+                File.WriteAllText(script, SolidCraftScript.ToJson(setup), new UTF8Encoding(false));
+                if (Execute(cli, "run " + Quote(script) + " --in " + Quote(design) + " --save " + Quote(copy) + " --quiet", 300, out var output) != 0 || !File.Exists(copy))
+                    return output.Trim();
+                CadJob.Report(string.Format(CultureInfo.InvariantCulture, "SolidCraft: rendering the preview ({0} x {1})", width, height));
+                if (File.Exists(picture)) File.Delete(picture);
+                Execute(cli, "render " + Quote(copy) + " --setup " + Quote(SolidCraftScript.RenderSetup) + " --out " + Quote(picture) +
+                    string.Format(CultureInfo.InvariantCulture, " --width {0} --height {1} --overwrite --timeout 600", width, height), 660, out output);
+                return File.Exists(picture) ? null : output.Trim().Split('\n').LastOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "SolidCraft wrote no picture";
+            }
+            finally
+            {
+                try { Directory.Delete(temp, true); } catch (Exception) { }
             }
         }
 
@@ -226,6 +270,7 @@ namespace DWSIM.Extensions.SolidCraft
                 if (exit != 0 || !File.Exists(output)) return null;
                 return JToken.Parse(File.ReadAllText(output)) as JArray;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception)
             {
                 return null;
@@ -263,16 +308,25 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 p.OutputDataReceived += (s, e) => { if (e.Data != null) lock (sb) sb.AppendLine(e.Data); };
                 p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (sb) sb.AppendLine(e.Data); };
+                CadJob.Check();
                 p.Start();
-                p.BeginOutputReadLine();
-                p.BeginErrorReadLine();
-                if (!p.WaitForExit(timeoutSeconds * 1000))
+                // a cancel closes it, and the wait ends there
+                CadJob.Watch(p);
+                try
                 {
-                    try { p.Kill(); } catch { }
-                    output = "SolidCraft did not finish in " + timeoutSeconds + " s.";
-                    return -1;
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
+                    if (!p.WaitForExit(timeoutSeconds * 1000))
+                    {
+                        try { p.Kill(); } catch { }
+                        CadJob.Check();
+                        output = "SolidCraft did not finish in " + timeoutSeconds + " s.";
+                        return -1;
+                    }
+                    p.WaitForExit();
                 }
-                p.WaitForExit();
+                finally { CadJob.Forget(p); }
+                CadJob.Check();
                 output = sb.ToString();
                 return p.ExitCode;
             }
