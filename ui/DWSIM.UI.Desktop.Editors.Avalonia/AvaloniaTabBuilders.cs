@@ -115,12 +115,12 @@ namespace DWSIM.UI.Desktop.Editors
             {
                 var inletIndex = simobj.GraphicObject.InputConnectors.IndexOf(connector);
                 if (inletIndex == 0 && (bioreactor.OperatingMode == DWSIM.UnitOperations.Reactors.BioReactorMode.FedBatch ||
-                    (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaCoFermentation &&
+                    (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaGeneric &&
                      bioreactor.OperatingMode != DWSIM.UnitOperations.Reactors.BioReactorMode.Continuous)))
                     cname = "Initial Charge (Cycle Average)";
-                else if (inletIndex == 1 && (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaCoFermentation ||
+                else if (inletIndex == 1 && (bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaGeneric ||
                     (bioreactor.OperatingMode == DWSIM.UnitOperations.Reactors.BioReactorMode.FedBatch && bioreactor.UseFeedSchedule)))
-                    cname = "Supplemental Feed";
+                    cname = bioreactor.KineticModel == DWSIM.UnitOperations.Reactors.BioKineticModel.JuliaGeneric ? "Additional Feed / Sparger Gas" : "Supplemental Feed";
             }
             if (string.IsNullOrWhiteSpace(cname) || cname.Length > 30 || Guid.TryParse(cname.Split('|')[0].TrimStart("AQ-".ToCharArray()), out _))
                 cname = (isInput ? "In" : "Out") + (isEnergy ? " (Energy)" : "");

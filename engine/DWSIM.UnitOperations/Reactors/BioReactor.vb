@@ -51,9 +51,8 @@ Namespace Reactors
         ''' Competitive product inhibition kinetics, no microbial growth. Substrate role = cellulose,
         ''' Product role = glucose, plus new roles Hemicellulose, Xylose and Enzyme.</summary>
         EnzymaticHydrolysis = 5
-        ''' <summary>Julia User Script backend for the five-state batch interface.
-        ''' The enum name is retained for compatibility with saved flowsheets.</summary>
-        JuliaCoFermentation = 6
+        ''' <summary>Generic Script Manager Julia model with self-described states and SI stream results.</summary>
+        JuliaGeneric = 7
     End Enum
 
     ''' <summary>Defines the operation mode of the BioReactor.</summary>
@@ -755,8 +754,9 @@ Namespace Reactors
 
         Public Overrides Sub Calculate(Optional ByVal args As Object = Nothing)
 
-            If KineticModel = BioKineticModel.JuliaCoFermentation Then
-                CalculateJuliaCoFermentation()
+            If Not [Enum].IsDefined(KineticModel) Then Throw New InvalidOperationException("Unsupported kinetic model. Select a supported model in the BioReactor editor.")
+            If KineticModel = BioKineticModel.JuliaGeneric Then
+                CalculateGenericJulia()
                 Return
             End If
 
@@ -1822,7 +1822,7 @@ Namespace Reactors
         ''' <summary>Returns the description string for this reactor type.</summary>
         ''' <returns>A description string identifying this reactor type.</returns>
         Public Overrides Function GetDisplayDescription() As String
-            Return "Microbial bioreactor with Monod-family kinetics"
+            Return "Bioreactor with built-in kinetics or a Script Manager model"
         End Function
 
         ''' <summary>Returns the display name for this reactor type.</summary>
@@ -1845,7 +1845,7 @@ Namespace Reactors
         ''' <returns>A formatted multi-line string report.</returns>
         Public Overrides Function GetReport(su As IUnitsOfMeasure, ci As Globalization.CultureInfo, numberformat As String) As String
 
-            If KineticModel = BioKineticModel.JuliaCoFermentation Then Return GetJuliaReport(ci, numberformat)
+            If KineticModel = BioKineticModel.JuliaGeneric Then Return GenericReport(ci, numberformat)
 
             Dim str As New Text.StringBuilder
             str.AppendLine("BioReactor:  " & Me.GraphicObject.Tag)
@@ -1939,12 +1939,10 @@ Namespace Reactors
             "Dissolved Oxygen Saturation",
             "User Kinetics Script Name",
             "Julia Model Script Name",
-            "Initial Culture Biomass",
             "Steady-state Tolerance",
             "Max Integration Time",
             "Use Feed Schedule",
             "Feed Schedule",
-            "Xylitol Compound",
             "Hemicellulose Compound",
             "Xylose Compound",
             "Enzyme Compound",
@@ -1960,13 +1958,7 @@ Namespace Reactors
             "Outlet Biomass Concentration",
             "Outlet Substrate Concentration",
             "Outlet Product Concentration",
-            "Outlet Xylose Concentration",
-            "Outlet Xylitol Concentration",
-            "Julia Closure Gas Mass Flow",
             "Final Working Volume",
-            "Integration Time",
-            "Hydraulic Residence Time",
-            "Dilution Rate",
             "Average Specific Growth Rate",
             "Oxygen Uptake Rate",
             "Carbon Dioxide Evolution Rate",
@@ -2000,16 +1992,7 @@ Namespace Reactors
                                           "EH Glucose Inhibition Constant", "EH Xylose Inhibition Constant",
                                           "EH Enzyme Loading", "EH Heat Per Gram Product"}
 
-            If KineticModel = BioKineticModel.JuliaCoFermentation Then
-                unused.UnionWith(growth)
-                unused.ExceptWith({"Aerobic", "Biomass Compound", "CO2 Compound"})
-                unused.UnionWith(hydrolysis)
-                unused.Remove("Xylose Compound")
-                If OperatingMode <> BioReactorMode.Continuous Then unused.UnionWith({"Initial Culture Biomass", "Steady-state Tolerance", "Max Integration Time"})
-                Return unused
-            End If
-
-            unused.UnionWith({"Julia Model Script Name", "Xylitol Compound", "Initial Culture Biomass", "Steady-state Tolerance", "Max Integration Time"})
+            unused.UnionWith({"Julia Model Script Name", "Julia Model Settings", "Steady-state Tolerance", "Max Integration Time"})
             If KineticModel = BioKineticModel.EnzymaticHydrolysis Then
                 'no microbial growth: the hydrolysis path has its own roles and rate constants
                 unused.UnionWith(growth)
@@ -2042,25 +2025,23 @@ Namespace Reactors
         End Function
 
         Public Overrides Function GetProperties(proptype As PropertyType) As String()
+            If KineticModel = BioKineticModel.JuliaGeneric Then
+                Return GenericProperties(proptype)
+            End If
             Dim baseprops = MyBase.GetProperties(proptype)
             Select Case proptype
                 Case PropertyType.WR
                     Dim unused = UnusedInputs()
                     Return _inputProps.Where(Function(p) Not unused.Contains(p)).ToArray()
                 Case PropertyType.RO
-                    If KineticModel = BioKineticModel.JuliaCoFermentation Then
-                        Dim excluded As New HashSet(Of String) From {"Oxygen Uptake Rate", "Carbon Dioxide Evolution Rate",
-                                                                     "Respiratory Quotient", "Metabolic Heat Duty"}
-                        If OperatingMode <> BioReactorMode.Continuous Then excluded.UnionWith({"Hydraulic Residence Time", "Dilution Rate"})
-                        Return _outputProps.Where(Function(p) Not excluded.Contains(p)).ToArray()
-                    End If
-                    Return _outputProps.Except({"Integration Time", "Hydraulic Residence Time", "Dilution Rate"}).ToArray()
+                    Return _outputProps
                 Case Else
                     Return _inputProps.Concat(_outputProps).Concat(baseprops).ToArray()
             End Select
         End Function
 
         Public Overrides Function GetPropertyValue(prop As String, Optional su As IUnitsOfMeasure = Nothing) As Object
+            If KineticModel = BioKineticModel.JuliaGeneric AndAlso prop.StartsWith("Julia Result: ") Then Return GenericPropertyValue(prop, False)
             Select Case prop
                 Case "Working Volume" : Return Volume
                 Case "Batch Duration" : Return BatchDuration
@@ -2089,12 +2070,11 @@ Namespace Reactors
                 Case "Dissolved Oxygen Saturation" : Return CO2sat_gL
                 Case "User Kinetics Script Name" : Return UserScriptName
                 Case "Julia Model Script Name" : Return JuliaModelScriptName
-                Case "Initial Culture Biomass" : Return JuliaInitialBiomass_gL
+                Case "Julia Model Settings" : Return JuliaParametersJSON
                 Case "Steady-state Tolerance" : Return JuliaSteadyStateTolerance
                 Case "Max Integration Time" : Return JuliaMaxIntegrationTime_s
                 Case "Use Feed Schedule" : Return UseFeedSchedule
                 Case "Feed Schedule" : Return Newtonsoft.Json.JsonConvert.SerializeObject(FeedPulses)
-                Case "Xylitol Compound" : Return XylitolCompound
                 Case "Hemicellulose Compound" : Return HemicelluloseCompound
                 Case "Xylose Compound" : Return XyloseCompound
                 Case "Enzyme Compound" : Return EnzymeCompound
@@ -2107,43 +2087,34 @@ Namespace Reactors
                 Case "Outlet Biomass Concentration" : Return Result_X_gL
                 Case "Outlet Substrate Concentration" : Return Result_S_gL
                 Case "Outlet Product Concentration" : Return Result_P_gL
-                Case "Outlet Xylose Concentration" : Return Result_Xylose_gL
-                Case "Outlet Xylitol Concentration" : Return Result_Xylitol_gL
-                Case "Julia Closure Gas Mass Flow" : Return Result_JuliaClosureGas_kg_s
                 Case "Final Working Volume" : Return Result_WorkingVolume_m3
-                Case "Integration Time" : Return Result_JuliaIntegrationTime_s
-                Case "Hydraulic Residence Time" : Return Result_JuliaResidenceTime_s
-                Case "Dilution Rate" : Return Result_JuliaDilutionRate_h
                 Case "Average Specific Growth Rate" : Return Result_Mu_h
                 Case "Oxygen Uptake Rate" : Return Result_OUR_gLh
                 Case "Carbon Dioxide Evolution Rate" : Return Result_CER_gLh
                 Case "Respiratory Quotient" : Return Result_RQ
                 Case "Metabolic Heat Duty" : Return Result_Q_metabolic_kW
                 Case "Net Heat Duty" : Return Result_Q_duty_kW
+                Case "Outlet Temperature Setpoint" : Return OutletTemperature
                 Case "Outlet Temperature" : Return Result_OutletTemperature_K
                 Case Else : Return MyBase.GetPropertyValue(prop, su)
             End Select
         End Function
 
         Public Overrides Function GetPropertyUnit(prop As String, Optional su As IUnitsOfMeasure = Nothing) As String
+            If KineticModel = BioKineticModel.JuliaGeneric AndAlso prop.StartsWith("Julia Result: ") Then Return GenericPropertyValue(prop, True)
             Select Case prop
                 Case "Working Volume", "Final Working Volume" : Return "m3"
-                Case "Batch Duration", "Hydraulic Residence Time", "Max Integration Time", "Integration Time" : Return "s"
+                Case "Batch Duration", "Max Integration Time" : Return "s"
                 Case "Max Specific Growth Rate",
-                     "Dilution Rate",
                      "Death Rate Constant",
                      "Volumetric Oxygen Transfer Coefficient",
                      "Average Specific Growth Rate" : Return "1/h"
                 Case "Saturation Constant",
-                     "Initial Culture Biomass",
                      "Inhibition Constant",
                      "Dissolved Oxygen Saturation",
                      "Outlet Biomass Concentration",
                      "Outlet Substrate Concentration",
-                     "Outlet Xylose Concentration",
-                     "Outlet Xylitol Concentration",
                      "Outlet Product Concentration" : Return "g/L"
-                Case "Julia Closure Gas Mass Flow" : Return "kg/s"
                 Case "Biomass Yield on Substrate",
                      "Product Yield on Substrate" : Return "g/g"
                 Case "Maintenance Coefficient" : Return "g/g/h"
@@ -2151,7 +2122,7 @@ Namespace Reactors
                      "Carbon Dioxide Evolution Rate" : Return "g/L/h"
                 Case "Metabolic Heat Duty",
                      "Net Heat Duty" : Return "kW"
-                Case "Outlet Temperature" : Return "K"
+                Case "Outlet Temperature", "Outlet Temperature Setpoint" : Return "K"
                 Case "Heat per mol O2" : Return "J/mol"
                 Case "EH Cellulose Rate Constant",
                      "EH Hemicellulose Rate Constant" : Return "L/(g.h)"
@@ -2173,6 +2144,7 @@ Namespace Reactors
             Select Case prop
                 Case "Working Volume" : Volume = d : Return True
                 Case "Batch Duration" : BatchDuration = d : Return True
+                Case "Outlet Temperature Setpoint" : OutletTemperature = d : Return True
                 Case "Operating Mode"
                     Dim om As BioReactorMode
                     If [Enum].TryParse(Of BioReactorMode)(propval?.ToString(), om) Then
@@ -2187,7 +2159,9 @@ Namespace Reactors
                 Case "Heat per mol O2" : HeatPerMolO2_JmolO2 = d : Return True
                 Case "Kinetic Model"
                     Dim km As BioKineticModel
-                    If [Enum].TryParse(Of BioKineticModel)(propval?.ToString(), km) Then KineticModel = km
+                    If Not [Enum].TryParse(Of BioKineticModel)(propval?.ToString(), km) OrElse Not [Enum].IsDefined(km) Then Throw New ArgumentException("Unknown kinetic model.")
+                    KineticModel = km
+                    CreateConnectors()
                     Return True
                 Case "Aerobic" : IsAerobic = Convert.ToBoolean(propval) : Return True
                 Case "Biomass Compound" : BiomassCompound = propval?.ToString() : Return True
@@ -2210,7 +2184,7 @@ Namespace Reactors
                 Case "Dissolved Oxygen Saturation" : CO2sat_gL = d : Return True
                 Case "User Kinetics Script Name" : UserScriptName = propval?.ToString() : Return True
                 Case "Julia Model Script Name" : JuliaModelScriptName = propval?.ToString() : Return True
-                Case "Initial Culture Biomass" : JuliaInitialBiomass_gL = d : Return True
+                Case "Julia Model Settings" : JuliaParametersJSON = propval?.ToString() : Return True
                 Case "Steady-state Tolerance" : JuliaSteadyStateTolerance = d : Return True
                 Case "Max Integration Time" : JuliaMaxIntegrationTime_s = d : Return True
                 Case "Use Feed Schedule" : UseFeedSchedule = Convert.ToBoolean(propval) : CreateConnectors() : Return True
@@ -2219,7 +2193,6 @@ Namespace Reactors
                     If pulses Is Nothing OrElse pulses.Any(Function(p) p Is Nothing) Then Throw New ArgumentException("Feed Schedule must be a JSON array of pulse objects (StartTime_h, Volume_m3, Rate_m3_h).")
                     FeedPulses = pulses
                     Return True
-                Case "Xylitol Compound" : XylitolCompound = propval?.ToString() : Return True
                 Case "Hemicellulose Compound" : HemicelluloseCompound = propval?.ToString() : Return True
                 Case "Xylose Compound" : XyloseCompound = propval?.ToString() : Return True
                 Case "Enzyme Compound" : EnzymeCompound = propval?.ToString() : Return True
@@ -2277,11 +2250,11 @@ Namespace Reactors
 
             container.CreateAndAddDropDownRow("Kinetic Model",
                                               New List(Of String)({"Monod", "Contois", "Moser", "Haldane", "User Script", "Enzymatic Hydrolysis"}),
-                                              If(KineticModel = BioKineticModel.JuliaCoFermentation, CInt(BioKineticModel.UserScript), CInt(KineticModel)),
+                                              If(KineticModel = BioKineticModel.JuliaGeneric, CInt(BioKineticModel.UserScript), CInt(KineticModel)),
                                               Sub(dd, e)
                                                   If Not container.IsArmed OrElse dd.SelectedIndex < 0 Then Return
                                                   If CInt(KineticModel) = dd.SelectedIndex Then Return
-                                                  If dd.SelectedIndex = CInt(BioKineticModel.UserScript) AndAlso KineticModel = BioKineticModel.JuliaCoFermentation Then Return
+                                                  If dd.SelectedIndex = CInt(BioKineticModel.UserScript) AndAlso KineticModel = BioKineticModel.JuliaGeneric Then Return
                                                   KineticModel = CType(dd.SelectedIndex, BioKineticModel)
                                                   FlowSheet.UpdateOpenEditForms()
                                               End Sub)
@@ -2493,14 +2466,14 @@ Namespace Reactors
             Dim h = GraphicObject.Height
             Dim gx = GraphicObject.X
             Dim gy = GraphicObject.Y
-            Dim julia = KineticModel = BioKineticModel.JuliaCoFermentation
+            Dim julia = KineticModel = BioKineticModel.JuliaGeneric
             Dim scheduled = OperatingMode = BioReactorMode.FedBatch AndAlso UseFeedSchedule
             Dim inletName = If(OperatingMode = BioReactorMode.FedBatch OrElse
                                (julia AndAlso OperatingMode <> BioReactorMode.Continuous),
                                "Initial Charge (Cycle Average)", "Inlet (Feed)")
-            Dim secondInletName = If(julia OrElse scheduled,
+            Dim secondInletName = If(KineticModel = BioKineticModel.JuliaGeneric, "Additional Feed / Sparger Gas", If(julia OrElse scheduled,
                                     "Supplemental Feed",
-                                    "Sparger Gas Inlet (Optional)")
+                                    "Sparger Gas Inlet (Optional)"))
 
             If GraphicObject.InputConnectors.Count = 2 AndAlso GraphicObject.OutputConnectors.Count = 2 Then
 
@@ -2752,18 +2725,15 @@ Namespace Reactors
         Public Overrides Function LoadData(data As System.Collections.Generic.List(Of System.Xml.Linq.XElement)) As Boolean
 
             UseFeedSchedule = False
+            Dim storedModel = data.FirstOrDefault(Function(e) e.Name = "KineticModel")
+            Dim parsedModel As BioKineticModel
+            If storedModel IsNot Nothing AndAlso (Not [Enum].TryParse(storedModel.Value, parsedModel) OrElse Not [Enum].IsDefined(parsedModel)) Then
+                Throw New NotSupportedException("This saved BioReactor kinetic interface is no longer supported. Migrate its script and settings to the generic Julia interface.")
+            End If
             XMLSerializer.XMLSerializer.Deserialize(Me, data)
-            If Not data.Any(Function(e) e.Name = "UseFeedSchedule") Then
-                Dim previous = data.FirstOrDefault(Function(e) e.Name = "JuliaUseFeedSchedule")
-                If previous IsNot Nothing Then UseFeedSchedule = Boolean.Parse(previous.Value)
-            End If
-            If Not data.Any(Function(e) e.Name = "Result_WorkingVolume_m3") Then
-                Dim previous = data.FirstOrDefault(Function(e) e.Name = "Result_JuliaVolume_m3")
-                Result_WorkingVolume_m3 = If(previous Is Nothing, Volume, Double.Parse(previous.Value, Globalization.CultureInfo.InvariantCulture))
-            End If
+            If Not data.Any(Function(e) e.Name = "Result_WorkingVolume_m3") Then Result_WorkingVolume_m3 = Volume
             FeedPulses = New List(Of BioReactorFeedPulse)
             Dim schedule = data.FirstOrDefault(Function(e) e.Name = "FeedPulses")
-            If schedule Is Nothing Then schedule = data.FirstOrDefault(Function(e) e.Name = "JuliaFeedPulses")
             If schedule IsNot Nothing Then
                 For Each element In schedule.Elements("Pulse")
                     Dim pulse As New BioReactorFeedPulse
@@ -2771,6 +2741,7 @@ Namespace Reactors
                     FeedPulses.Add(pulse)
                 Next
             End If
+            If KineticModel = BioKineticModel.JuliaGeneric Then RestoreGenericTrajectory()
             Return True
 
         End Function
@@ -2819,9 +2790,7 @@ Namespace Reactors
 
         ''' <summary>Chart names the PFD chart object can embed: the trajectory groups of the last calculation.</summary>
         Public Overrides Function GetChartModelNames() As List(Of String)
-            If KineticModel = BioKineticModel.JuliaCoFermentation Then
-                Return New List(Of String)({"Co-Fermentation", "Specific Rates"})
-            End If
+            If KineticModel = BioKineticModel.JuliaGeneric Then Return GenericChartNames()
             If KineticModel = BioKineticModel.EnzymaticHydrolysis Then
                 Return New List(Of String)({"Enzymatic Hydrolysis"})
             End If
@@ -2830,6 +2799,7 @@ Namespace Reactors
 
         ''' <summary>Builds an OxyPlot model of one trajectory group of the last calculation, time in hours on the x axis.</summary>
         Public Overrides Function GetChartModel(name As String) As Object
+            If KineticModel = BioKineticModel.JuliaGeneric Then Return GenericChart(name)
 
             Dim traj = LastTrajectory
             If traj Is Nothing OrElse traj.Times Is Nothing OrElse traj.Times.Count = 0 Then Return Nothing
@@ -2837,13 +2807,6 @@ Namespace Reactors
             Dim series As New List(Of Tuple(Of String, String))()
             Dim yTitle As String = "Value"
             Select Case name
-                Case "Co-Fermentation"
-                    series.Add(Tuple.Create("X", "Biomass"))
-                    series.Add(Tuple.Create("Glucose", "Glucose"))
-                    series.Add(Tuple.Create("Xylose", "Xylose"))
-                    series.Add(Tuple.Create("P", "Ethanol"))
-                    series.Add(Tuple.Create("Xylitol", "Xylitol"))
-                    yTitle = "Substrates / biomass (g/L)"
                 Case "Growth Kinetics"
                     series.Add(Tuple.Create("X", "X (biomass)"))
                     series.Add(Tuple.Create("S", "S (substrate)"))

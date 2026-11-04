@@ -20,6 +20,30 @@ Namespace Reactors
         Public Property FeedPulses As New List(Of BioReactorFeedPulse)
         Public Property Result_WorkingVolume_m3 As Double
 
+        ''' <summary>Optional Julia-model convention used only by the explicit cycle-average editor actions.
+        ''' Absent density keys retain the thermodynamic-volume convention of built-in models.</summary>
+        Public Function GetCycleAverageReferenceDensity(supplemental As Boolean) As Double?
+            If KineticModel <> BioKineticModel.JuliaGeneric Then Return Nothing
+            Dim settings As Newtonsoft.Json.Linq.JObject
+            Try
+                settings = Newtonsoft.Json.Linq.JObject.Parse(JuliaParametersJSON)
+            Catch ex As Exception
+                Throw New InvalidOperationException("Model settings must be a valid JSON object before applying cycle-average flows.", ex)
+            End Try
+            Dim key = If(supplemental, "feed_density_kg_m3", "initial_density_kg_m3")
+            Dim token = settings(key)
+            If token Is Nothing Then Return Nothing
+            If token.Type <> Newtonsoft.Json.Linq.JTokenType.Float AndAlso
+               token.Type <> Newtonsoft.Json.Linq.JTokenType.Integer Then
+                Throw New InvalidOperationException(key & " must be a positive finite number in kg/m3.")
+            End If
+            Dim density = CDbl(token)
+            If Not Double.IsFinite(density) OrElse density <= 0.0 Then
+                Throw New InvalidOperationException(key & " must be a positive finite number in kg/m3.")
+            End If
+            Return density
+        End Function
+
         ''' <summary>Set the initial-charge inlet or its independent mixer sources to the cycle-average flow required by Volume / BatchDuration, preserving composition.</summary>
         Public Sub ApplyInitialChargeAverageToInlet()
             If OperatingMode = BioReactorMode.Continuous Then
@@ -37,16 +61,22 @@ Namespace Reactors
             Dim sources = GetInitialChargeSourceStreams(feed)
 
             Dim temperature = feed.Phases(0).Properties.temperature.GetValueOrDefault()
-            If (KineticModel = BioKineticModel.JuliaCoFermentation AndAlso ThermalMode = BioReactorThermalMode.DefinedOutletTemperature) OrElse
-               (KineticModel <> BioKineticModel.JuliaCoFermentation AndAlso ReactorOperationMode = OperationMode.OutletTemperature) Then temperature = OutletTemperature
+            If (KineticModel = BioKineticModel.JuliaGeneric AndAlso ThermalMode = BioReactorThermalMode.DefinedOutletTemperature) OrElse
+               (KineticModel <> BioKineticModel.JuliaGeneric AndAlso ReactorOperationMode = OperationMode.OutletTemperature) Then temperature = OutletTemperature
             Dim pressure = feed.Phases(0).Properties.pressure.GetValueOrDefault() - DeltaP.GetValueOrDefault()
             If pressure <= 0.0 Then Throw New InvalidOperationException("Set a positive initial-charge pressure first.")
 
-            Dim charge = PrepareFeedAtConditions(feed, temperature, pressure)
-            Dim flow = FeedVolumeFlow(charge)
-            Dim scale = (Volume / BatchDuration) / flow
+            Dim density = GetCycleAverageReferenceDensity(False)
+            Dim feedMassFlow = feed.Phases(0).Properties.massflow.GetValueOrDefault()
+            Dim scale As Double
+            If density.HasValue Then
+                scale = density.Value * Volume / BatchDuration / feedMassFlow
+            Else
+                Dim charge = PrepareFeedAtConditions(feed, temperature, pressure)
+                scale = (Volume / BatchDuration) / FeedVolumeFlow(charge)
+                feedMassFlow = charge.Phases(0).Properties.massflow.GetValueOrDefault()
+            End If
             Dim sourceMassFlow = sources.Sum(Function(source) source.Phases(0).Properties.massflow.GetValueOrDefault())
-            Dim feedMassFlow = charge.Phases(0).Properties.massflow.GetValueOrDefault()
             If Not Double.IsFinite(scale) OrElse scale <= 0.0 OrElse
                Not Double.IsFinite(sourceMassFlow) OrElse sourceMassFlow <= 0.0 OrElse
                Not Double.IsFinite(feedMassFlow) OrElse feedMassFlow <= 0.0 Then
@@ -192,11 +222,17 @@ Namespace Reactors
             Dim pressure = firstFeed.Phases(0).Properties.pressure.GetValueOrDefault() - DeltaP.GetValueOrDefault()
             If pressure <= 0.0 Then Throw New InvalidOperationException("Set a positive supplemental feed pressure first.")
             Dim temperature = firstFeed.Phases(0).Properties.temperature.GetValueOrDefault()
-            If (KineticModel = BioKineticModel.JuliaCoFermentation AndAlso ThermalMode = BioReactorThermalMode.DefinedOutletTemperature) OrElse
-               (KineticModel <> BioKineticModel.JuliaCoFermentation AndAlso ReactorOperationMode = OperationMode.OutletTemperature) Then temperature = OutletTemperature
-            Dim charge = PrepareFeedAtConditions(feed, temperature, pressure)
-            Dim flow = FeedVolumeFlow(charge)
-            Dim massFlow = charge.Phases(0).Properties.massflow.GetValueOrDefault() * (total / BatchDuration) / flow
+            If (KineticModel = BioKineticModel.JuliaGeneric AndAlso ThermalMode = BioReactorThermalMode.DefinedOutletTemperature) OrElse
+               (KineticModel <> BioKineticModel.JuliaGeneric AndAlso ReactorOperationMode = OperationMode.OutletTemperature) Then temperature = OutletTemperature
+            Dim density = GetCycleAverageReferenceDensity(True)
+            Dim massFlow As Double
+            If density.HasValue Then
+                massFlow = density.Value * total / BatchDuration
+            Else
+                Dim charge = PrepareFeedAtConditions(feed, temperature, pressure)
+                Dim flow = FeedVolumeFlow(charge)
+                massFlow = charge.Phases(0).Properties.massflow.GetValueOrDefault() * (total / BatchDuration) / flow
+            End If
             If Not Double.IsFinite(massFlow) OrElse massFlow <= 0.0 Then
                 Throw New InvalidOperationException("Calculate the supplemental feed with a positive flow and valid composition first.")
             End If

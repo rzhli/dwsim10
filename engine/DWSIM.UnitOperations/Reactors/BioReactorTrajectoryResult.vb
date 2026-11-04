@@ -6,6 +6,7 @@
 Imports System
 Imports System.Collections.Generic
 Imports System.Data
+Imports System.Linq
 Imports System.Globalization
 Imports System.Text
 
@@ -13,14 +14,24 @@ Namespace Reactors
 
     ''' <summary>
     ''' Time-series of a BioReactor integration run. Used for the Results &amp; Charts
-    ''' dialog and CSV export. All concentrations are in g/L, rates in g/L/h, times
+    ''' dialog and CSV export. Built-in concentrations are in g/L, rates in g/L/h, times
     ''' in seconds (converted to hours for display). In EnzymaticHydrolysis mode
     ''' the Cellulose / Hemicellulose / Glucose / Xylose lists replace the growth
-    ''' series X / S / P, which are kept empty.
+    ''' series X / S / P, which are kept empty. Generic Julia models carry their own units.
     ''' </summary>
+    <Serializable()> Public Class BioReactorNamedSeries
+        Public Property ID As String
+        Public Property Name As String
+        Public Property Unit As String
+        Public Property Group As String
+        Public Property Values As New List(Of Double)
+    End Class
+
     <Serializable()> Public Class BioReactorTrajectoryResult
 
-        Public Property Mode As String = "Growth"   ' Growth, EnzymaticHydrolysis or CoFermentation
+        Public Property Mode As String = "Growth"   ' Growth, EnzymaticHydrolysis or GenericJulia
+
+        Public Property NamedSeries As New List(Of BioReactorNamedSeries)
 
         ' Time axis
         Public Property Times As New List(Of Double)()   ' seconds
@@ -41,16 +52,10 @@ Namespace Reactors
         Public Property Hemicellulose As New List(Of Double)()
         Public Property Glucose As New List(Of Double)()
         Public Property Xylose As New List(Of Double)()
-        Public Property Xylitol As New List(Of Double)()
         Public Property BrothVolume As New List(Of Double)() ' m3; culture volume, including scheduled feeding
 
         Public Function AvailableSeries() As String()
-            If Mode = "CoFermentation" Then
-                If BrothVolume.Count > 0 Then
-                    Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP", "Volume_m3"}
-                End If
-                Return New String() {"X", "Glucose", "Xylose", "P", "Xylitol", "Mu", "qS", "qP"}
-            End If
+            If Mode = "GenericJulia" Then Return NamedSeries.Select(Function(s) s.ID).ToArray()
             If Mode = "EnzymaticHydrolysis" Then
                 If BrothVolume.Count > 0 Then Return New String() {"Cellulose", "Hemicellulose", "Glucose", "Xylose", "Volume_m3"}
                 Return New String() {"Cellulose", "Hemicellulose", "Glucose", "Xylose"}
@@ -60,6 +65,10 @@ Namespace Reactors
         End Function
 
         Public Function GetSeries(name As String) As Double()
+            If Mode = "GenericJulia" Then
+                Dim item = NamedSeries.FirstOrDefault(Function(s) s.ID = name)
+                Return If(item Is Nothing, New Double() {}, item.Values.ToArray())
+            End If
             Select Case name
                 Case "X" : Return X.ToArray()
                 Case "S" : Return S.ToArray()
@@ -74,7 +83,6 @@ Namespace Reactors
                 Case "Hemicellulose" : Return Hemicellulose.ToArray()
                 Case "Glucose" : Return Glucose.ToArray()
                 Case "Xylose" : Return Xylose.ToArray()
-                Case "Xylitol" : Return Xylitol.ToArray()
                 Case "Volume_m3" : Return BrothVolume.ToArray()
                 Case Else : Return New Double() {}
             End Select
@@ -94,7 +102,14 @@ Namespace Reactors
             Dim sb As New StringBuilder()
             Dim keys = AvailableSeries()
             sb.Append("time_h")
-            For Each k In keys : sb.Append(",") : sb.Append(k) : Next
+            For Each k In keys
+                Dim label = k
+                If Mode = "GenericJulia" Then
+                    Dim series = NamedSeries.First(Function(v) v.ID = k)
+                    label = series.Name & " [" & k & "]" & If(series.Unit = "", "", " (" & series.Unit & ")")
+                End If
+                sb.Append(",""").Append(label.Replace("""", """""")).Append("""")
+            Next
             sb.AppendLine()
             Dim ci = CultureInfo.InvariantCulture
             Dim th = GetTimesHours()
