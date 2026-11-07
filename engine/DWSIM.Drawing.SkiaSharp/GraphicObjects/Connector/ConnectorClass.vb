@@ -114,7 +114,7 @@ Namespace GraphicObjects
             ConnPen.Color = GraphicsSurface.ForegroundColor
 
             If Conn.AttachedFrom.Status = Enums.GraphicObjects.Status.Calculated And Conn.AttachedTo.Status = Enums.GraphicObjects.Status.Calculated Then
-                If s.DarkMode Then
+                If GraphicsSurface.DarkCanvas Then
                     ConnPen.Color = SKColors.WhiteSmoke
                 Else
                     ConnPen.Color = SKColors.SteelBlue
@@ -200,6 +200,10 @@ Namespace GraphicObjects
                     EndDir = Me.AttachedTo.InputConnectors(Me.AttachedToConnectorIndex).Direction
                 End If
             End If
+
+            'the rotation and the flips below change copies: the points are the icons' own connection points
+            StartPos = New Point(StartPos.X, StartPos.Y)
+            EndPos = New Point(EndPos.X, EndPos.Y)
 
             Dim DeltaX, DeltaY As Integer
             DeltaX = 10
@@ -752,7 +756,7 @@ Namespace GraphicObjects
                             .IsAntialias = GlobalSettings.Settings.DrawingAntiAlias
                             .PathEffect = SKPathEffect.CreateCorner(2.0F)
                             If AttachedFrom.Status = Enums.GraphicObjects.Status.Calculated And AttachedTo.Status = Enums.GraphicObjects.Status.Calculated Then
-                                If s.DarkMode Then
+                                If GraphicsSurface.DarkCanvas Then
                                     .Color = SKColors.WhiteSmoke
                                 Else
                                     .Color = SKColors.SteelBlue
@@ -789,12 +793,12 @@ Namespace GraphicObjects
                                 .StrokeWidth = LineWidth + 4
                                 .IsAntialias = GlobalSettings.Settings.DrawingAntiAlias
                                 .PathEffect = SKPathEffect.CreateCorner(6.0F)
-                                .Color = SKColors.White.WithAlpha(200)
+                                .Color = GraphicsSurface.BackgroundColor.WithAlpha(200)
                             End With
 
                             If Not Straight Then
 
-                                If Not GlobalSettings.Settings.DarkMode Then canvas.DrawPath(path, myPen2)
+                                If Not GraphicsSurface.DarkCanvas Then canvas.DrawPath(path, myPen2)
                                 canvas.DrawPath(path, myPen)
 
                             Else

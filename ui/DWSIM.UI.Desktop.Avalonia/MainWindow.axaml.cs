@@ -263,6 +263,7 @@ public partial class MainWindow : Window
         // Process Modeling
         LnkNew.Click += (_, _) => OpenNewFlowsheet();
         LnkNewWizard.Click += async (_, _) => await OpenNewWithWizardAsync();
+        LnkNewFromDrawing.Click += (_, _) => OpenNewFromDrawing();
         LnkLoadFile.Click += async (_, _) => await OpenFileDialogAsync();
 
         // Compound creation / data regression. Both tools work over a flowsheet, so a new
@@ -452,8 +453,10 @@ public partial class MainWindow : Window
 
         try
         {
+            // the list, or the copy from last time when the Case Library cannot be reached (note says so)
+            string note = null;
             var list = await System.Threading.Tasks.Task.Run(
-                () => DWSIM.SharedClasses.CaseLibraryFlowsheets.GetCaseLibraryFlowsheets());
+                () => DWSIM.SharedClasses.CaseLibraryFlowsheets.GetCaseLibraryFlowsheets(ref note));
 
             CaseLibraryList.Items.Clear();
 
@@ -463,13 +466,15 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (note != null) CaseLibraryList.Items.Add("(" + note + ")");
             foreach (var flowsheet in list)
                 CaseLibraryList.Items.Add(new CaseLibraryItem(flowsheet));
         }
         catch (Exception ex)
         {
             CaseLibraryList.Items.Clear();
-            CaseLibraryList.Items.Add("(Could not reach the Case Library: " + ex.Message + ")");
+            // the message names what failed and why
+            CaseLibraryList.Items.Add("(" + ex.Message + ")");
         }
     }
 
@@ -482,8 +487,13 @@ public partial class MainWindow : Window
 
         var info = item.Flowsheet;
 
+        // a case this DWSIM cannot open says what it needs
+        var missing = info.MissingComponents;
         var message = $"Title: {info.Title}\nCategory: {info.Category}\n\n" +
-                      "Download and open this case?";
+                      (missing.Count > 0
+                          ? "This case uses components of DWSIM Patreon Edition that this DWSIM does not have: " + string.Join(", ", missing) +
+                            ". It will not open here.\n\nDownload and try to open it anyway?"
+                          : "Download and open this case?");
 
         if (!await ConfirmAsync("Open Case Library Flowsheet", message)) return;
 
@@ -857,6 +867,39 @@ public partial class MainWindow : Window
     {
         var view = AddDocument("");
         await view.NewWithoutWizardAsync();
+    }
+
+    /// <summary>
+    /// A new, empty flowsheet with the Import Flowsheet from Drawing wizard (CAD Tools) open on it, to build the
+    /// flowsheet from a process flow diagram or a P&amp;ID.
+    /// </summary>
+    private async void OpenNewFromDrawing()
+    {
+        const string drawingImportId = "e7d93c50-2a1f-4b6e-9c84-5f0b3a7d1e62";
+        var importer = Extenders.SelectMany(c => c.Collection).OfType<IExtender>().FirstOrDefault(x => x.ID == drawingImportId);
+        if (importer == null)
+        {
+            await ConfirmAsync("Create New from PFD or P&ID", "The import from a PFD or P&ID is part of the CAD Tools extension, which was not found.", okOnly: true);
+            return;
+        }
+
+        // the import sets the compounds and the property package up from the drawing
+        var view = AddDocument("");
+        await view.NewWithoutWizardAsync();
+        if (view.FlowsheetObject == null) return;
+
+        if (importer is IExtender6 gui)
+        {
+            try { gui.SetFlowsheetGUI(view); } catch { }
+        }
+        importer.SetFlowsheet(view.FlowsheetObject);
+        // the "Loading databases" window closes on a posted call: open the wizard after it is gone, or the
+        // wizard takes that closing window as its owner and closes with it
+        global::Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            Activate();
+            importer.Run();
+        }, global::Avalonia.Threading.DispatcherPriority.Background);
     }
 
     private async System.Threading.Tasks.Task OpenFileDialogAsync()

@@ -174,7 +174,7 @@ namespace DWSIM.UI.Desktop.Editors
                 }
                 catch (Exception ex)
                 {
-                    fs.ShowMessage("Could not change the connection: " + ex.Message,
+                    fs.ShowMessage(simobj.GraphicObject.Tag + ": could not connect '" + newTag + "': " + ex.Message,
                         IFlowsheet.MessageType.GeneralError);
                     if (previousPartner != null && !connector.IsAttached)
                     {
