@@ -96,6 +96,8 @@
     <semi:SemiTheme Locale="en-US" />
     <DockFluentTheme DensityStyle="Normal" />
     <semi:DataGridSemiTheme />
+    <!-- ColorPicker templates ship separately from the base Semi theme. -->
+    <semi:ColorPickerSemiTheme />
     <!-- the script editor needs an explicit theme or it draws nothing -->
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
 

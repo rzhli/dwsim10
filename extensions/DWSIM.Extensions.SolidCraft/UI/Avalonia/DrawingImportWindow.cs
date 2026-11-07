@@ -69,7 +69,8 @@ namespace DWSIM.Extensions.SolidCraft
         CheckBox specs, useUnits, solve;
         Button build, fit;
         TextBlock summary;
-        StackPanel fitRow, fitChoices;
+        WrapPanel fitRow;
+        StackPanel fitChoices;
 
         public DrawingImportWindow(IFlowsheet fs)
         {
@@ -131,7 +132,7 @@ namespace DWSIM.Extensions.SolidCraft
             void Put(Control c, int row, int col, int span = 1) { Grid.SetRow(c, row); Grid.SetColumn(c, col); Grid.SetColumnSpan(c, span); g.Children.Add(c); }
             Put(Label("Drawing"), 0, 0); Put(file, 0, 1); Put(browse, 0, 2);
             Put(Label("Type"), 1, 0); Put(kind, 1, 1);
-            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { read, cancelRead, open, saveReading, work.Bar } } } }, 2, 0, 3);
+            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), WizardFrame.ActionRow(read, cancelRead, open, saveReading, work.Bar) } }, 2, 0, 3);
             Put(readStatus, 3, 0, 3);
             Put(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White, Child = preview }, 4, 0, 3);
             return g;
@@ -140,18 +141,14 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>The note that the reading needs a vision model, with a button to the AI Assistant's settings.</summary>
         Control VisionNote()
         {
-            var open = new Button { Content = "Open the AI Assistant settings", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+            var open = new Button { Content = "Open the AI Assistant settings", HorizontalAlignment = HorizontalAlignment.Left };
             var text = new TextBlock { Text = DrawingImportClient.VisionModelNote, TextWrapping = TextWrapping.Wrap, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center };
             open.Click += (_, _) =>
             {
                 var why = DrawingImportClient.OpenAssistantSettings(session.Flowsheet, false);
                 if (why != null) text.Text = why;
             };
-            var d = new DockPanel();
-            DockPanel.SetDock(open, Dock.Right);
-            d.Children.Add(open);
-            d.Children.Add(text);
-            return new StackPanel { Spacing = 4, Children = { d, work.ModelText } };
+            return new StackPanel { Spacing = UiScale.Size(4), Children = { text, open, work.ModelText } };
         }
 
         async Task BrowseDrawing()
@@ -454,14 +451,13 @@ namespace DWSIM.Extensions.SolidCraft
             ToolTip.SetTip(unitP, string.Join(", ", DrawingImportSession.PressureUnits));
             ToolTip.SetTip(unitW, string.Join(", ", DrawingImportSession.MassFlowUnits));
             ToolTip.SetTip(unitE, string.Join(", ", DrawingImportSession.EnergyUnits));
-            var units = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,*,Auto,*,Auto,*"), ColumnSpacing = 6 };
-            var k = 0;
+            var unitFields = new List<Control>();
             foreach (var (text, box) in new[] { ("Temperature", unitT), ("Pressure", unitP), ("Mass flow", unitW), ("Energy", unitE) })
             {
-                var l = Label(text);
-                Grid.SetColumn(l, k++); Grid.SetColumn(box, k++);
-                units.Children.Add(l); units.Children.Add(box);
+                box.MinWidth = UiScale.Size(60);
+                unitFields.Add(WizardFrame.Field(text, box));
             }
+            var units = WizardFrame.ActionRow(unitFields.ToArray());
 
             compounds = new ListBox { SelectionMode = SelectionMode.Multiple };
             found = new ListBox { SelectionMode = SelectionMode.Multiple };
@@ -481,7 +477,7 @@ namespace DWSIM.Extensions.SolidCraft
             var wizard = new Button { Content = "Simulation Wizard...", HorizontalAlignment = HorizontalAlignment.Stretch };
             wizard.Click += async (_, _) => await OpenSimulationWizard();
             var lists = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*"), RowDefinitions = new RowDefinitions("Auto,*"), ColumnSpacing = 8, RowSpacing = 4 };
-            var middle = new StackPanel { Spacing = 6, Width = 170, Children = { add, remove, wizard } };
+            var middle = new StackPanel { Spacing = 6, MinWidth = 170, Children = { add, remove, wizard } };
             Grid.SetRowSpan(compounds, 2); Grid.SetColumn(middle, 1); Grid.SetRowSpan(middle, 2);
             Grid.SetColumn(search, 2); Grid.SetColumn(found, 2); Grid.SetRow(found, 1);
             lists.Children.Add(compounds); lists.Children.Add(middle); lists.Children.Add(search); lists.Children.Add(found);
@@ -567,19 +563,14 @@ namespace DWSIM.Extensions.SolidCraft
             fitChoices = new StackPanel { Spacing = 2 };
             fit = new Button { Content = "Fit to the table", VerticalAlignment = VerticalAlignment.Center };
             fit.Click += async (_, _) => await FitFlowsheet();
-            fitRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal, Spacing = 14, IsVisible = false,
-                Children =
-                {
-                    new TextBlock { Text = "Fit what the drawing does not give\nto the stream table:", VerticalAlignment = VerticalAlignment.Center },
-                    new ScrollViewer { Content = fitChoices, MaxHeight = 90, MinWidth = 320 },
-                    fit,
-                },
-            };
+            fitRow = WizardFrame.ActionRow(
+                new TextBlock { Text = "Fit what the drawing does not give\nto the stream table:", TextWrapping = TextWrapping.Wrap },
+                new ScrollViewer { Content = fitChoices, MaxHeight = UiScale.Size(90), MinWidth = 320 },
+                fit);
+            fitRow.IsVisible = false;
             var g = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto,Auto,*"), RowSpacing = 6 };
             var top = new ScrollViewer { Content = issues };
-            var options = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Children = { specs, useUnits, solve, build } };
+            var options = WizardFrame.ActionRow(specs, useUnits, solve, build);
             var bottom = new ScrollViewer { Content = results };
             Grid.SetRow(options, 1); Grid.SetRow(summary, 2); Grid.SetRow(fitRow, 3); Grid.SetRow(bottom, 4);
             g.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Padding = new Thickness(6), Child = top });

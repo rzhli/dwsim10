@@ -111,7 +111,7 @@ namespace DWSIM.Extensions.SolidCraft
             var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"), RowSpacing = 6 };
             void Put(Control c, int row, int col, int span = 1) { Grid.SetRow(c, row); Grid.SetColumn(c, col); Grid.SetColumnSpan(c, span); g.Children.Add(c); }
             Put(Label("Isometric"), 0, 0); Put(file, 0, 1); Put(browse, 0, 2);
-            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { read, cancelRead, open, saveReading, work.Bar } } } }, 1, 0, 3);
+            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), WizardFrame.ActionRow(read, cancelRead, open, saveReading, work.Bar) } }, 1, 0, 3);
             Put(readStatus, 2, 0, 3);
             Put(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White, Child = preview }, 3, 0, 3);
             return g;
@@ -120,18 +120,14 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>The note that the reading needs a vision model, with a button to the AI Assistant's settings.</summary>
         Control VisionNote()
         {
-            var open = new Button { Content = "Open the AI Assistant settings", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+            var open = new Button { Content = "Open the AI Assistant settings", HorizontalAlignment = HorizontalAlignment.Left };
             var text = new TextBlock { Text = DrawingImportClient.VisionModelNote, TextWrapping = TextWrapping.Wrap, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center };
             open.Click += (_, _) =>
             {
                 var why = DrawingImportClient.OpenAssistantSettings(session.Flowsheet, false);
                 if (why != null) text.Text = why;
             };
-            var d = new DockPanel();
-            DockPanel.SetDock(open, Dock.Right);
-            d.Children.Add(open);
-            d.Children.Add(text);
-            return new StackPanel { Spacing = 4, Children = { d, work.ModelText } };
+            return new StackPanel { Spacing = UiScale.Size(4), Children = { text, open, work.ModelText } };
         }
 
         async Task Browse()
@@ -415,7 +411,7 @@ namespace DWSIM.Extensions.SolidCraft
             apply.Click += (_, _) => Apply();
             summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
             var g = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto,1.4*"), RowSpacing = 6 };
-            var options = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Children = { Label("Put the route in"), target, apply } };
+            var options = WizardFrame.ActionRow(WizardFrame.Field("Put the route in", target), apply);
             Grid.SetRow(options, 1); Grid.SetRow(summary, 2);
             g.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Padding = new Thickness(6), Child = new ScrollViewer { Content = checks } });
             g.Children.Add(options); g.Children.Add(summary);

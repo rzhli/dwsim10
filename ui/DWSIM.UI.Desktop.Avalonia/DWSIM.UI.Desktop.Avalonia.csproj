@@ -20,6 +20,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Semi.Avalonia" />
     <PackageReference Include="Semi.Avalonia.DataGrid" />
+    <PackageReference Include="Semi.Avalonia.ColorPicker" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="Avalonia.Controls.DataGrid" />
     <PackageReference Include="Avalonia.AvaloniaEdit" />
