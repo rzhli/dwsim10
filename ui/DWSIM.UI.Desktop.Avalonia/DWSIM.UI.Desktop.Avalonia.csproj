@@ -100,6 +100,8 @@
   <ItemGroup>
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\readme.txt" Link="readme.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\whatsnew.txt" Link="whatsnew.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The engine loads these records from addcomps beside the executable. -->
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\addcomps\*.json" Link="addcomps\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
