@@ -59,6 +59,88 @@ internal static class FlowsheetObjectIcons
     private static readonly ConditionalWeakTable<IGraphicObject, State> _state = new();
 
     /// <summary>
+    /// Keep supplied artwork, with consistent transparent margins for columns. An external
+    /// component without a thumbnail can still
+    /// preview its own drawing (for example the training fans, exchanger link and amine columns).
+    /// Render a separate instance so palette population never alters a simulation's graphic or
+    /// equipment state. This fallback is palette-only: the canvas keeps its live native drawing.
+    /// </summary>
+    public static byte[]? GetPaletteIconBytes(ISimulationObject obj)
+    {
+        try
+        {
+            var bytes = GetSuppliedIconBytes(obj);
+            if (bytes is { Length: > 0 }) return bytes;
+        }
+        catch { }
+
+        if (obj is not IExternalUnitOperation) return null;
+        try
+        {
+            if (Activator.CreateInstance(obj.GetType()) is not ISimulationObject preview
+                || preview is not IExternalUnitOperation external) return null;
+
+            var width = preview.GetPreferredGraphicObjectWidth();
+            var height = preview.GetPreferredGraphicObjectHeight();
+            if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+                return null;
+
+            preview.GraphicObject = new DWSIM.Drawing.SkiaSharp.GraphicObjects.Shapes.ExternalUnitOperationGraphic(
+                0, 0, Math.Max(1, (int)width), Math.Max(1, (int)height)) { Owner = preview };
+            using var bitmap = new SKBitmap(256, 256);
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Clear(SKColors.Transparent);
+            var scale = (float)(240 / Math.Max(width, height));
+            canvas.Translate((256 - (float)width * scale) / 2, (256 - (float)height * scale) / 2);
+            canvas.Scale(scale);
+            external.Draw(canvas);
+            using var image = SKImage.FromBitmap(bitmap);
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            return NormalizeColumnIcon(data.ToArray(), obj);
+        }
+        catch { return null; }
+    }
+
+    private static byte[]? GetSuppliedIconBytes(ISimulationObject obj)
+    {
+        var bytes = obj.GetIconBitmapBytes();
+        return bytes is { Length: > 0 } ? NormalizeColumnIcon(bytes, obj) : bytes;
+    }
+
+    /// <summary>Fit the visible column artwork into a common 240 px extent with an 8 px margin.
+    /// Trim transparent padding before fitting, keeping the original proportions and details.
+    /// Palette and Default-theme canvas use the same result; image resources remain untouched.</summary>
+    private static byte[] NormalizeColumnIcon(byte[] bytes, ISimulationObject obj)
+    {
+        if (obj.ObjectClass != Interfaces.Enums.SimulationObjectClass.Columns) return bytes;
+        using var source = SKBitmap.Decode(bytes);
+        if (source == null) return bytes;
+        int left = source.Width, top = source.Height, right = -1, bottom = -1;
+        var pixels = source.Pixels;
+        for (int y = 0; y < source.Height; y++)
+        for (int x = 0; x < source.Width; x++)
+        {
+            if (pixels[y * source.Width + x].Alpha <= 8) continue;
+            left = Math.Min(left, x); top = Math.Min(top, y);
+            right = Math.Max(right, x); bottom = Math.Max(bottom, y);
+        }
+        if (right < left || bottom < top) return bytes;
+
+        float width = right - left + 1, height = bottom - top + 1;
+        float scale = 240 / Math.Max(width, height);
+        float dw = width * scale, dh = height * scale;
+        using var bitmap = new SKBitmap(256, 256);
+        using var canvas = new SKCanvas(bitmap);
+        using var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
+        canvas.Clear(SKColors.Transparent);
+        canvas.DrawBitmap(source, new SKRect(left, top, right + 1, bottom + 1),
+            new SKRect((256 - dw) / 2, (256 - dh) / 2, (256 + dw) / 2, (256 + dh) / 2), paint);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    /// <summary>
     /// Streams are left alone: their graphic IS the connecting arrow, so an icon would hide where
     /// the material goes.
     /// </summary>
@@ -108,11 +190,13 @@ internal static class FlowsheetObjectIcons
     /// editable value box. Their whole point is the number they show, so they keep their native
     /// draw; blitting the palette photograph over them would freeze the needle and hide the value.
     /// </summary>
-    private static bool IsLiveReadout(Interfaces.Enums.GraphicObjects.ObjectType type) =>
-        type == Interfaces.Enums.GraphicObjects.ObjectType.Input ||
-        type == Interfaces.Enums.GraphicObjects.ObjectType.AnalogGauge ||
-        type == Interfaces.Enums.GraphicObjects.ObjectType.DigitalGauge ||
-        type == Interfaces.Enums.GraphicObjects.ObjectType.LevelGauge;
+    private static bool IsLiveReadout(IGraphicObject graphic) =>
+        // External instruments (such as Transmitter) use ObjectType.External.
+        graphic.Owner is IIndicator ||
+        graphic.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.Input ||
+        graphic.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.AnalogGauge ||
+        graphic.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.DigitalGauge ||
+        graphic.ObjectType == Interfaces.Enums.GraphicObjects.ObjectType.LevelGauge;
 
     /// <summary>
     /// The private SKImage cache each external unit operation passes ByRef to
@@ -184,7 +268,7 @@ internal static class FlowsheetObjectIcons
             try
             {
                 var gobj = so?.GraphicObject;
-                if (gobj == null || IsExcluded(gobj.ObjectType)) continue;
+                if (gobj == null || IsExcluded(gobj.ObjectType) || IsLiveReadout(gobj)) continue;
 
                 if (!_state.TryGetValue(gobj, out var state))
                 {
@@ -311,7 +395,7 @@ internal static class FlowsheetObjectIcons
         // readout, the switches draw their on/off state images and the gauges and inputs their
         // live reading - an icon blit would bury those, which is exactly why the controller's
         // dashed connections vanished when this override was installed.
-        if (IsLiveReadout(gobj.ObjectType)) return false;
+        if (IsLiveReadout(gobj)) return false;
         if (GraphicHasOwnArtwork(gobj.GetType())) return false;
 
         // ShapeGraphics with an embedded photo would otherwise fall through to the native
@@ -328,7 +412,7 @@ internal static class FlowsheetObjectIcons
             // palette artwork straight from the simulation object
             try
             {
-                var bytes = gobj.Owner.GetIconBitmapBytes();
+                var bytes = GetSuppliedIconBytes(gobj.Owner);
                 icon = Decode(bytes);
                 if (icon != null && state != null) { state.PaletteIcon = icon; state.PaletteTried = true; }
             }
@@ -421,7 +505,7 @@ internal static class FlowsheetObjectIcons
         if (state.PaletteTried) return;
         state.PaletteTried = true;
         byte[]? bytes = null;
-        try { bytes = so.GetIconBitmapBytes(); } catch { }
+        try { bytes = GetSuppliedIconBytes(so); } catch { }
         state.PaletteIcon = Decode(bytes);
     }
 

@@ -3083,68 +3083,28 @@ public partial class FlowsheetView : UserControl
         {
             // ---- No object selected: show canvas menu ----
 
-            // Add Object submenu - use engine objects when available
+            // Reuse the palette's categories and visibility rules for every insertion entry point.
             var addObjMenu = new MenuItem { Header = "Add New Object", Icon = IconHelper.MIcon("➕") }; // plus
-
-            if (_flowsheet?.AvailableSimulationObjects != null && _flowsheet.AvailableSimulationObjects.Count > 0)
+            foreach (var category in OrderedPaletteCategories())
             {
-                // Build from engine ObjectList (like Eto does)
-                foreach (var kvp in _flowsheet.AvailableSimulationObjects.OrderBy(x => x.Key))
+                var catMenu = new MenuItem { Header = category };
+                foreach (var item in _paletteCategories[category])
                 {
-                    var displayName = kvp.Key;
+                    var displayName = item.name;
                     var mi = new MenuItem { Header = displayName };
+                    if (!string.IsNullOrWhiteSpace(item.tip))
+                        ToolTip.SetTip(mi, item.tip);
                     mi.Click += (_, _) =>
                     {
-                        var centerX = (int)(Canvas.Bounds.Width / 2);
-                        var centerY = (int)(Canvas.Bounds.Height / 2);
-                        if (_surface != null)
-                        {
-                            centerX = (int)(_surface.Size.Width / 2);
-                            centerY = (int)(_surface.Size.Height / 2);
-                        }
+                        var (centerX, centerY) = ViewCenter();
                         AddPaletteObject(displayName, centerX, centerY);
                         Canvas.Refresh();
                         UpdateResultsPanel();
                         AppendLog($"Added '{displayName}'.");
                     };
-                    addObjMenu.Items.Add(mi);
+                    catMenu.Items.Add(mi);
                 }
-            }
-            else
-            {
-                // Static fallback
-                var categories = new (string header, string[] items)[]
-                {
-                    ("Streams", new[] { "Material Stream", "Energy Stream" }),
-                    ("Pressure Changers", new[] { "Valve", "Pump", "Compressor", "Expander" }),
-                    ("Separators", new[] { "Flash Vessel", "Distillation Column" }),
-                    ("Mixers/Splitters", new[] { "Mixer", "Splitter" }),
-                    ("Heat Exchangers", new[] { "Heater", "Cooler", "Heat Exchanger" }),
-                    ("Reactors", new[] { "Conversion Reactor", "Equilibrium Reactor", "Gibbs Reactor" }),
-                    ("Logical", new[] { "Recycle", "Adjust", "Spec" }),
-                };
-                foreach (var (catHeader, items) in categories)
-                {
-                    var catMenu = new MenuItem { Header = catHeader };
-                    foreach (var itemName in items)
-                    {
-                        var mi = new MenuItem { Header = itemName };
-                        var captured = itemName;
-                        mi.Click += (_, _) =>
-                        {
-                            var type = PaletteNameToObjectType(captured);
-                            if (type == null || _flowsheet == null) return;
-                            var centerX = (int)(Canvas.Bounds.Width / 2);
-                            var centerY = (int)(Canvas.Bounds.Height / 2);
-                            _flowsheet.AddObject(type.Value, centerX, centerY, captured);
-                            Canvas.Refresh();
-                            UpdateResultsPanel();
-                            AppendLog($"Added '{captured}'.");
-                        };
-                        catMenu.Items.Add(mi);
-                    }
-                    addObjMenu.Items.Add(catMenu);
-                }
+                addObjMenu.Items.Add(catMenu);
             }
             ctx.Items.Add(addObjMenu);
 
@@ -3308,7 +3268,7 @@ public partial class FlowsheetView : UserControl
     }
 
     // -------------------------------------------------------------------------
-    // Object palette population (ComboBox category selector + ListBox with icons)
+    // Object palette population (collapsible process categories with icons)
     // -------------------------------------------------------------------------
 
     /// <summary>Category name -> palette artwork, description and relative symbol size.</summary>
@@ -3319,25 +3279,20 @@ public partial class FlowsheetView : UserControl
     {
         ("Streams",           new[] { "Material Stream", "Energy Stream", "Information Stream" }),
         ("Pressure Changers", new[] { "Valve", "Pump", "Compressor", "Expander", "Pipe Segment" }),
-        ("Separators",        new[] { "Flash Vessel", "Filter", "Short-cut Column" }),
+        ("Separators",        new[] { "Flash Vessel" }),
         ("Mixers/Splitters",  new[] { "Mixer", "Splitter" }),
         ("Heat Exchangers",   new[] { "Heater", "Cooler", "Heat Exchanger" }),
-        ("Columns",           new[] { "Distillation Column", "Absorption Column", "Refluxed Absorber", "Reboiled Absorber" }),
+        ("Columns",           new[] { "Distillation Column", "Absorption Column", "Refluxed Absorber", "Reboiled Absorber", "Short-cut Column" }),
         ("Reactors",          new[] { "Conversion Reactor", "Equilibrium Reactor", "Gibbs Reactor", "PFR Reactor", "CSTR Reactor" }),
         ("Solids",            new[] { "Filter" }),
         ("Logical",           new[] { "Recycle", "Energy Recycle", "Adjust", "Spec", "PID Controller", "Switch", "Input" }),
         ("Other",             new[] { "Text Block", "Property Table", "Chart Object", "Spreadsheet Table", "Master Table" }),
     };
 
-    /// <summary>Section order matching the classic WinForms palette (SimulationObjectsPanel):
-    /// the TableLayoutPanel rows put the groups in this sequence. Categories not listed here
-    /// (should be none) are appended at the end.</summary>
+    /// <summary>Functional section order shared by the palette and the canvas insertion menu.</summary>
     private static readonly string[] CategoryOrder =
     {
         "Streams",
-        "Refining",
-        "Biochemical",
-        "Premium",
         "Pressure Changers",
         "Separators",
         "Mixers/Splitters",
@@ -3353,8 +3308,22 @@ public partial class FlowsheetView : UserControl
         "Other",
     };
 
-    /// <summary>Maps every ObjectClass enum member to a palette category name. The enum in
-    /// DWSIM.Interfaces has 22 members: any left unmapped would collapse into "Other".</summary>
+    private IEnumerable<string> OrderedPaletteCategories() =>
+        CategoryOrder.Where(_paletteCategories.ContainsKey)
+            .Concat(_paletteCategories.Keys.Where(k => !CategoryOrder.Contains(k))
+                .OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase));
+
+    private static string GetPaletteCategory(Interfaces.ISimulationObject obj)
+    {
+        // WaterElectrolyzer inherits the clean-power base class but consumes power.
+        // Keep this presentation correction out of serialized component metadata.
+        if (obj is DWSIM.UnitOperations.UnitOperations.WaterElectrolyzer)
+            return "Electrolyzers";
+        return ObjectClassToCategory(obj.ObjectClass);
+    }
+
+    /// <summary>Use the declared process function. Legacy edition/industry-only classes and
+    /// unknown classes fall back to Other until the component declares a functional class.</summary>
     private static string ObjectClassToCategory(Interfaces.Enums.SimulationObjectClass cls) => cls switch
     {
         Interfaces.Enums.SimulationObjectClass.Streams          => "Streams",
@@ -3374,21 +3343,51 @@ public partial class FlowsheetView : UserControl
         Interfaces.Enums.SimulationObjectClass.Inputs           => "Logical",
         Interfaces.Enums.SimulationObjectClass.CleanPowerSources => "Clean Power",
         Interfaces.Enums.SimulationObjectClass.Electrolyzers    => "Electrolyzers",
-        Interfaces.Enums.SimulationObjectClass.Premium          => "Premium",
-        Interfaces.Enums.SimulationObjectClass.Refinery         => "Refining",
-        Interfaces.Enums.SimulationObjectClass.Bio              => "Biochemical",
         _                                                       => "Other"
     };
 
+    private static string GetPaletteDescription(Interfaces.ISimulationObject obj)
+    {
+        var details = new List<string>();
+        try
+        {
+            var description = obj.GetDisplayDescription();
+            if (!string.IsNullOrWhiteSpace(description)) details.Add(description);
+        }
+        catch { }
+
+        // Edition, industry and vendor are metadata, never a replacement for process function.
+        foreach (var (flag, legacyClass, label) in new[]
+        {
+            ("IsPremium", Interfaces.Enums.SimulationObjectClass.Premium, "Edition: Premium"),
+            ("IsRefining", Interfaces.Enums.SimulationObjectClass.Refinery, "Application: Refining"),
+            ("IsBio", Interfaces.Enums.SimulationObjectClass.Bio, "Application: Biochemical")
+        })
+        {
+            var enabled = obj.ObjectClass == legacyClass;
+            try { enabled |= obj.GetType().GetProperty(flag)?.GetValue(obj) is true; }
+            catch { }
+            if (enabled) details.Add(label);
+        }
+
+        var thirdParty = DWSIM.SharedClasses.Utility.GetThirdPartyPaletteGroup(obj);
+        if (thirdParty.IsThirdParty)
+            details.Add(string.IsNullOrWhiteSpace(thirdParty.GroupName)
+                ? "Source: Third-Party" : $"Source: {thirdParty.GroupName}");
+        return string.Join(Environment.NewLine, details);
+    }
+
     private static double GetPaletteIconScale(ObjectType objectType,
-        Interfaces.Enums.SimulationObjectClass objectClass = Interfaces.Enums.SimulationObjectClass.None)
+        Interfaces.Enums.SimulationObjectClass objectClass = Interfaces.Enums.SimulationObjectClass.None,
+        string? componentType = null)
     {
         // Instrument thumbnails share the compact Controller Block size in the Logical palette.
         if (objectType is ObjectType.AnalogGauge or ObjectType.DigitalGauge
-            or ObjectType.OT_InformationCarrier or ObjectType.LevelGauge)
+            or ObjectType.OT_InformationCarrier or ObjectType.LevelGauge
+            || objectClass == Interfaces.Enums.SimulationObjectClass.Indicators)
             objectType = ObjectType.OT_Adjust;
 
-        return DWSIM.Drawing.SkiaSharp.GraphicObjects.GraphicObjectSizing.GetScale(objectType, objectClass);
+        return DWSIM.Drawing.SkiaSharp.GraphicObjects.GraphicObjectSizing.GetScale(objectType, objectClass, componentType);
     }
 
     private void PopulatePalette()
@@ -3410,38 +3409,12 @@ public partial class FlowsheetView : UserControl
                 catch { }
 
                 var displayName = obj.GetDisplayName();
-                var category = ObjectClassToCategory(obj.ObjectClass);
+                var category = GetPaletteCategory(obj);
 
-                // A third-party unit operation (loaded from unitops\, neither open nor Plus) is
-                // grouped under its own ProductName, or a shared "Third-Party" section when it
-                // does not override one. Otherwise fall through to the normal grouping below.
-                var thirdParty = DWSIM.SharedClasses.Utility.GetThirdPartyPaletteGroup(obj);
-                if (thirdParty.IsThirdParty)
-                {
-                    category = string.IsNullOrEmpty(thirdParty.GroupName) ? "Third-Party" : thirdParty.GroupName;
-                }
-                else
-                {
-                    // External unit operations (bio, refining, premium) reuse generic ObjectClass
-                    // values (Reactors, Exchangers, Logical...). The classic palette
-                    // (SimulationObjectsPanel) reroutes them to their own sections via the
-                    // IsPremium/IsRefining/IsBio reflection flags; mirror that here so the
-                    // Premium, Refining and Biochemical tabs appear.
-                    try
-                    {
-                        var t = obj.GetType();
-                        if (t.GetProperty("IsPremium")?.GetValue(obj) is bool p && p) category = "Premium";
-                        if (t.GetProperty("IsRefining")?.GetValue(obj) is bool r && r) category = "Refining";
-                        if (t.GetProperty("IsBio")?.GetValue(obj) is bool b && b) category = "Biochemical";
-                    }
-                    catch { }
-                }
-                byte[]? iconBytes = null;
-                try { iconBytes = obj.GetIconBitmapBytes(); } catch { }
-                string? tip = null;
-                try { tip = obj.GetDisplayDescription(); } catch { }
+                var iconBytes = FlowsheetObjectIcons.GetPaletteIconBytes(obj);
+                var tip = GetPaletteDescription(obj);
                 var objectType = obj.GraphicObject?.ObjectType ?? PaletteNameToObjectType(displayName) ?? ObjectType.External;
-                var iconScale = GetPaletteIconScale(objectType, obj.ObjectClass);
+                var iconScale = GetPaletteIconScale(objectType, obj.ObjectClass, obj.GetType().FullName);
 
                 if (!_paletteCategories.ContainsKey(category))
                     _paletteCategories[category] = new List<(string, byte[]?, string?, double)>();
@@ -3470,14 +3443,8 @@ public partial class FlowsheetView : UserControl
                 GetPaletteIconScale(ObjectType.DistillationColumn)));
         }
 
-        // Build collapsible sections for each category, in the classic palette order, with any
-        // third-party product groups appended after the built-ins (alphabetical) and the shared
-        // "Third-Party" catch-all last.
-        var extras = _paletteCategories.Keys.Where(k => !CategoryOrder.Contains(k)).ToList();
-        var orderedCats = CategoryOrder.Where(_paletteCategories.ContainsKey)
-            .Concat(extras.Where(k => k != "Third-Party").OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase))
-            .Concat(extras.Where(k => k == "Third-Party"));
-        foreach (var cat in orderedCats)
+        // Each visible component appears once, in its functional category.
+        foreach (var cat in OrderedPaletteCategories())
         {
             var items = _paletteCategories[cat];
 
@@ -3536,7 +3503,7 @@ public partial class FlowsheetView : UserControl
                     Tag = name
                 };
 
-                // Hover tooltip: the object description, as in the classic UI.
+                // Hover tooltip retains the description and optional edition/source metadata.
                 if (!string.IsNullOrWhiteSpace(tip))
                     global::Avalonia.Controls.ToolTip.SetTip(cell, tip);
 

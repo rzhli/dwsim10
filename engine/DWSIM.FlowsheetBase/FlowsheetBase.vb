@@ -2226,7 +2226,7 @@ Imports DWSIM.ExtensionMethods
             gObj.Owner = SimulationObjects(gObj.Name)
             'Apply the size tier once at creation, before positioning ports or adding streams.
             'Saved layouts and subsequent manual resizing retain their explicit dimensions.
-            Dim symbolScale = GraphicObjectSizing.GetScale(type, gObj.Owner.ObjectClass)
+            Dim symbolScale = GraphicObjectSizing.GetScale(type, gObj.Owner.ObjectClass, gObj.Owner.GetType().FullName)
             gObj.SetSize(New SKSize(CInt(gObj.Width * symbolScale), CInt(gObj.Height * symbolScale)))
             gObj.PositionConnectors()
             'External unit operations are identified by the graphic's description when the

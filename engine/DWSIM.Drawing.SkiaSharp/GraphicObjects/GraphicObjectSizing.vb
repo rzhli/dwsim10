@@ -14,6 +14,21 @@ Namespace GraphicObjects
 
         Public Shared Function GetScale(objectType As ObjectType,
                                         Optional objectClass As SimulationObjectClass = SimulationObjectClass.None) As Double
+            Return GetScale(objectType, objectClass, Nothing)
+        End Function
+
+        Public Shared Function GetScale(objectType As ObjectType, objectClass As SimulationObjectClass,
+                                        componentType As String) As Double
+            'Two-sided exchangers use the same tier as the built-in heat exchanger. Other
+            'external heating/cooling equipment keeps the Heater/Cooler tier below.
+            If objectClass = SimulationObjectClass.Exchangers Then
+                Select Case componentType
+                    Case "DWSIM.UnitOperations.AdvancedHeatExchanger.AdvancedHeatExchanger",
+                         "DWSIM.Extensions.OperatorTraining.ProcessModels.ExchangerLink"
+                        Return GetScale(ObjectType.HeatExchanger)
+                End Select
+            End If
+
             Select Case objectType
                 'Streams and live instruments have their own aspect ratios and text layout.
                 Case ObjectType.MaterialStream, ObjectType.EnergyStream, ObjectType.OT_InformationCarrier,
@@ -87,7 +102,7 @@ Namespace GraphicObjects
                         Continue For
                 End Select
 
-                Dim size = CInt(50 * GetScale(graphic.ObjectType, graphic.Owner.ObjectClass))
+                Dim size = CInt(50 * GetScale(graphic.ObjectType, graphic.Owner.ObjectClass, graphic.Owner.GetType().FullName))
                 If graphic.Width <> size OrElse graphic.Height <> size Then changes.Add((graphic, size))
             Next
 
