@@ -41,15 +41,7 @@ namespace DWSIM.Extensions.SolidCraft
         const string BatteryLimit = "(battery limit)";
 
         readonly DrawingImportSession session;
-        readonly ListBox steps = new ListBox();
-        readonly TextBlock stepTitle = new TextBlock { FontWeight = FontWeight.SemiBold, FontSize = UiScale.Font(15) };
-        readonly TextBlock stepText = new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.85, Margin = new Thickness(0, 2, 0, 8) };
-        readonly ContentControl host = new ContentControl();
-        readonly Button back = new Button { Content = "< Back", MinWidth = 90 };
-        readonly Button next = new Button { Content = "Next >", MinWidth = 90 };
-        readonly Button close = new Button { Content = "Close", MinWidth = 90 };
-        Control[] pages;
-        int page;
+        readonly WizardFrame frame;
         bool loading;
         CancellationTokenSource reading;
         Bitmap overview;
@@ -59,6 +51,7 @@ namespace DWSIM.Extensions.SolidCraft
         ComboBox kind;
         Button read, cancelRead, saveReading;
         TextBlock readStatus;
+        WorkIndicator work;
         Image preview;
 
         // equipment and lines pages
@@ -84,59 +77,32 @@ namespace DWSIM.Extensions.SolidCraft
             Title = "Import a Flowsheet from a Drawing";
             Width = 1180;
             Height = 780;
-            Content = Build();
-            ShowPage(0);
+            frame = new WizardFrame(() => Close(), DrawingImportSession.Steps, DrawingImportSession.StepTexts,
+                new[] { DrawingPage(), ItemsPage(), LinesPage(), ProcessPage(), BuildPage() },
+                "Nothing is added to the simulation until the flowsheet is built on the last step.")
+            {
+                Ready = () => session.Reading != null && reading == null,
+                // the process page's choices are taken when it is left, forwards or back
+                Leaving = (from, to) => { if (from == 3) TakeProcessPage(); },
+                Entered = p =>
+                {
+                    switch (p)
+                    {
+                        case 1: FillItems(); break;
+                        case 2: FillLines(); break;
+                        case 3: FillProcess(); break;
+                        case 4: FillChecks(); break;
+                    }
+                },
+            };
+            Content = frame.Build();
+            Closing += (_, _) => reading?.Cancel();
+            frame.Show(0);
+            frame.NextAllowed = false;
+            work.ShowModel();
         }
 
         static TextBlock Label(string text) => new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-
-        Control Build()
-        {
-            steps.ItemsSource = DrawingImportSession.Steps.Select((s, i) => (i + 1) + ". " + s).ToList();
-            steps.Width = 170;
-            steps.SelectionChanged += (_, _) => { if (!loading && steps.SelectedIndex >= 0 && steps.SelectedIndex != page) ShowPage(steps.SelectedIndex); };
-            back.Click += (_, _) => ShowPage(Math.Max(0, page - 1));
-            next.Click += (_, _) => ShowPage(Math.Min(4, page + 1));
-            close.Click += (_, _) => { reading?.Cancel(); Close(); };
-            pages = new[] { DrawingPage(), ItemsPage(), LinesPage(), ProcessPage(), BuildPage() };
-
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Margin = new Thickness(0, 8, 0, 0), Children = { close, back, next } };
-            var right = new DockPanel { Margin = new Thickness(12, 0, 0, 0) };
-            var header = new StackPanel { Children = { stepTitle, stepText } };
-            DockPanel.SetDock(header, Dock.Top);
-            right.Children.Add(header);
-            right.Children.Add(host);
-            var root = new DockPanel { Margin = new Thickness(12) };
-            DockPanel.SetDock(buttons, Dock.Bottom);
-            DockPanel.SetDock(steps, Dock.Left);
-            root.Children.Add(buttons);
-            root.Children.Add(steps);
-            root.Children.Add(right);
-            return root;
-        }
-
-        void ShowPage(int p)
-        {
-            if (session.Reading == null) p = 0;
-            if (page == 3 && p != 3) TakeProcessPage();
-            page = p;
-            host.Content = pages[p];
-            stepTitle.Text = DrawingImportSession.Steps[p];
-            stepText.Text = DrawingImportSession.StepTexts[p];
-            loading = true;
-            steps.SelectedIndex = p;
-            loading = false;
-            back.IsEnabled = p > 0;
-            next.IsVisible = p < 4;
-            next.IsEnabled = session.Reading != null && reading == null;
-            switch (p)
-            {
-                case 1: FillItems(); break;
-                case 2: FillLines(); break;
-                case 3: FillProcess(); break;
-                case 4: FillChecks(); break;
-            }
-        }
 
         IStorageProvider Storage => TopLevel.GetTopLevel(this)?.StorageProvider;
 
@@ -152,19 +118,20 @@ namespace DWSIM.Extensions.SolidCraft
             read = new Button { Content = "Read the drawing", IsEnabled = false };
             read.Click += async (_, _) => await Read();
             cancelRead = new Button { Content = "Cancel", IsEnabled = false };
-            cancelRead.Click += (_, _) => reading?.Cancel();
+            cancelRead.Click += (_, _) => CancelRead();
             var open = new Button { Content = "Open a saved reading..." };
             open.Click += async (_, _) => await OpenReading();
             saveReading = new Button { Content = "Save the reading...", IsEnabled = false };
             saveReading.Click += async (_, _) => await SaveReading();
             readStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
+            work = new WorkIndicator(readStatus);
             preview = new Image { Stretch = Stretch.Uniform };
 
             var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,*"), RowSpacing = 6 };
             void Put(Control c, int row, int col, int span = 1) { Grid.SetRow(c, row); Grid.SetColumn(c, col); Grid.SetColumnSpan(c, span); g.Children.Add(c); }
             Put(Label("Drawing"), 0, 0); Put(file, 0, 1); Put(browse, 0, 2);
             Put(Label("Type"), 1, 0); Put(kind, 1, 1);
-            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { read, cancelRead, open, saveReading } } } }, 2, 0, 3);
+            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { read, cancelRead, open, saveReading, work.Bar } } } }, 2, 0, 3);
             Put(readStatus, 3, 0, 3);
             Put(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White, Child = preview }, 4, 0, 3);
             return g;
@@ -184,7 +151,7 @@ namespace DWSIM.Extensions.SolidCraft
             DockPanel.SetDock(open, Dock.Right);
             d.Children.Add(open);
             d.Children.Add(text);
-            return d;
+            return new StackPanel { Spacing = 4, Children = { d, work.ModelText } };
         }
 
         async Task BrowseDrawing()
@@ -213,21 +180,30 @@ namespace DWSIM.Extensions.SolidCraft
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            var started = DateTime.Now;
+            work.Start("Checking the AI Assistant's model");
             try
             {
-                await Task.Run(() => session.Read(token, s => Dispatcher.UIThread.Post(() => readStatus.Text = s)));
-                readStatus.Text = string.Format(CultureInfo.CurrentCulture, "{0} items and {1} lines read in {2:0} s. Check them on the next pages.",
-                    session.Reading.Items.Count, session.Reading.Lines.Count, (DateTime.Now - started).TotalSeconds);
+                var model = await work.Model(token, "a drawing");
+                if (model == null) { read.Content = "Read with the local model"; return; }
+                read.Content = "Read the drawing";
+                await Task.Run(() => session.Read(token, s => Dispatcher.UIThread.Post(() => { if (!token.IsCancellationRequested) work.Step(s); })));
+                work.Step("Matching the compounds and the property package");
+                session.Propose();
+                work.Stop();
+                readStatus.Text = string.Format(CultureInfo.CurrentCulture, "{0} items and {1} lines read by {3} in {2}. Check them on the next pages.",
+                    session.Reading.Items.Count, session.Reading.Lines.Count, DrawingImportClient.Elapsed(work.Elapsed), model);
                 Loaded();
             }
             catch (Exception ex) when (token.IsCancellationRequested || ex is OperationCanceledException)
             {
+                work.Stop();
                 readStatus.Text = "Reading cancelled.";
             }
             catch (Exception ex)
             {
-                readStatus.Text = "The drawing could not be read: " + ex.GetBaseException().Message;
+                work.Stop();
+                readStatus.Text = "The drawing could not be read: " + ex.GetBaseException().Message + " (the details are in the flowsheet's log)";
+                session.Flowsheet.ShowMessage("Import Flowsheet from Drawing: " + ex, IFlowsheet.MessageType.GeneralError);
             }
             finally
             {
@@ -236,12 +212,20 @@ namespace DWSIM.Extensions.SolidCraft
             }
         }
 
+        void CancelRead()
+        {
+            if (reading == null) return;
+            reading.Cancel();
+            cancelRead.IsEnabled = false;
+            work.Step("Cancelling");
+        }
+
         void SetBusy(bool busy)
         {
             read.IsEnabled = !busy && File.Exists((file.Text ?? "").Trim());
             cancelRead.IsEnabled = busy;
             saveReading.IsEnabled = !busy && session.Reading != null;
-            next.IsEnabled = !busy && session.Reading != null;
+            frame.NextAllowed = !busy && session.Reading != null;
         }
 
         async Task OpenReading()
@@ -644,7 +628,6 @@ namespace DWSIM.Extensions.SolidCraft
                 session.Build(solve.IsChecked == true, s => summary.Text = s + "...");
                 summary.Text = session.Summary();
                 Show(results, session.Built.Issues.Concat(session.Solve));
-                close.Content = "Finish";
                 FillFit();
             }
             catch (Exception ex)
@@ -672,7 +655,8 @@ namespace DWSIM.Extensions.SolidCraft
             reading = new CancellationTokenSource();
             var token = reading.Token;
             fit.Content = "Stop";
-            fitChoices.IsEnabled = back.IsEnabled = close.IsEnabled = false;
+            fitChoices.IsEnabled = false;
+            frame.Lock(true);
             try
             {
                 await Task.Run(() => session.Fit(token, s => Dispatcher.UIThread.Post(() => summary.Text = s.Trim())));
@@ -691,7 +675,8 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 reading = null;
                 fit.Content = "Fit to the table";
-                fitChoices.IsEnabled = back.IsEnabled = close.IsEnabled = true;
+                fitChoices.IsEnabled = true;
+                frame.Lock(false);
             }
         }
 
@@ -803,6 +788,7 @@ namespace DWSIM.Extensions.SolidCraft
             catch (Exception ex)
             {
                 Console.WriteLine("Drawing import: " + ex);
+                try { fs.ShowMessage("Import Flowsheet from Drawing could not open: " + ex.GetBaseException().Message, IFlowsheet.MessageType.GeneralError); } catch { }
             }
         }
     }

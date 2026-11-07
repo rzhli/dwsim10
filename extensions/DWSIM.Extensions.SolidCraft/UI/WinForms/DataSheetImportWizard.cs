@@ -22,6 +22,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using AeroWizard;
 using DWSIM.ExtensionMethods;
 using DWSIM.Interfaces;
 
@@ -32,7 +33,7 @@ namespace DWSIM.Extensions.SolidCraft
     {
         readonly DataSheetImportSession session;
         CancellationTokenSource reading;
-        int page;
+        WorkIndicator work;
         bool loading;
 
         public DataSheetImportWizard(IFlowsheet fs)
@@ -44,46 +45,26 @@ namespace DWSIM.Extensions.SolidCraft
         private void DataSheetImportWizard_Load(object sender, EventArgs e)
         {
             this.ChangeDefaultFont();
-            lstSteps.Items.AddRange(DataSheetImportSession.Steps.Select((s, i) => (object)((i + 1) + ". " + s)).ToArray());
             colFieldKey.Items.AddRange(DataSheetImportSession.Keys.Cast<object>().ToArray());
-            ShowPage(0);
+            wpDrawing.AllowNext = false;
+            work = new WorkIndicator(lblReadStatus, prgRead) { ModelLabel = lblModel };
+            work.ShowModel();
         }
 
         #region pages
 
-        void ShowPage(int p)
+        private void wpValues_Initialize(object sender, WizardPageInitEventArgs e) => FillValues();
+
+        /// <summary>The edits on the values page are taken when it is left, forwards or back.</summary>
+        private void wpValues_Commit(object sender, WizardPageConfirmEventArgs e) => TakeValues();
+
+        private void wpEquipment_Initialize(object sender, WizardPageInitEventArgs e) => FillEquipment();
+
+        private void DataSheetImportWizard_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (session.Reading == null) p = 0;
-            if (page == 1 && p != 1) TakeValues();
-            page = p;
-            tlpDrawing.Visible = p == 0;
-            tlpValues.Visible = p == 1;
-            tlpEquipment.Visible = p == 2;
-            lblStepTitle.Text = DataSheetImportSession.Steps[p];
-            lblStepText.Text = DataSheetImportSession.StepTexts[p];
-            loading = true;
-            lstSteps.SelectedIndex = p;
-            loading = false;
-            btnBack.Enabled = p > 0;
-            btnNext.Visible = p < 2;
-            btnNext.Enabled = session.Reading != null && reading == null;
-            if (p == 1) FillValues();
-            if (p == 2) FillEquipment();
+            reading?.Cancel();
+            work?.Dispose();
         }
-
-        private void btnNext_Click(object sender, EventArgs e) => ShowPage(Math.Min(2, page + 1));
-
-        private void btnBack_Click(object sender, EventArgs e) => ShowPage(Math.Max(0, page - 1));
-
-        private void btnClose_Click(object sender, EventArgs e) => Close();
-
-        private void lstSteps_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            if (loading || lstSteps.SelectedIndex < 0 || lstSteps.SelectedIndex == page) return;
-            ShowPage(lstSteps.SelectedIndex);
-        }
-
-        private void DataSheetImportWizard_FormClosing(object sender, FormClosingEventArgs e) => reading?.Cancel();
 
         #endregion
 
@@ -111,6 +92,7 @@ namespace DWSIM.Extensions.SolidCraft
         {
             var why = DrawingImportClient.OpenAssistantSettings(session.Flowsheet, true);
             if (why != null) MessageBox.Show(this, why, Text);
+            work.ShowModel();
         }
 
         private async void btnRead_Click(object sender, EventArgs e)
@@ -119,21 +101,29 @@ namespace DWSIM.Extensions.SolidCraft
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            var started = DateTime.Now;
+            work.Start("Checking the AI Assistant's model");
             try
             {
-                await Task.Run(() => session.Read(token, s => BeginInvoke((Action)(() => lblReadStatus.Text = s))));
-                lblReadStatus.Text = string.Format(CultureInfo.CurrentCulture, "A {0} data sheet ({1}), {2} values read in {3:0} s. Check them on the next page.",
-                    session.Reading.EquipmentType.Replace("_", " "), session.Reading.Tag, session.Reading.Fields.Count, (DateTime.Now - started).TotalSeconds);
+                var model = await work.Model(token, "a data sheet");
+                if (model == null) { btnRead.Text = "Read with the local model"; return; }
+                btnRead.Text = "Read the data sheet";
+                await Task.Run(() => session.Read(token, s => BeginInvoke((Action)(() => { if (!token.IsCancellationRequested) work.Step(s); }))));
+                session.Loaded();
+                work.Stop();
+                lblReadStatus.Text = string.Format(CultureInfo.CurrentCulture, "A {0} data sheet ({1}), {2} values read by {4} in {3}. Check them on the next page.",
+                    session.Reading.EquipmentType.Replace("_", " "), session.Reading.Tag, session.Reading.Fields.Count, DrawingImportClient.Elapsed(work.Elapsed), model);
                 Loaded();
             }
             catch (Exception ex) when (token.IsCancellationRequested || ex is OperationCanceledException)
             {
+                work.Stop();
                 lblReadStatus.Text = "Reading cancelled.";
             }
             catch (Exception ex)
             {
-                lblReadStatus.Text = "The data sheet could not be read: " + ex.GetBaseException().Message;
+                work.Stop();
+                lblReadStatus.Text = "The data sheet could not be read: " + ex.GetBaseException().Message + " (the details are in the flowsheet's log)";
+                session.Flowsheet.ShowMessage("Set Equipment up from Data Sheet: " + ex, IFlowsheet.MessageType.GeneralError);
             }
             finally
             {
@@ -156,11 +146,16 @@ namespace DWSIM.Extensions.SolidCraft
             btnOpenReading.Enabled = !busy;
             btnSaveReading.Enabled = !busy && session.Reading != null;
             btnBrowse.Enabled = !busy;
-            btnNext.Enabled = !busy && session.Reading != null;
-            UseWaitCursor = busy;
+            wpDrawing.AllowNext = !busy && session.Reading != null;
         }
 
-        private void btnCancelRead_Click(object sender, EventArgs e) => reading?.Cancel();
+        private void btnCancelRead_Click(object sender, EventArgs e)
+        {
+            if (reading == null) return;
+            reading.Cancel();
+            btnCancelRead.Enabled = false;
+            work?.Step("Cancelling");
+        }
 
         private void btnOpenReading_Click(object sender, EventArgs e)
         {
@@ -181,7 +176,7 @@ namespace DWSIM.Extensions.SolidCraft
         private void btnSaveReading_Click(object sender, EventArgs e)
         {
             if (session.Reading == null) return;
-            if (page == 1) TakeValues();
+            if (wizard.SelectedPage == wpValues) TakeValues();
             using (var d = new SaveFileDialog { Filter = "Data sheet readings (*.json)|*.json", FileName = Path.GetFileNameWithoutExtension(session.File) + " - reading.json" })
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
@@ -332,7 +327,6 @@ namespace DWSIM.Extensions.SolidCraft
                 session.Apply();
                 lblSummary.Text = session.Results.FirstOrDefault()?.Text + (session.Results.Any(i => i.Level == ImportIssue.Levels.Warning) ? "; the outlet differs from the sheet where marked below." : ".");
                 Fill(session.Results.Concat(session.Issues.Where(i => i.Level != ImportIssue.Levels.Info)));
-                btnClose.Text = "Finish";
                 loading = true;
                 var targets = session.Targets();
                 cbTarget.Items.Clear();

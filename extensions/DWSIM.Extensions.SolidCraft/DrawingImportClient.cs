@@ -63,6 +63,11 @@ namespace DWSIM.Extensions.SolidCraft
             return Environment.GetEnvironmentVariable("DWSIM_ASSISTANT_TOKEN") ?? "";
         }
 
+        /// <summary>A time the wizards show while the assistant works: "42 s", "2 min 05 s".</summary>
+        public static string Elapsed(TimeSpan t) => t.TotalMinutes >= 1
+            ? string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0} min {1:00} s", (int)t.TotalMinutes, t.Seconds)
+            : string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0} s", (int)t.TotalSeconds);
+
         /// <summary>The note the import wizards show: the reading needs a model that reads images.</summary>
         public const string VisionModelNote = "The AI Assistant reads the drawing with the model chosen in its settings: choose one that reads images (a vision model, such as Claude, GPT-4o or Gemini).";
 
@@ -115,6 +120,53 @@ namespace DWSIM.Extensions.SolidCraft
             return false;
         }
 
+        /// <summary>The model the assistant reads with: its backend ("claude", "local", ...) and the model's name.</summary>
+        public sealed class AssistantModel
+        {
+            public string Backend = "", Model = "";
+
+            /// <summary>A model that runs on this computer (Ollama, LM Studio, llama.cpp), the assistant's default until it loads the choice made in its settings.</summary>
+            public bool Local => Backend == "local" || Backend == "lmstudio" || Backend == "llamacpp";
+
+            public string Provider =>
+                Backend == "local" ? "Ollama" : Backend == "lmstudio" ? "LM Studio" : Backend == "llamacpp" ? "llama.cpp" :
+                Backend == "claude" ? "Anthropic" : Backend == "openai" ? "OpenAI" : Backend == "gemini" ? "Google" :
+                Backend == "azure" || Backend == "cloud" ? "Azure" : Backend == "bedrock" ? "AWS Bedrock" : Backend == "custom" ? "custom endpoint" : Backend;
+
+            public override string ToString() => Model.Length > 0 ? Model + " (" + Provider + ")" : Provider;
+        }
+
+        /// <summary>The model the assistant reads with now, starting the assistant when it is not running.</summary>
+        public static AssistantModel Model(CancellationToken ct, Action<string> step = null)
+        {
+            if (!Listening()) step?.Invoke("Starting the AI Assistant");
+            if (!EnsureAssistant(out var why)) throw new InvalidOperationException(why);
+            var o = Get("/session", ct);
+            return new AssistantModel { Backend = (string)o["backend"] ?? "", Model = (string)o["model"] ?? "" };
+        }
+
+        /// <summary>The line the wizards' first page shows: the model the assistant reads with now.</summary>
+        public static string ModelLine(AssistantModel m) => "The AI Assistant reads with " + m + "." +
+            (m.Local ? " A model that runs on this computer seldom reads a document well; a vision model such as Claude, GPT or Gemini does it better." : "");
+
+        /// <summary>What the wizards say before reading with a local model.</summary>
+        public static string LocalModelNote(AssistantModel m, string what) =>
+            "The AI Assistant is set to " + m + ", a model that runs on this computer and seldom reads " + what + " well. " +
+            "If you chose another model in the AI Assistant's settings, open the AI Assistant once so it takes that choice up, then read again; " +
+            "or click Read with the local model to read with " + (m.Model.Length > 0 ? m.Model : "it") + " anyway.";
+
+        static JObject Get(string path, CancellationToken ct)
+        {
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+            {
+                http.DefaultRequestHeaders.Add("X-DWSIM-Token", Token());
+                var resp = http.GetAsync("http://localhost:" + Port + path, ct).GetAwaiter().GetResult();
+                var text = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                if (!resp.IsSuccessStatusCode) throw new InvalidOperationException("The AI Assistant answered " + (int)resp.StatusCode + ": " + text.Substring(0, Math.Min(300, text.Length)));
+                return JObject.Parse(text);
+            }
+        }
+
         static JObject Post(string path, JObject body, CancellationToken ct)
         {
             using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(20) })
@@ -150,7 +202,8 @@ namespace DWSIM.Extensions.SolidCraft
 
         static JObject ReadRaw(string file, string kind, CancellationToken ct, Action<string> step, out byte[] overview, out List<string> cadTexts)
         {
-            if (!EnsureAssistant(out var why)) throw new InvalidOperationException(why);
+            var model = Model(ct, step);
+            ct.ThrowIfCancellationRequested();
             overview = null;
             var send = file;
             cadTexts = new List<string>();
@@ -164,7 +217,8 @@ namespace DWSIM.Extensions.SolidCraft
                     Directory.CreateDirectory(temp);
                     send = PlotCad(file, temp, out cadTexts);
                 }
-                step?.Invoke("AI Assistant: reading the drawing (this takes a minute or two)");
+                var what = kind == "iso" ? "the isometric" : kind == "datasheet" ? "the data sheet" : "the drawing";
+                step?.Invoke("AI Assistant: " + model + " is reading " + what + "; it usually takes one to three minutes");
                 var o = Post("/api/drawing/read", new JObject
                 {
                     ["file"] = Convert.ToBase64String(File.ReadAllBytes(send)),

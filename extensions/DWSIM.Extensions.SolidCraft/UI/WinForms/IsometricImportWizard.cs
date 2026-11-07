@@ -23,6 +23,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using AeroWizard;
 using DWSIM.ExtensionMethods;
 using DWSIM.Interfaces;
 
@@ -33,7 +34,7 @@ namespace DWSIM.Extensions.SolidCraft
     {
         readonly IsometricImportSession session;
         CancellationTokenSource reading;
-        int page;
+        WorkIndicator work;
         bool loading;
 
         public IsometricImportWizard(IFlowsheet fs)
@@ -45,45 +46,25 @@ namespace DWSIM.Extensions.SolidCraft
         private void IsometricImportWizard_Load(object sender, EventArgs e)
         {
             this.ChangeDefaultFont();
-            lstSteps.Items.AddRange(IsometricImportSession.Steps.Select((s, i) => (object)((i + 1) + ". " + s)).ToArray());
-            ShowPage(0);
+            wpDrawing.AllowNext = false;
+            work = new WorkIndicator(lblReadStatus, prgRead) { ModelLabel = lblModel };
+            work.ShowModel();
         }
 
         #region pages
 
-        void ShowPage(int p)
+        private void wpRoute_Initialize(object sender, WizardPageInitEventArgs e) => FillRoute();
+
+        /// <summary>The edits on the route page are taken when it is left, forwards or back.</summary>
+        private void wpRoute_Commit(object sender, WizardPageConfirmEventArgs e) => TakeRoute();
+
+        private void wpPipe_Initialize(object sender, WizardPageInitEventArgs e) => FillPipe();
+
+        private void IsometricImportWizard_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (session.Reading == null) p = 0;
-            if (page == 1 && p != 1) TakeRoute();
-            page = p;
-            tlpDrawing.Visible = p == 0;
-            splitRoute.Visible = p == 1;
-            tlpPipe.Visible = p == 2;
-            lblStepTitle.Text = IsometricImportSession.Steps[p];
-            lblStepText.Text = IsometricImportSession.StepTexts[p];
-            loading = true;
-            lstSteps.SelectedIndex = p;
-            loading = false;
-            btnBack.Enabled = p > 0;
-            btnNext.Visible = p < 2;
-            btnNext.Enabled = session.Reading != null && reading == null;
-            if (p == 1) FillRoute();
-            if (p == 2) FillPipe();
+            reading?.Cancel();
+            work?.Dispose();
         }
-
-        private void btnNext_Click(object sender, EventArgs e) => ShowPage(Math.Min(2, page + 1));
-
-        private void btnBack_Click(object sender, EventArgs e) => ShowPage(Math.Max(0, page - 1));
-
-        private void btnClose_Click(object sender, EventArgs e) => Close();
-
-        private void lstSteps_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            if (loading || lstSteps.SelectedIndex < 0 || lstSteps.SelectedIndex == page) return;
-            ShowPage(lstSteps.SelectedIndex);
-        }
-
-        private void IsometricImportWizard_FormClosing(object sender, FormClosingEventArgs e) => reading?.Cancel();
 
         #endregion
 
@@ -118,21 +99,29 @@ namespace DWSIM.Extensions.SolidCraft
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            var started = DateTime.Now;
+            work.Start("Checking the AI Assistant's model");
             try
             {
-                await Task.Run(() => session.Read(token, s => BeginInvoke((Action)(() => lblReadStatus.Text = s))));
-                lblReadStatus.Text = string.Format(CultureInfo.CurrentCulture, "{0} legs read in {1:0} s. Check them on the next page.",
-                    session.Reading.Legs.Count, (DateTime.Now - started).TotalSeconds);
+                var model = await work.Model(token, "an isometric");
+                if (model == null) { btnRead.Text = "Read with the local model"; return; }
+                btnRead.Text = "Read the isometric";
+                await Task.Run(() => session.Read(token, s => BeginInvoke((Action)(() => { if (!token.IsCancellationRequested) work.Step(s); }))));
+                session.Propose();
+                work.Stop();
+                lblReadStatus.Text = string.Format(CultureInfo.CurrentCulture, "{0} legs read by {2} in {1}. Check them on the next page.",
+                    session.Reading.Legs.Count, DrawingImportClient.Elapsed(work.Elapsed), model);
                 Loaded();
             }
             catch (Exception ex) when (token.IsCancellationRequested || ex is OperationCanceledException)
             {
+                work.Stop();
                 lblReadStatus.Text = "Reading cancelled.";
             }
             catch (Exception ex)
             {
-                lblReadStatus.Text = "The isometric could not be read: " + ex.GetBaseException().Message;
+                work.Stop();
+                lblReadStatus.Text = "The isometric could not be read: " + ex.GetBaseException().Message + " (the details are in the flowsheet's log)";
+                session.Flowsheet.ShowMessage("Import Pipe Segment from Piping Isometric: " + ex, IFlowsheet.MessageType.GeneralError);
             }
             finally
             {
@@ -155,16 +144,22 @@ namespace DWSIM.Extensions.SolidCraft
             btnOpenReading.Enabled = !busy;
             btnSaveReading.Enabled = !busy && session.Reading != null;
             btnBrowse.Enabled = !busy;
-            btnNext.Enabled = !busy && session.Reading != null;
-            UseWaitCursor = busy;
+            wpDrawing.AllowNext = !busy && session.Reading != null;
         }
 
-        private void btnCancelRead_Click(object sender, EventArgs e) => reading?.Cancel();
+        private void btnCancelRead_Click(object sender, EventArgs e)
+        {
+            if (reading == null) return;
+            reading.Cancel();
+            btnCancelRead.Enabled = false;
+            work?.Step("Cancelling");
+        }
 
         private void lnkAssistantSettings_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
             var why = DrawingImportClient.OpenAssistantSettings(session.Flowsheet, true);
             if (why != null) MessageBox.Show(this, why, Text);
+            work.ShowModel();
         }
 
         private void btnOpenReading_Click(object sender, EventArgs e)
@@ -186,7 +181,7 @@ namespace DWSIM.Extensions.SolidCraft
         private void btnSaveReading_Click(object sender, EventArgs e)
         {
             if (session.Reading == null) return;
-            if (page == 1) TakeRoute();
+            if (wizard.SelectedPage == wpRoute) TakeRoute();
             using (var d = new SaveFileDialog { Filter = "Isometric readings (*.json)|*.json", FileName = Path.GetFileNameWithoutExtension(session.File) + " - reading.json" })
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
@@ -366,7 +361,6 @@ namespace DWSIM.Extensions.SolidCraft
                 var obj = session.Apply(cbTarget.SelectedItem as string ?? IsometricImportSession.NewPipe);
                 FillPipe();
                 lblSummary.Text = "The hydraulic profile of " + obj.GraphicObject.Tag + " now has " + session.Sections.Count + " sections: " + IsometricImport.Summary(session.Sections) + ".";
-                btnClose.Text = "Finish";
             }
             catch (Exception ex) { lblSummary.Text = "The profile could not be made: " + ex.GetBaseException().Message; }
         }
