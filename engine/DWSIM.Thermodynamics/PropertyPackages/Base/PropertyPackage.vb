@@ -10284,12 +10284,63 @@ Final3:
 
         End Function
 
+        ''' <summary>
+        ''' A solid phase split into the compounds that are solid at the reference state (marked as solids, or listed in
+        ''' the forced solids of the package) and the rest.
+        ''' </summary>
+        ''' <remarks>
+        ''' The formation values of a compound that is solid at 25 C refer to the solid, so its enthalpy comes from the solid
+        ''' heat capacity. The rest keep the package's route (liquid minus fusion), which is the right one for compounds that
+        ''' melt and boil, such as ice against liquid water.
+        ''' </remarks>
+        Public Class SolidReferenceSplit
+            ''' <summary>Mass fraction of the compounds solid at the reference state.</summary>
+            Public ReferenceMassFraction As Double
+            ''' <summary>Mole fractions of those compounds, normalized.</summary>
+            Public Reference As Double()
+            ''' <summary>Mole fractions of the other compounds, normalized; the whole phase when there are none.</summary>
+            Public Rest As Double()
+            Public ReadOnly Property AllAtReference As Boolean
+                Get
+                    Return ReferenceMassFraction >= 1.0
+                End Get
+            End Property
+            ''' <summary>The mass-weighted property of the phase from the value of the rest and that of the reference solids.</summary>
+            Public Function Combine(restValue As Double, referenceValue As Func(Of Double)) As Double
+                If ReferenceMassFraction <= 0.0 Then Return restValue
+                Return (1.0 - ReferenceMassFraction) * restValue + ReferenceMassFraction * referenceValue()
+            End Function
+        End Class
+
+        ''' <summary>Splits the solid phase Vx (mole fractions) into the compounds solid at the reference state and the rest.</summary>
+        Public Function SplitSolidsAtReference(Vx As Array) As SolidReferenceSplit
+            Dim x As Double() = TryCast(Vx, Double())
+            If x Is Nothing Then x = Vx.Cast(Of Double).ToArray()
+            Dim cprops = DW_GetConstantProperties()
+            Dim names = RET_VNAMES()
+            Dim mw = RET_VMM()
+            Dim n = x.Length
+            Dim ref(n - 1), rest(n - 1) As Double
+            Dim wref, wtot As Double
+            For i = 0 To n - 1
+                Dim m = x(i) * mw(i)
+                wtot += m
+                If x(i) > 0.0 AndAlso (cprops(i).IsSolid OrElse (ForcedSolids IsNot Nothing AndAlso ForcedSolids.Contains(names(i)))) Then
+                    ref(i) = x(i)
+                    wref += m
+                Else
+                    rest(i) = x(i)
+                End If
+            Next
+            If wref <= 0.0 OrElse wtot <= 0.0 Then Return New SolidReferenceSplit With {.ReferenceMassFraction = 0.0, .Reference = ref, .Rest = x}
+            Return New SolidReferenceSplit With {.ReferenceMassFraction = wref / wtot, .Reference = ref.NormalizeY(), .Rest = If(wref < wtot, rest.NormalizeY(), rest)}
+        End Function
+
         Public Function CalcSolidEnthalpyFromCp(ByVal T As Double, ByVal Vx As Double(), cprops As List(Of Interfaces.ICompoundConstantProperties)) As Double
 
             Dim n As Integer = Vx.Length - 1
             Dim i As Integer
             Dim HS As Double = 0.0#
-            Dim Cpi As Double
             Dim VMF() As Double
 
             VMF = RET_VMM().MultiplyY(Vx).NormalizeY 'calculate mass fractions
@@ -10306,18 +10357,15 @@ Final3:
                         D = cprops(i).Solid_Heat_Capacity_Const_D
                         E = cprops(i).Solid_Heat_Capacity_Const_E
                         '<SolidHeatCapacityCp name="Solid heat capacity"  units="J/kmol/K" >
-                        If Integer.TryParse(eqno, New Integer) Then
-                            Cpi = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) / 1000 / mw 'kJ/kg.K
-                        Else
-                            Cpi = ParseEquation(eqno, A, B, C, D, E, T) / 1000 / mw 'kJ/kg.K
-                        End If
+                        Dim numbered = Integer.TryParse(eqno, New Integer)
+                        Dim cpAt As Func(Of Double, Double) = Function(tt) If(numbered, CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0), ParseEquation(eqno, A, B, C, D, E, tt)) / 1000 / mw 'kJ/kg.K
                         If cprops(i).TemperatureOfFusion < 298.15 Then
                             HS += VMF(i) * Me.AUX_INT_CPDTi_L(298.15, cprops(i).TemperatureOfFusion, cprops(i).Name)
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (cprops(i).TemperatureOfFusion - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, cprops(i).TemperatureOfFusion)
                         Else
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (298.15 - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, 298.15)
                         End If
                     ElseIf cprops(i).OriginalDB = "ChEDL Thermo" Then
                         Dim A, B, C, D, E As Double
@@ -10328,14 +10376,14 @@ Final3:
                         C = cprops(i).Solid_Heat_Capacity_Const_C
                         D = cprops(i).Solid_Heat_Capacity_Const_D
                         E = cprops(i).Solid_Heat_Capacity_Const_E
-                        Cpi = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) 'kJ/kg.K
+                        Dim cpAt As Func(Of Double, Double) = Function(tt) CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0) 'kJ/kg.K
                         If cprops(i).TemperatureOfFusion < 298.15 Then
                             HS += VMF(i) * Me.AUX_INT_CPDTi_L(298.15, cprops(i).TemperatureOfFusion, cprops(i).Name)
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (cprops(i).TemperatureOfFusion - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, cprops(i).TemperatureOfFusion)
                         Else
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (298.15 - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, 298.15)
                         End If
 
                     ElseIf cprops(i).TemperatureOfFusion <> 0.0# Then
@@ -10345,6 +10393,25 @@ Final3:
             Next
 
             Return HS 'kJ/kg
+
+        End Function
+
+        ''' <summary>
+        ''' The integral of a solid heat capacity (kJ/kg.K) from T1 to T2, in kJ/kg (Simpson's rule, 20 intervals; exact
+        ''' for a constant or polynomial heat capacity up to the third degree).
+        ''' </summary>
+        Private Shared Function SolidCpIntegral(cp As Func(Of Double, Double), T1 As Double, T2 As Double) As Double
+
+            If T1 = T2 Then Return 0.0
+
+            Const m As Integer = 20
+            Dim h = (T2 - T1) / m
+            Dim s = cp(T1) + cp(T2)
+            For k = 1 To m - 1
+                s += If(k Mod 2 = 1, 4.0, 2.0) * cp(T1 + k * h)
+            Next
+
+            Return s * h / 3
 
         End Function
 
