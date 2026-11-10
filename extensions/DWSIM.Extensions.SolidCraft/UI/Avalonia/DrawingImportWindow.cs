@@ -160,7 +160,7 @@ namespace DWSIM.Extensions.SolidCraft
             var picked = await Storage.OpenFilePickerAsync(new FilePickerOpenOptions
             {
                 Title = "The PFD or P&ID",
-                FileTypeFilter = new[] { new FilePickerFileType(DrawingImportSession.FileFilterText) { Patterns = DrawingImportClient.Extensions.Select(x => "*" + x).ToArray() }, FilePickerFileTypes.All }
+                FileTypeFilter = new[] { new FilePickerFileType(DrawingImportSession.FileFilterText) { Patterns = DrawingImportSession.FileExtensions.Select(x => "*" + x).ToArray() }, FilePickerFileTypes.All }
             });
             var path = picked.FirstOrDefault()?.TryGetLocalPath();
             if (path == null) return;
@@ -168,7 +168,7 @@ namespace DWSIM.Extensions.SolidCraft
             try
             {
                 var ext = Path.GetExtension(path).ToLowerInvariant();
-                preview.Source = ext == ".pdf" || ext == ".dxf" || ext == ".dwg" ? null : new Bitmap(path);
+                preview.Source = ext == ".pdf" || ext == ".dxf" || ext == ".dwg" || DexpiImport.IsDexpi(path) ? null : new Bitmap(path);
             }
             catch (Exception) { preview.Source = null; }
         }
@@ -177,13 +177,20 @@ namespace DWSIM.Extensions.SolidCraft
         {
             session.File = (file.Text ?? "").Trim();
             session.Kind = kind.SelectedIndex == 1 ? "pfd" : kind.SelectedIndex == 2 ? "pid" : "auto";
+            if (DexpiImport.IsDexpi(session.File) && DexpiImport.FindConverter() == null)
+            {
+                readStatus.Text = DexpiImport.MissingText + " The download page was opened in the browser.";
+                DexpiImport.OpenDownloadPage();
+                return;
+            }
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            work.Start("Checking the AI Assistant's model");
+            var dexpi = DexpiImport.IsDexpi(session.File);
+            work.Start(dexpi ? "Reading the DEXPI model" : "Checking the AI Assistant's model");
             try
             {
-                var model = await work.Model(token, "a drawing");
+                var model = dexpi ? (object)DexpiImport.Program : await work.Model(token, "a drawing");
                 if (model == null) { read.Content = "Read with the local model"; return; }
                 read.Content = "Read the drawing";
                 await Task.Run(() => session.Read(token, s => Dispatcher.UIThread.Post(() => { if (!token.IsCancellationRequested) work.Step(s); })));
@@ -789,6 +796,33 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 Console.WriteLine("Drawing import: " + ex);
                 try { fs.ShowMessage("Import Flowsheet from Drawing could not open: " + ex.GetBaseException().Message, IFlowsheet.MessageType.GeneralError); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Asks where the DEXPI process model goes, in the cross-platform interface, and writes it.</summary>
+    internal static class DexpiExportPrompt
+    {
+        internal static async void Show(IFlowsheet fs)
+        {
+            try
+            {
+                var desktop = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+                var owner = desktop?.Windows.FirstOrDefault(w => w.IsActive) ?? desktop?.MainWindow;
+                if (owner == null) return;
+                var picked = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Export DEXPI Process Model",
+                    SuggestedFileName = DexpiExportExtender.SuggestedName(fs),
+                    DefaultExtension = "xml",
+                    FileTypeChoices = new[] { new FilePickerFileType("DEXPI models") { Patterns = new[] { "*.xml" } } }
+                });
+                var path = picked?.TryGetLocalPath();
+                if (path != null) DexpiExportExtender.Export(fs, path);
+            }
+            catch (Exception ex)
+            {
+                try { fs.ShowMessage("DEXPI export could not open: " + ex.GetBaseException().Message, IFlowsheet.MessageType.GeneralError); } catch { }
             }
         }
     }

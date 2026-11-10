@@ -75,6 +75,12 @@ namespace DWSIM.Extensions.SolidCraft
         /// </summary>
         public void Read(CancellationToken ct, Action<string> step)
         {
+            if (DexpiImport.IsDexpi(File))
+            {
+                // a DEXPI model is read as it is, by dwsim-dexpi: no assistant, nothing to infer
+                Reading = DrawingReading.FromJson(DexpiImport.Read(File, ct, step));
+                return;
+            }
             Reading = DrawingImportClient.Read(File, Kind, ct, step);
             step?.Invoke("AI Assistant: inferring the process from the drawing's text");
             try { DrawingImportClient.Infer(Reading, ct); }
@@ -99,7 +105,7 @@ namespace DWSIM.Extensions.SolidCraft
         {
             Tidied = Reading.Tidy();
             Setup = new ImportSetup();
-            var names = Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys)).Distinct(StringComparer.OrdinalIgnoreCase);
+            var names = Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys.Concat(l.MoleFractions.Keys))).Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (var n in names)
             {
                 var db = DrawingImportBuilder.CompoundName(Flowsheet, n);
@@ -111,7 +117,7 @@ namespace DWSIM.Extensions.SolidCraft
         }
 
         /// <summary>The names in the reading the database did not match.</summary>
-        public List<string> UnmatchedCompounds() => Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys))
+        public List<string> UnmatchedCompounds() => Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys.Concat(l.MoleFractions.Keys)))
             .Distinct(StringComparer.OrdinalIgnoreCase).Where(n => DrawingImportBuilder.CompoundName(Flowsheet, n) == null).ToList();
 
         /// <summary>The first package of a kind of process that this DWSIM has.</summary>
@@ -246,6 +252,9 @@ namespace DWSIM.Extensions.SolidCraft
 
         public static bool IsReading(string file) => file.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 
-        public static string FileFilterText => "Drawings (*.png, *.jpg, *.pdf, *.dxf, *.dwg)";
+        public static string FileFilterText => "Drawings and DEXPI models (*.png, *.jpg, *.pdf, *.dxf, *.dwg, *.xml)";
+
+        /// <summary>The file types the import takes: the drawings the assistant reads and DEXPI models.</summary>
+        public static string[] FileExtensions => DrawingImportClient.Extensions.Concat(DexpiImport.Extensions).ToArray();
     }
 }
