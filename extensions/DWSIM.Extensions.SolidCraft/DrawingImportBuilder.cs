@@ -26,6 +26,7 @@ using DWSIM.UnitOperations.Reactors;
 using DWSIM.UnitOperations.SpecialOps;
 using DWSIM.UnitOperations.SpecialOps.Helpers;
 using DWSIM.UnitOperations.UnitOperations;
+using DWSIM.UnitOperations.UnitOperations.Auxiliary.Pipe;
 
 namespace DWSIM.Extensions.SolidCraft
 {
@@ -43,6 +44,16 @@ namespace DWSIM.Extensions.SolidCraft
 
         /// <summary>Set the items from the stream table: outlet temperatures and pressures, split ratios, feeds.</summary>
         public bool SpecsFromTable = true;
+
+        /// <summary>
+        /// Make a pipe segment of each line whose line number gives its size (a P&amp;ID): a straight
+        /// run of <see cref="PipeLength"/> with the diameters of the size, for the user to give its
+        /// true route (by hand or from the line's isometric).
+        /// </summary>
+        public bool PipeSegments;
+
+        /// <summary>The length the pipe segments start with, in m.</summary>
+        public double PipeLength = 10.0;
     }
 
     /// <summary>
@@ -63,6 +74,235 @@ namespace DWSIM.Extensions.SolidCraft
             public Dictionary<ReadLine, ISimulationObject> Streams = new Dictionary<ReadLine, ISimulationObject>();
             public List<ImportIssue> Issues = new List<ImportIssue>();
             public int Recycles;
+
+            /// <summary>The pipe segments made of the sized lines.</summary>
+            public int Pipes;
+
+            /// <summary>The controllers made of the reading's control loops.</summary>
+            public List<ISimulationObject> Controllers = new List<ISimulationObject>();
+
+            /// <summary>True when the reading updated the flowsheet's own items and streams, with nothing added.</summary>
+            public bool Updated;
+        }
+
+        /// <summary>
+        /// Adds a unit operation that does not have an object type of its own (the Relief Valve), by
+        /// the name it has among the flowsheet's objects. Null when the flowsheet does not have it or
+        /// cannot place it.
+        /// </summary>
+        static ISimulationObject AddExternal(IFlowsheet fs, string displayName, int x, int y, string tag)
+        {
+            try
+            {
+                if (fs.AvailableSimulationObjects == null || !fs.AvailableSimulationObjects.TryGetValue(displayName, out var template)) return null;
+                if (!(template is IExternalUnitOperation external)) return null;
+                var fresh = external.ReturnInstance(template.GetType().AssemblyQualifiedName) as IExternalUnitOperation;
+                if (fresh == null) return null;
+                // the cross-platform and automation flowsheets place objects themselves, the Classic one through its surface
+                object host = fs;
+                var method = fs.GetType().GetMethod("AddObjectToSurface");
+                if (method == null)
+                {
+                    host = fs.GetType().GetField("FormSurface")?.GetValue(fs);
+                    method = host?.GetType().GetMethod("AddObjectToSurface");
+                }
+                if (method == null) return null;
+                var args = method.GetParameters().Select(p =>
+                {
+                    switch (p.Name.ToLowerInvariant())
+                    {
+                        case "type": return (object)ObjectType.External;
+                        case "x": return x;
+                        case "y": return y;
+                        case "tag": return tag;
+                        case "uoobj": return fresh;
+                        default: return p.ParameterType == typeof(bool) ? false : p.ParameterType == typeof(string) ? "" : (p.HasDefaultValue ? p.DefaultValue : null);
+                    }
+                }).ToArray();
+                var id = method.Invoke(host, args) as string;
+                return id != null && fs.SimulationObjects.TryGetValue(id, out var so) ? so : null;
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// The solved flowsheet against the design limits a P&amp;ID gives for its equipment: the
+        /// pressure and the temperature of the streams on each item, against its design pressure and
+        /// temperature. A warning for each one out of its limits.
+        /// </summary>
+        public static List<ImportIssue> DesignCheck(IFlowsheet fs, DrawingReading r, Result res)
+        {
+            var issues = new List<ImportIssue>();
+            var limited = 0;
+            foreach (var item in r.ItemsByTag().Values)
+            {
+                if (!res.Items.TryGetValue(item.Tag, out var obj)) continue;
+                double? Limit(string key) => item.Specs.TryGetValue(key, out var v) && !double.IsNaN(v) ? v : (double?)null;
+                double? pMax = Limit("design_pressure_max"), pMin = Limit("design_pressure_min"), tMax = Limit("design_temperature_max"), tMin = Limit("design_temperature_min");
+                if (!pMax.HasValue && !pMin.HasValue && !tMax.HasValue && !tMin.HasValue) continue;
+                limited++;
+                var go = obj.GraphicObject;
+                foreach (var con in go.InputConnectors.Concat(go.OutputConnectors))
+                {
+                    var graphic = con.IsAttached ? con.AttachedConnector?.AttachedFrom == go ? con.AttachedConnector?.AttachedTo : con.AttachedConnector?.AttachedFrom : null;
+                    if (graphic == null || graphic.ObjectType != ObjectType.MaterialStream || !fs.SimulationObjects.TryGetValue(graphic.Name, out var stream) || !stream.Calculated) continue;
+                    double t, p;
+                    try
+                    {
+                        t = Convert.ToDouble(stream.GetPropertyValue("PROP_MS_0"), CultureInfo.InvariantCulture);
+                        p = Convert.ToDouble(stream.GetPropertyValue("PROP_MS_1"), CultureInfo.InvariantCulture);
+                    }
+                    catch (Exception) { continue; }
+                    string Barg(double pa) => ((pa - 101325) / 1e5).ToString("0.##", CultureInfo.InvariantCulture) + " bar g";
+                    string Celsius(double k) => (k - 273.15).ToString("0.#", CultureInfo.InvariantCulture) + " C";
+                    void Out(string what) => issues.Add(new ImportIssue(ImportIssue.Levels.Warning, item.Tag, graphic.Tag + " is at " + what));
+                    if (pMax.HasValue && p > pMax.Value * 1.0001) Out(Barg(p) + ", above the design pressure of " + Barg(pMax.Value));
+                    if (pMin.HasValue && p < pMin.Value * 0.9999) Out(Barg(p) + ", below the lowest design pressure of " + Barg(pMin.Value));
+                    if (tMax.HasValue && t > tMax.Value + 0.01) Out(Celsius(t) + ", above the design temperature of " + Celsius(tMax.Value));
+                    if (tMin.HasValue && t < tMin.Value - 0.01) Out(Celsius(t) + ", below the lowest design temperature of " + Celsius(tMin.Value));
+                }
+            }
+            if (limited > 0)
+                issues.Insert(0, new ImportIssue(ImportIssue.Levels.Info, "", limited + (limited == 1 ? " item" : " items") + " checked against the design limits: " +
+                    (issues.Count == 0 ? "every stream on them is within the design pressure and temperature" : issues.Count + " values out of the limits, listed below")));
+            return issues;
+        }
+
+        /// <summary>The size a line number starts with (DN80-..., 6"-P-1234, 1 1/2"-...), or null when it does not give one.</summary>
+        public static string LineSize(string lineNumber)
+        {
+            var first = (lineNumber ?? "").Trim();
+            var dn = System.Text.RegularExpressions.Regex.Match(first, @"^DN\s*\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (dn.Success) return dn.Value;
+            var inches = System.Text.RegularExpressions.Regex.Match(first, @"^(\d+(?:\s+\d/\d|\.\d+)?|\d/\d)\s*(?:""|''|in\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return inches.Success ? inches.Groups[1].Value + "\"" : null;
+        }
+
+        /// <summary>
+        /// A pipe segment on each line that has a size: the line's stream goes into it and a new
+        /// stream takes it to where the line went. Each segment is one straight, level run of the
+        /// given length with the diameters of the size (standard wall), named by the line number.
+        /// </summary>
+        static void AddPipes(IFlowsheet fs, DrawingReading r, List<ReadLine> lines, Result res, double length)
+        {
+            foreach (var l in lines.Where(res.Streams.ContainsKey).ToList())
+            {
+                var size = LineSize(l.LineNumber);
+                if (size == null || !IsometricImport.Diameters(new IsoReading { Size = size }, out var de, out var di, out var how)) continue;
+                var ms = res.Streams[l];
+                var go = ms.GraphicObject;
+                var con = go.OutputConnectors[0].AttachedConnector;
+                var toGraphic = con?.AttachedTo;
+                var toIndex = con?.AttachedToConnectorIndex ?? 0;
+                try
+                {
+                    if (toGraphic != null) fs.DisconnectObjects(go, toGraphic);
+                    var created = fs.AddObject(ObjectType.Pipe, (int)(go.X + 50), (int)go.Y, FreeTag(fs, "PIPE-" + l.LineNumber.Trim()));
+                    var after = fs.AddObject(ObjectType.MaterialStream, (int)(go.X + 100), (int)go.Y, FreeTag(fs, go.Tag + "-P"));
+                    if (!(created is Pipe pipe) || after == null) continue;
+                    try { created.PropertyPackage = ms.PropertyPackage; after.PropertyPackage = ms.PropertyPackage; } catch (Exception) { }
+                    fs.ConnectObjects(go, created.GraphicObject, 0, 0);
+                    fs.ConnectObjects(created.GraphicObject, after.GraphicObject, 0, 0);
+                    if (toGraphic != null)
+                    {
+                        fs.ConnectObjects(after.GraphicObject, toGraphic, 0, toIndex);
+                        // a column knows its feeds by stream: the stream after the pipe takes the stage
+                        if (fs.SimulationObjects.TryGetValue(toGraphic.Name, out var to) && to is Column column)
+                        {
+                            var info = column.MaterialStreams.Values.FirstOrDefault(s => s.StreamID == ms.Name);
+                            if (info != null)
+                            {
+                                column.MaterialStreams.Remove(info.ID);
+                                info.ID = after.Name;
+                                info.StreamID = after.Name;
+                                column.MaterialStreams[info.ID] = info;
+                            }
+                        }
+                    }
+                    var material = IsometricImport.Material("");
+                    pipe.Profile.Sections.Clear();
+                    pipe.Profile.Sections.Add(1, new PipeSection
+                    {
+                        Indice = 1, TipoSegmento = "Tubulaosimples", Quantidade = 1, Incrementos = Math.Max(5, Math.Min(50, (int)Math.Ceiling(length))),
+                        Material = material, Comprimento = length, Elevacao = 0, DE = de, DI = di,
+                    });
+                    pipe.Profile.DefaultMaterial = material;
+                    pipe.Profile.Status = PipeEditorStatus.OK;
+                    AddEnergyStreams(fs, created, res, true);
+                    res.Pipes++;
+                }
+                catch (Exception ex)
+                {
+                    res.Issues.Add(new ImportIssue(ImportIssue.Levels.Warning, l.LineNumber, "the pipe segment could not be made: " + ex.GetBaseException().Message));
+                }
+            }
+            if (res.Pipes > 0)
+                res.Issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", res.Pipes + " pipe segments made of the sized lines, each a straight run of " +
+                    length.ToString("G4", CultureInfo.InvariantCulture) + " m with the diameters of its size: give each one its route, by hand or with Import Pipe Segment from Piping Isometric"));
+        }
+
+        /// <summary>
+        /// Brings a flowsheet up to date with a reading of the same plant: the items and the streams
+        /// are found by their tags (a stream also by the two items it joins), the feeds take the
+        /// reading's conditions, flows and compositions and the items its specifications. Nothing is
+        /// added or connected; what the flowsheet lacks and what the reading lacks are listed.
+        /// </summary>
+        public static Result Update(IFlowsheet fs, DrawingReading r, ImportSetup setup)
+        {
+            var res = new Result { Updated = true };
+            MassFlowsFromMoleFractions(fs, r);
+            var items = r.ItemsByTag();
+            foreach (var item in items.Values)
+            {
+                var obj = fs.GetFlowsheetSimulationObject(item.Tag);
+                if (obj != null && obj.GraphicObject.ObjectType != ObjectType.MaterialStream && obj.GraphicObject.ObjectType != ObjectType.EnergyStream)
+                    res.Items[item.Tag] = obj;
+                else
+                    res.Issues.Add(new ImportIssue(ImportIssue.Levels.Info, item.Tag, "not in the flowsheet; an update adds nothing"));
+            }
+
+            // a stream by its tag, else the one stream that joins the same two items
+            ISimulationObject Joining(ReadLine l)
+            {
+                var from = l.Feed ? null : Get(res, l.From);
+                var to = l.Product ? null : Get(res, l.To);
+                if (from == null || to == null) return null;
+                var found = new List<ISimulationObject>();
+                foreach (var con in from.GraphicObject.OutputConnectors)
+                {
+                    var stream = con.IsAttached ? con.AttachedConnector?.AttachedTo : null;
+                    if (stream == null || stream.ObjectType != ObjectType.MaterialStream) continue;
+                    var next = stream.OutputConnectors.Count > 0 && stream.OutputConnectors[0].IsAttached ? stream.OutputConnectors[0].AttachedConnector?.AttachedTo : null;
+                    if (next != null && next.Name == to.Name && fs.SimulationObjects.TryGetValue(stream.Name, out var so)) found.Add(so);
+                }
+                return found.Count == 1 ? found[0] : null;
+            }
+            var lines = r.Lines.Where(l => l.Include && (l.Feed || items.ContainsKey(l.From)) && (l.Product || items.ContainsKey(l.To)) && !(l.Feed && l.Product)).ToList();
+            var taken = new HashSet<string>();
+            foreach (var l in lines)
+            {
+                var stream = fs.GetFlowsheetSimulationObject(r.StreamTag(l));
+                if (stream == null || stream.GraphicObject.ObjectType != ObjectType.MaterialStream) stream = Joining(l);
+                if (stream != null && taken.Add(stream.Name)) res.Streams[l] = stream;
+                else res.Issues.Add(new ImportIssue(ImportIssue.Levels.Info, r.StreamTag(l), "not found in the flowsheet by its tag or by the items it joins; left out of the update"));
+            }
+            var known = new HashSet<string>(res.Items.Values.Select(o => o.Name).Concat(res.Streams.Values.Select(o => o.Name)));
+            var extra = fs.SimulationObjects.Values.Where(o => o.GraphicObject != null && !known.Contains(o.Name) &&
+                o.GraphicObject.ObjectType != ObjectType.EnergyStream && o.GraphicObject.ObjectType != ObjectType.OT_Recycle &&
+                o.GraphicObject.ObjectType != ObjectType.MaterialStream).Select(o => o.GraphicObject.Tag).ToList();
+            if (extra.Count > 0)
+                res.Issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", "in the flowsheet and absent from the reading, left as they are: " + string.Join(", ", extra.Take(20)) + (extra.Count > 20 ? ", ..." : "")));
+
+            if (setup.SpecsFromTable)
+            {
+                var matched = lines.Where(res.Streams.ContainsKey).ToList();
+                foreach (var kv in res.Streams.Where(s => s.Key.Feed && s.Key.HasData)) SetStream(fs, kv.Value, kv.Key, r.Units, res, true);
+                foreach (var item in items.Values)
+                    if (res.Items.TryGetValue(item.Tag, out var obj)) Specify(fs, obj, item, matched, r.Units, res);
+            }
+            res.Issues.Insert(0, new ImportIssue(ImportIssue.Levels.Info, "", res.Items.Count + " of " + items.Count + " items and " + res.Streams.Count + " of " + lines.Count +
+                " lines of the reading were found in the flowsheet" + (setup.SpecsFromTable ? "; the feeds and the items' specifications were set from it" : "")));
+            return res;
         }
 
         /// <summary>
@@ -124,9 +364,24 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var item in items.Values)
             {
                 ObjectType type;
-                if (!Enum.TryParse(item.Type, out type)) { Note(ImportIssue.Levels.Error, item.Tag, "unknown object type " + item.Type); continue; }
                 var tag = FreeTag(fs, item.Tag);
-                var obj = fs.AddObject(type, (int)Px(item, n), (int)Py(item, n), tag);
+                ISimulationObject obj;
+                if (item.Type == "ReliefValve")
+                {
+                    // the relief valve does not have an object type of its own: it is added by its name, and where the
+                    // flowsheet cannot do that the item becomes a plain valve
+                    obj = AddExternal(fs, "Relief Valve", (int)Px(item, n), (int)Py(item, n), tag);
+                    if (obj == null)
+                    {
+                        Note(ImportIssue.Levels.Info, item.Tag, "the Relief Valve could not be added here; a plain valve is used");
+                        obj = fs.AddObject(ObjectType.Valve, (int)Px(item, n), (int)Py(item, n), tag);
+                    }
+                }
+                else
+                {
+                    if (!Enum.TryParse(item.Type, out type)) { Note(ImportIssue.Levels.Error, item.Tag, "unknown object type " + item.Type); continue; }
+                    obj = fs.AddObject(type, (int)Px(item, n), (int)Py(item, n), tag);
+                }
                 n++;
                 if (obj == null) { Note(ImportIssue.Levels.Error, item.Tag, "the flowsheet did not make a " + item.Type); continue; }
                 if (tag != item.Tag) Note(ImportIssue.Levels.Info, item.Tag, "the flowsheet already has this tag; the new item is " + tag);
@@ -221,6 +476,8 @@ namespace DWSIM.Extensions.SolidCraft
                 if (setup.SpecsFromTable) SetStream(fs, back, l, r.Units, res, false);
                 res.Recycles++;
             }
+
+            if (setup.PipeSegments) AddPipes(fs, r, lines, res, setup.PipeLength);
 
             if (setup.SpecsFromTable)
             {
@@ -423,6 +680,8 @@ namespace DWSIM.Extensions.SolidCraft
             var guessed = new List<string>();
             int Stage(ReadLine l, bool inlet)
             {
+                var given = inlet ? l.ToStage : l.FromStage;
+                if (given.HasValue) return Math.Max(first, Math.Min(last, first + given.Value - 1));
                 var name = r.StreamTag(l);
                 var tray = System.Text.RegularExpressions.Regex.Match(name, @"(?:tray|prato)\s*#?\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (tray.Success) return Math.Max(first, Math.Min(last, first + int.Parse(tray.Groups[1].Value) - 1));
@@ -539,9 +798,16 @@ namespace DWSIM.Extensions.SolidCraft
                 else if (wb.HasValue)
                 {
                     d.SetReboilerSpec("Product_Mass_Flow_Rate", wb.Value, "kg/s");
-                    Note(ImportIssue.Levels.Info, "the reboiler works to the bottoms flow of the table; the reflux ratio is not on the drawing, the condenser keeps its default");
+                    Note(ImportIssue.Levels.Info, "the reboiler works to the bottoms flow of the table" +
+                        (item.Specs.ContainsKey("reflux_ratio") ? "" : "; the reflux ratio is not on the drawing, the condenser keeps its default"));
                 }
                 else Note(ImportIssue.Levels.Warning, "the table gives no product flows; set the condenser and reboiler specifications before solving");
+                // the reflux ratio a model gives for the column itself
+                if (d.CondenserType != Column.condtype.Full_Reflux && item.Specs.TryGetValue("reflux_ratio", out var modelReflux) && modelReflux > 0)
+                {
+                    d.SetCondenserSpec("Stream_Ratio", modelReflux, "");
+                    Note(ImportIssue.Levels.Info, "from the model: reflux ratio " + modelReflux.ToString("G4", CultureInfo.InvariantCulture));
+                }
             }
         }
 
@@ -764,6 +1030,26 @@ namespace DWSIM.Extensions.SolidCraft
                     break;
                 case Pump pu:
                     if (efficiency.HasValue && efficiency.Value > 0 && efficiency.Value <= 1) { pu.Eficiencia = 100 * efficiency.Value; used.Add("efficiency " + Percent(efficiency.Value)); }
+                    if (!pOut && V("head") is double head && head > 0)
+                    {
+                        // the pressure rise of the head on water: the fluid's density is not known before the flowsheet is solved
+                        pu.CalcMode = Pump.CalculationMode.Delta_P;
+                        pu.DeltaP = 1000 * 9.80665 * head;
+                        settled = true;
+                        used.Add("pressure rise from the head of " + head.ToString("G4", CultureInfo.InvariantCulture) + " m at 1000 kg/m3 (correct it for the fluid's density)");
+                    }
+                    break;
+                case ReliefValve relief:
+                    if (V("set_pressure") is double setPressure && setPressure > 0)
+                    {
+                        // fully open at 10 % over the set pressure, on the gauge
+                        relief.SetPointPressure = setPressure;
+                        relief.FullyOpenedPressure = 101325 + 1.1 * (setPressure - 101325);
+                        used.Add("set pressure " + ((setPressure - 101325) / 1e5).ToString("G4", CultureInfo.InvariantCulture) + " bar g");
+                    }
+                    break;
+                case Tank tank:
+                    if (V("volume") is double vt && vt > 0) { tank.Volume = vt; used.Add("volume " + vt.ToString("G4", CultureInfo.InvariantCulture) + " m3"); }
                     break;
                 case Compressor co:
                     if (polytropic.HasValue && polytropic.Value > 0 && polytropic.Value <= 1)
@@ -786,7 +1072,17 @@ namespace DWSIM.Extensions.SolidCraft
                     if (!ve.OverrideP && V("pressure") is double p) { ve.OverrideP = true; ve.FlashPressure = p; used.Add("pressure"); }
                     break;
                 case ShortcutColumn sc:
-                    if (V("reflux_ratio") is double reflux && reflux > 0) { sc.m_refluxratio = reflux; used.Add("reflux ratio " + reflux.ToString("G4", CultureInfo.InvariantCulture)); }
+                    if (V("reflux_ratio") is double reflux && reflux > 0)
+                    {
+                        sc.m_refluxratio = reflux;
+                        used.Add("reflux ratio " + reflux.ToString("G4", CultureInfo.InvariantCulture));
+                        // the note on the keys said the drawing did not give it
+                        foreach (var note in res.Issues.Skip(issuesBefore).Where(i => i.Subject == item.Tag))
+                        {
+                            var at = note.Text.IndexOf("; the reflux ratio is not on the drawing", StringComparison.Ordinal);
+                            if (at > 0) note.Text = note.Text.Substring(0, at);
+                        }
+                    }
                     break;
                 case Reactor_CSTR cstr:
                     if (V("volume") is double vc && vc > 0) { cstr.Volume = vc; used.Add("volume"); }
@@ -796,6 +1092,8 @@ namespace DWSIM.Extensions.SolidCraft
                     break;
             }
             if (used.Count == 0) return;
+            if (used.Any(u => u.Contains("efficiency")))
+                res.Issues.RemoveAll(i => i.Subject == item.Tag && i.Text.StartsWith("the drawing gives no efficiency", StringComparison.Ordinal));
             if (settled)
                 for (var i = res.Issues.Count - 1; i >= issuesBefore; i--)
                     if (res.Issues[i].Text.StartsWith("the table does not give", StringComparison.Ordinal)) res.Issues.RemoveAt(i);
@@ -840,9 +1138,43 @@ namespace DWSIM.Extensions.SolidCraft
                 pid.OutputMin = 0.0;
                 pid.OutputMax = 100.0;
                 pid.Active = false;
+                res.Controllers.Add(created);
                 res.Issues.Add(new ImportIssue(ImportIssue.Levels.Info, name, "control loop built inactive: it reads " + measured.GraphicObject.Tag +
                     " and moves " + valve.GraphicObject.Tag + "; set its setpoint and tuning before a dynamic run"));
             }
+        }
+
+        /// <summary>
+        /// Once the flowsheet is solved, gives each controller made of a control loop the solved
+        /// value of what it measures as its setpoint, and the opening its valve has as the output it
+        /// starts from. The controllers stay inactive.
+        /// </summary>
+        public static List<ImportIssue> SettleControllers(IFlowsheet fs, Result res)
+        {
+            var issues = new List<ImportIssue>();
+            foreach (var created in res.Controllers)
+            {
+                if (!(created is PIDController pid) || pid.ControlledObjectData == null) continue;
+                try
+                {
+                    if (!fs.SimulationObjects.TryGetValue(pid.ControlledObjectData.ID, out var measured) || !measured.Calculated) continue;
+                    var si = Convert.ToDouble(measured.GetPropertyValue(pid.ControlledObjectData.PropertyName), CultureInfo.InvariantCulture);
+                    if (double.IsNaN(si) || double.IsInfinity(si)) continue;
+                    var value = string.IsNullOrEmpty(pid.ControlledObjectData.Units) ? si : DWSIM.SharedClasses.SystemsOfUnits.Converter.ConvertFromSI(pid.ControlledObjectData.Units, si);
+                    // a steady state does not hold liquid in a vessel: a level loop keeps the setpoint it has
+                    var level = pid.ControlledObjectData.PropertyName == "Liquid Level";
+                    if (!level) pid.SetPoint = value;
+                    if (fs.SimulationObjects.TryGetValue(pid.ManipulatedObjectData?.ID ?? "", out var valve))
+                    {
+                        var opening = Convert.ToDouble(valve.GetPropertyValue("PROP_VA_5"), CultureInfo.InvariantCulture);
+                        if (!double.IsNaN(opening) && opening >= 0 && opening <= 100) pid.Offset = opening;
+                    }
+                    if (!level) issues.Add(new ImportIssue(ImportIssue.Levels.Info, created.GraphicObject.Tag, "setpoint at the solved value, " +
+                        value.ToString("G5", CultureInfo.InvariantCulture) + " " + pid.ControlledObjectData.Units));
+                }
+                catch (Exception) { }
+            }
+            return issues;
         }
 
         static SpecialOpObjectInfo Refer(IFlowsheet fs, ISimulationObject obj, string property)

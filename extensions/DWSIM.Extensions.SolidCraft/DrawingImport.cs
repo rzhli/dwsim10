@@ -120,6 +120,8 @@ namespace DWSIM.Extensions.SolidCraft
                     VaporFraction = Num(s["vf"]),
                     FromLevel = Num(s["from_level"]),
                     ToLevel = Num(s["to_level"]),
+                    FromStage = Tray(s["from_stage"]),
+                    ToStage = Tray(s["to_stage"]),
                 };
                 if (s["compounds"] is JObject cs)
                     foreach (var p in cs.Properties())
@@ -173,6 +175,9 @@ namespace DWSIM.Extensions.SolidCraft
                     if (Str(c) is string name && name.Length > 0) r.Process.KeyProducts.Add(name);
                 foreach (var c in (pr["compounds"] as JArray) ?? new JArray())
                     if (Str(c) is string name && name.Length > 0) r.Process.Compounds.Add(name);
+                if (pr["compound_aliases"] is JObject al)
+                    foreach (var a in al.Properties())
+                        r.Process.Aliases[a.Name] = ((a.Value as JArray) ?? new JArray()).Select(Str).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
             }
             return r;
         }
@@ -191,7 +196,7 @@ namespace DWSIM.Extensions.SolidCraft
                 {
                     ["id"] = l.Id, ["name"] = l.Name, ["line_number"] = l.LineNumber, ["from"] = l.From, ["to"] = l.To,
                     ["from_port"] = l.FromPort, ["to_port"] = l.ToPort, ["T"] = N(l.T), ["P"] = N(l.P), ["W"] = N(l.W), ["vf"] = N(l.VaporFraction),
-                    ["from_level"] = N(l.FromLevel), ["to_level"] = N(l.ToLevel),
+                    ["from_level"] = N(l.FromLevel), ["to_level"] = N(l.ToLevel), ["from_stage"] = N(l.FromStage), ["to_stage"] = N(l.ToStage),
                     ["compounds"] = new JObject(l.Compounds.Select(c => new JProperty(c.Key, c.Value))),
                     ["mole_fractions"] = new JObject(l.MoleFractions.Select(c => new JProperty(c.Key, c.Value))), ["include"] = l.Include,
                 })),
@@ -209,6 +214,7 @@ namespace DWSIM.Extensions.SolidCraft
                 {
                     ["description"] = Process.Description, ["class"] = Process.Class, ["property_package"] = Process.PropertyPackage,
                     ["confidence"] = Process.Confidence, ["evidence"] = Process.Evidence, ["compounds"] = new JArray(Process.Compounds),
+                    ["compound_aliases"] = new JObject(Process.Aliases.Select(a => new JProperty(a.Key, new JArray(a.Value)))),
                     ["process_type"] = Process.Type, ["key_reactants"] = new JArray(Process.KeyReactants), ["key_products"] = new JArray(Process.KeyProducts),
                 },
             };
@@ -216,6 +222,12 @@ namespace DWSIM.Extensions.SolidCraft
         }
 
         static string Str(JToken t) => t == null || t.Type == JTokenType.Null ? null : t.ToString();
+
+        static int? Tray(JToken t)
+        {
+            var v = Num(t);
+            return v.HasValue && v.Value >= 1 ? (int)Math.Round(v.Value) : (int?)null;
+        }
 
         static double? Num(JToken t)
         {
@@ -236,7 +248,8 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var i in Items.Where(i => i.Include && i.Category == "Relief"))
             {
                 i.Include = false;
-                notes.Add(new ImportIssue(ImportIssue.Levels.Info, i.Tag, "relief valves carry no flow in normal operation; left out with their lines (tick it to build it)"));
+                notes.Add(new ImportIssue(ImportIssue.Levels.Info, i.Tag, "relief valves carry no flow in normal operation; left out with their lines (tick it to build it)" +
+                    (i.Specs.TryGetValue("set_pressure", out var set) ? "; set at " + ((set - 101325) / 1e5).ToString("G4", CultureInfo.InvariantCulture) + " bar g" : "")));
             }
             bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
@@ -372,8 +385,8 @@ namespace DWSIM.Extensions.SolidCraft
         public int ColumnEnd(ReadLine l, bool inlet)
         {
             var port = ((inlet ? l.ToPort : l.FromPort) ?? "").ToLowerInvariant();
-            if (port.Contains("top") || port.Contains("overhead")) return -1;
-            if (port.Contains("bot")) return 1;
+            if (port.Contains("top") || port.Contains("overhead") || port.Contains("reflux")) return -1;
+            if (port.Contains("bot") || port.Contains("reboil")) return 1;
             var level = inlet ? l.ToLevel : l.FromLevel;
             if (level.HasValue && level.Value <= 1) return level.Value < 0.05 ? -1 : level.Value > 0.95 ? 1 : 0;
             var name = StreamTag(l);
@@ -403,6 +416,33 @@ namespace DWSIM.Extensions.SolidCraft
             bool LeftOut(string tag) => tag.Length > 0 && Items.Any(i => string.Equals(i.Tag, tag, StringComparison.OrdinalIgnoreCase)) &&
                 !Items.Any(i => string.Equals(i.Tag, tag, StringComparison.OrdinalIgnoreCase) && i.Include);
             return !LeftOut(l.From) && !LeftOut(l.To);
+        }
+
+        /// <summary>
+        /// Gives the compounds the database does not know by their name the name it knows them by,
+        /// found through their other names (a CAS number, an IUPAC name, a formula), in the list of
+        /// compounds and in the compositions of the lines. Returns the names changed.
+        /// </summary>
+        public List<string> ResolveCompounds(Func<string, string> find)
+        {
+            var renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in Process.Aliases)
+            {
+                if (find(kv.Key) != null) continue;
+                var known = kv.Value.Select(find).FirstOrDefault(x => x != null);
+                if (known != null) renamed[kv.Key] = known;
+            }
+            if (renamed.Count == 0) return new List<string>();
+            Process.Compounds = Process.Compounds.Select(c => renamed.TryGetValue(c, out var n) ? n : c).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var l in Lines)
+                foreach (var set in new[] { l.Compounds, l.MoleFractions })
+                    foreach (var old in set.Keys.Where(renamed.ContainsKey).ToList())
+                    {
+                        var value = set[old];
+                        set.Remove(old);
+                        set[renamed[old]] = (set.TryGetValue(renamed[old], out var had) ? had : 0) + value;
+                    }
+            return renamed.Select(kv => kv.Key + " as " + kv.Value).ToList();
         }
 
         /// <summary>A field of the title block, or "" when the sheet does not show it.</summary>
@@ -459,7 +499,9 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>
         /// What a model gives for the item itself, in SI units (a DEXPI process step): duty (W),
         /// pressure (Pa), temperature (K), efficiency and polytropic_efficiency (fractions),
-        /// pressure_ratio, reflux_ratio, area (m2), u (W/m2/K), volume (m3). Used where the stream
+        /// pressure_ratio, reflux_ratio, area (m2), u (W/m2/K), volume (m3), head (m), the set_pressure of a
+        /// relief valve (Pa), and the design limits design_pressure_max, design_pressure_min (Pa),
+        /// design_temperature_max and design_temperature_min (K), checked on the solved flowsheet. Used where the stream
         /// table leaves the item's specification open.
         /// </summary>
         public Dictionary<string, double> Specs = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -489,6 +531,12 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Where the line leaves or enters a column: the nozzle's height, 0 at the top to 1 at the bottom (null when not known).</summary>
         public double? FromLevel, ToLevel;
 
+        /// <summary>
+        /// The tray of a column the line leaves from or enters at, counted from the top among the
+        /// trays (the stages between the condenser and the reboiler), when the source gives it.
+        /// </summary>
+        public int? FromStage, ToStage;
+
         /// <summary>The mass flow of each compound the table lists, in the table's mass flow unit.</summary>
         public Dictionary<string, double> Compounds = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
@@ -510,6 +558,12 @@ namespace DWSIM.Extensions.SolidCraft
     {
         public string Description = "", Class = "", PropertyPackage = "", Confidence = "", Evidence = "";
         public List<string> Compounds = new List<string>();
+
+        /// <summary>
+        /// The other names a compound goes by in the source (a DEXPI model): its identifier, its
+        /// IUPAC name, its CAS number. Tried when the compound's own name is not in the database.
+        /// </summary>
+        public Dictionary<string, List<string>> Aliases = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The DWSIM process type the model chose (PhysicalSeparation, Transformation, ...), "" when none.</summary>
         public string Type = "";
@@ -543,7 +597,7 @@ namespace DWSIM.Extensions.SolidCraft
                 case "Exchanger": return new[] { "HeatExchanger", "Heater", "Cooler" };
                 case "AirCooler": return new[] { "AirCooler2", "Cooler" };
                 case "Valve": return new[] { "Valve" };
-                case "Relief": return new[] { "Valve" };
+                case "Relief": return new[] { "ReliefValve", "Valve" };
                 case "Reactor": return new[] { "RCT_Conversion", "RCT_Equilibrium", "RCT_Gibbs" };
                 case "Cstr": return new[] { "RCT_CSTR", "RCT_Conversion" };
                 case "Pfr": return new[] { "RCT_PFR", "RCT_Conversion" };

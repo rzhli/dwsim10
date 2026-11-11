@@ -23,6 +23,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using DWSIM.Interfaces;
+using DWSIM.Interfaces.Enums;
 using DWSIM.Interfaces.Enums.GraphicObjects;
 
 namespace DWSIM.Extensions.SolidCraft
@@ -30,8 +31,10 @@ namespace DWSIM.Extensions.SolidCraft
     /// <summary>
     /// Writes a flowsheet as a DEXPI 2.0.1 process model (XML): the unit operations as process
     /// steps with their material ports, the material streams with temperature, pressure, mass flow
-    /// and composition, the feeds and products ending at sources and sinks, and a diagram that keeps
-    /// the flowsheet's layout. Energy streams, controllers and the other logical blocks are left out.
+    /// and composition, the feeds and products ending at sources and sinks, the energy streams as
+    /// thermal and mechanical energy flows, the PID controllers and the gauges as instrumentation
+    /// activities joined to their steps by information flows, and a diagram that keeps the
+    /// flowsheet's layout. Adjusts, specifications and the other logical blocks are left out.
     /// </summary>
     public static class DexpiExport
     {
@@ -41,11 +44,15 @@ namespace DWSIM.Extensions.SolidCraft
             public string File = "";
             public int Steps, Streams, Sources, Sinks, Compounds;
 
+            /// <summary>The energy streams written as energy flows, the controllers written as control loops and the gauges as measurements.</summary>
+            public int EnergyFlows, ControlLoops, Indicators;
+
             /// <summary>What the model leaves out or could not tell.</summary>
             public List<string> Notes = new List<string>();
 
             public override string ToString() => Steps + " process steps, " + Streams + " streams (" + Sources + " feeds, " + Sinks + " products) and " +
-                Compounds + " compounds written to " + File;
+                Compounds + " compounds" + (EnergyFlows > 0 ? ", " + EnergyFlows + " energy flows" : "") + (ControlLoops > 0 ? ", " + ControlLoops + " control loops" : "") +
+                (Indicators > 0 ? ", " + Indicators + " indicators" : "") + " written to " + File;
         }
 
         /// <summary>Diagram units for each unit of the flowsheet's canvas.</summary>
@@ -136,8 +143,8 @@ namespace DWSIM.Extensions.SolidCraft
 
         static XElement Color(int r, int g, int b) => Agg("Core/Diagram.Color", ("R", new object[] { Int(r) }), ("G", new object[] { Int(g) }), ("B", new object[] { Int(b) }));
 
-        static XElement Stroke(double width) => Agg("Core/Diagram.Stroke", ("Color", new object[] { Color(0, 0, 0) }),
-            ("DashStyle", new object[] { Enum("Core/Diagram.DashStyle.Solid") }), ("Width", new object[] { Dbl(width) }));
+        static XElement Stroke(double width, string dash = "Solid") => Agg("Core/Diagram.Stroke", ("Color", new object[] { Color(0, 0, 0) }),
+            ("DashStyle", new object[] { Enum("Core/Diagram.DashStyle." + dash) }), ("Width", new object[] { Dbl(width) }));
 
         #endregion
 
@@ -208,6 +215,10 @@ namespace DWSIM.Extensions.SolidCraft
                         var c = new Obj(Id("Component"), "Process/Process.PureMaterialComponent").Data("Identifier", Str(name)).Data("Label", Str(name));
                         var cas = fs.SelectedCompounds[name]?.CAS_Number;
                         if (!string.IsNullOrWhiteSpace(cas)) c.Data("Description", Text("CAS " + cas.Trim()));
+                        // the identifiers the standard names a pure compound by, where the table has them
+                        var ids = DexpiIdentifiers.Of(cas);
+                        if (ids.Chebi.Length > 0) c.Data("ChEBI_Identifier", Str(ids.Chebi));
+                        if (ids.Iupac.Length > 0) c.Data("IUPAC_Identifier", Str(ids.Iupac));
                         return c;
                     }).ToArray();
                     var list = new Obj("ComponentList_1", "Process/Process.ListOfMaterialComponents").Ref("Component", components);
@@ -216,8 +227,8 @@ namespace DWSIM.Extensions.SolidCraft
                         .Data("Identifier", Str("MT-1"))
                         .Data("Label", Str(Short(string.Join(", ", compounds))))
                         .Data("NumberOfMaterialComponents", Int(compounds.Count))
-                        .Data("NumberOfPhases", Int(1))
-                        .Data("PhaseLabel", Str("Overall"));
+                        .Data("NumberOfPhases", Int(PhaseLabels.Length))
+                        .Data("PhaseLabel", PhaseLabels.Select(l => (object)Str(l)).ToArray());
                     process.Comp("MaterialComponents", components).Comp("ListsOfMaterialComponents", list).Comp("MaterialTemplates", template);
                 }
                 Result.Compounds = compounds.Count;
@@ -242,6 +253,7 @@ namespace DWSIM.Extensions.SolidCraft
 
                     var tag = Identifier(go.Tag);
                     var stream = new Obj(Id("Stream"), "Process/Process.Stream").Data("Identifier", Str(tag)).Data("Label", Str(go.Tag ?? tag));
+                    temperatureValue = pressureValue = flowValue = null;
                     Conditions(stream, ms, template, compounds, tag);
 
                     // a stream that comes from nowhere starts at a source, one that goes nowhere ends at a sink
@@ -255,21 +267,26 @@ namespace DWSIM.Extensions.SolidCraft
                     stream.Ref("Source", source).Ref("Target", target);
                     process.Comp("ProcessConnections", stream);
                     lines.Add((stream, from, sourceDrawn, to, to.Drawn.Count - 1, go));
+                    written[s.Name] = new Written { Stream = stream, From = from, Temperature = temperatureValue, Pressure = pressureValue, Flow = flowValue };
                     Result.Streams++;
                 }
+
+                Energy(process, objects);
+                Control(process, objects);
 
                 process.Comp("MaterialStates", states.ToArray());
                 process.Comp("Roles", roles.Values.ToArray());
                 process.Comp("ProcessSteps", ordered.Select(s => s.Object).ToArray());
                 Result.Steps = ordered.Count(s => s.Unit != null);
 
-                var left = objects.Count(o => o.GraphicObject.ObjectType == ObjectType.EnergyStream);
-                if (left > 0) Result.Notes.Add(left + " energy streams left out (the duties are on the process steps)");
-                var loose = objects.Where(o => o.GraphicObject.ObjectType != ObjectType.MaterialStream && o.GraphicObject.ObjectType != ObjectType.EnergyStream && !steps.ContainsKey(o.Name))
+                var left = objects.Count(o => o.GraphicObject.ObjectType == ObjectType.EnergyStream) - Result.EnergyFlows;
+                if (left > 0) Result.Notes.Add(left + " energy streams left out: they are not connected to a unit operation that has material streams");
+                var loose = objects.Where(o => o.GraphicObject.ObjectType != ObjectType.MaterialStream && o.GraphicObject.ObjectType != ObjectType.EnergyStream &&
+                        !steps.ContainsKey(o.Name) && !instruments.Contains(o.Name))
                     .Select(o => o.GraphicObject.Tag).ToList();
                 if (loose.Count > 0) Result.Notes.Add("objects without material streams left out: " + string.Join(", ", loose));
 
-                var model = new Obj("EngineeringModel_1", "Core/EngineeringModel").Comp("ConceptualModel", process).Comp("Diagram", Diagram(process, lines))
+                var model = new Obj("EngineeringModel_1", "Core/EngineeringModel").Comp("ConceptualModel", process).Comp("Diagram", Diagram(process, lines, energyLines))
                     .Data("ExportDateTime", new XElement("DateTime", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)))
                     .Data("OriginatingSystemName", Str("DWSIM"))
                     .Data("OriginatingSystemVendorName", Str("Daniel Wagner O. de Medeiros"))
@@ -431,6 +448,19 @@ namespace DWSIM.Extensions.SolidCraft
                         {
                             var reflux = Num(unit, "RefluxRatio");
                             if (reflux > 0 && type != ObjectType.ReboiledAbsorber) step.Comp("RefluxRatio", Value(Dbl(reflux.Value)));
+                            // the stages between the condenser and the reboiler, as trays
+                            var stages = Num(unit, "NumberOfStages");
+                            var columnTag = Identifier(unit.GraphicObject.Tag);
+                            var trays = (int)Math.Round(stages ?? 0) - (type == ObjectType.DistillationColumn ? 2 : type == ObjectType.AbsorptionColumn ? 0 : 1);
+                            if (trays >= 2 && trays <= 500)
+                            {
+                                var written = Enumerable.Range(1, trays).Select(n =>
+                                    new Obj(Id("Tray"), "Process/Process.ContactingOnTray")
+                                        .Data("Description", Text("Stage " + n + " of " + columnTag + ", from the top"))
+                                        .Data("Identifier", Str(columnTag + ".T" + n)).Data("Label", Str("Stage " + n)).Data("Number", Int(n))).ToArray();
+                                step.Comp("ProcessStepDetails", written);
+                                traysOf[unit.Name] = written;
+                            }
                             var condenser = Positive(Num(unit, "CondenserDuty"));
                             if (condenser > 0 && type != ObjectType.ReboiledAbsorber) Put("CondenserDuty", kW, condenser);
                             var reboiler = Positive(Num(unit, "ReboilerDuty"));
@@ -473,10 +503,18 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 step.Ports++;
                 var role = step.Unit == null ? (outlet ? "Outlet" : "Inlet") : RoleOf(step.Unit, outlet, index, streamObject);
+                // a feed or a side draw of a rigorous column is on a tray: its port is the tray's, the others are the column's
+                var tray = step.Unit != null && streamObject != null && (!outlet || role == "Sidedraw") ? TrayOf(step.Unit, streamObject) : int.MinValue;
+                Obj[] trays = null;
+                var onTray = tray >= 1 && traysOf.TryGetValue(step.Unit.Name, out trays) && tray <= trays.Length;
+                // a feed on the condenser or on the reboiler stage is a reflux or a boil-up to the column
+                if (!outlet && role == "Feed" && tray == 0) role = "Reflux";
+                else if (!outlet && role == "Feed" && trays != null && tray == trays.Length + 1) role = "Reboil";
                 var port = new Obj(Id("Port"), "Process/Process.MaterialPort").Ref("ConnectorReference", stream).Ref("PerformedRoles", Role(role))
                     .Data("Identifier", Str("N" + step.Ports.ToString(CultureInfo.InvariantCulture)))
                     .Data("NominalDirection", Enum("Process/Enumerations.PortDirection." + (outlet ? "Outlet" : "Inlet")));
-                step.Object.Comp("Ports", port);
+                if (onTray) trays[tray - 1].Comp("Ports", port);
+                else step.Object.Comp("Ports", port);
                 var at = Where(step, outlet, index);
                 var position = new Obj(Id("Position"), "Process/Diagram.PortNodePosition").Ref("Port", port).Data("Position", Point(at.X, at.Y));
                 step.Drawn.Add((port, position, at.X, at.Y));
@@ -515,6 +553,34 @@ namespace DWSIM.Extensions.SolidCraft
                     default:
                         return outlet ? "Outlet" : "Inlet";
                 }
+            }
+
+            /// <summary>The trays written for each rigorous column, by the column's name, the first one at the top.</summary>
+            readonly Dictionary<string, Obj[]> traysOf = new Dictionary<string, Obj[]>();
+
+            /// <summary>
+            /// The tray a stream is on in a rigorous column, counted from the top among the stages
+            /// between the condenser and the reboiler: 0 is the condenser, one past the trays the reboiler;
+            /// int.MinValue when the column does not tell.
+            /// </summary>
+            static int TrayOf(ISimulationObject column, ISimulationObject stream)
+            {
+                try
+                {
+                    if (!(column.GetType().GetProperty("MaterialStreams")?.GetValue(column, null) is IDictionary list)) return int.MinValue;
+                    if (!(column.GetType().GetProperty("Stages")?.GetValue(column, null) is IList stages)) return int.MinValue;
+                    var type = column.GraphicObject.ObjectType;
+                    var first = type == ObjectType.DistillationColumn || type == ObjectType.RefluxedAbsorber ? 1 : 0;
+                    foreach (var info in list.Values)
+                    {
+                        if (info.GetType().GetProperty("StreamID")?.GetValue(info, null) as string != stream.Name) continue;
+                        var stageId = info.GetType().GetProperty("AssociatedStage")?.GetValue(info, null) as string;
+                        for (var i = 0; i < stages.Count; i++)
+                            if (stages[i].GetType().GetProperty("ID")?.GetValue(stages[i], null) as string == stageId) return i - first + 1;
+                    }
+                }
+                catch (Exception) { }
+                return int.MinValue;
             }
 
             /// <summary>What a stream is to a rigorous column (Feed, Distillate, BottomsLiquid, Sidedraw...), "" when the column does not tell.</summary>
@@ -562,34 +628,27 @@ namespace DWSIM.Extensions.SolidCraft
 
             #region streams
 
-            /// <summary>The stream's temperature, pressure and mass flow, and its material state with the composition.</summary>
-            void Conditions(Obj stream, IMaterialStream ms, Obj template, List<string> compounds, string tag)
-            {
-                bool Real(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
-                double t, p, w;
-                try { t = ms.GetTemperature(); p = ms.GetPressure(); w = ms.GetMassFlow(); }
-                catch (Exception) { Result.Notes.Add(tag + ": no conditions to write"); return; }
-                if (Real(t) && t > 0) stream.Comp("Temperature", Value("TemperatureUnit.DegreeCelsius", Math.Round(t - 273.15, 6)));
-                if (Real(p) && p > 0) stream.Comp("Pressure", Value("PressureAbsoluteUnit.Bar", Math.Round(p / 1e5, 8)));
-                var flow = Real(w) && w >= 0 ? w * 3600 : (double?)null;
-                if (flow.HasValue) stream.Comp("MassFlow", Value("MassFlowRateUnit.KilogramPerHour", Round(flow.Value)));
-                if (template == null) return;
-                stream.Ref("MaterialTemplateReference", template);
+            /// <summary>The phases a stream's state is split into, with the flowsheet's phase each one is read from.</summary>
+            static readonly string[] PhaseLabels = { "Vapour", "Liquid", "Liquid 2", "Solid" };
 
-                // the overall composition, in the template's order
-                IPhase overall = null;
-                try { overall = ms.Phases[0]; } catch (Exception) { }
-                if (overall == null) return;
+            /// <summary>
+            /// A phase, or the overall mixture, as a DEXPI material state type: its mass flow, the
+            /// composition in mole fractions and in the mass flow of each compound, and its density,
+            /// viscosity, volume flow and specific enthalpy where the flowsheet has them. Null for a
+            /// phase without a composition.
+            /// </summary>
+            Obj StateType(IPhase phase, List<string> compounds, double? flow, string label, string identifier, string description)
+            {
+                bool Real(double? v) => v.HasValue && !double.IsNaN(v.Value) && !double.IsInfinity(v.Value);
                 var moles = new double[compounds.Count];
                 var mass = new double[compounds.Count];
                 for (var i = 0; i < compounds.Count; i++)
-                    if (overall.Compounds.TryGetValue(compounds[i], out var c) && c != null)
+                    if (phase.Compounds.TryGetValue(compounds[i], out var c) && c != null)
                     {
-                        moles[i] = c.MoleFraction.HasValue && Real(c.MoleFraction.Value) ? Math.Max(0, c.MoleFraction.Value) : 0;
-                        mass[i] = c.MassFraction.HasValue && Real(c.MassFraction.Value) ? Math.Max(0, c.MassFraction.Value) : 0;
+                        moles[i] = Real(c.MoleFraction) ? Math.Max(0, c.MoleFraction.Value) : 0;
+                        mass[i] = Real(c.MassFraction) ? Math.Max(0, c.MassFraction.Value) : 0;
                     }
-                var total = moles.Sum();
-                if (total <= 0) return;
+                if (moles.Sum() <= 0) return null;
 
                 var composition = new Obj(Id("Composition"), "Process/Process.Composition")
                     .Comp("MoleFractions", Value(Agg("Core/PhysicalQuantities.PhysicalQuantityVector",
@@ -601,10 +660,62 @@ namespace DWSIM.Extensions.SolidCraft
                     composition.Comp("MassFlow", fractions.Select(x => Value("MassFlowRateUnit.KilogramPerHour", Round(x * flow.Value))).ToArray());
                 }
                 var type = new Obj(Id("MaterialStateType"), "Process/Process.MaterialStateType").Comp("Composition", composition)
-                    .Data("Description", Text("Overall state of " + tag)).Data("Identifier", Str("MST-" + tag)).Data("Label", Str(tag));
+                    .Data("Description", Text(description)).Data("Identifier", Str(identifier)).Data("Label", Str(label));
                 if (flow.HasValue) type.Comp("MassFlow", Value("MassFlowRateUnit.KilogramPerHour", Round(flow.Value)));
+                var props = phase.Properties;
+                if (Real(props.density) && props.density.Value > 0) type.Comp("Density", Value("DensityUnit.KilogramPerMetreCubed", Round(props.density.Value)));
+                if (Real(props.viscosity) && props.viscosity.Value > 0) type.Comp("Viscosity", Value("DynamicViscosityUnit.PascalSecond", Round(props.viscosity.Value)));
+                if (Real(props.volumetric_flow) && props.volumetric_flow.Value > 0) type.Comp("VolumeFlow", Value("VolumeFlowRateUnit.MetreCubedPerHour", Round(props.volumetric_flow.Value * 3600)));
+                if (Real(props.enthalpy)) type.Comp("SpecificEnthalpy", Value("MassSpecificEnergyUnit.KilojoulePerKilogram", Round(props.enthalpy.Value)));
+                return type;
+            }
+
+            /// <summary>The stream's temperature, pressure and mass flow, and its material state: the overall mixture and each phase present.</summary>
+            void Conditions(Obj stream, IMaterialStream ms, Obj template, List<string> compounds, string tag)
+            {
+                bool Real(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+                double t, p, w;
+                try { t = ms.GetTemperature(); p = ms.GetPressure(); w = ms.GetMassFlow(); }
+                catch (Exception) { Result.Notes.Add(tag + ": no conditions to write"); return; }
+                // the conditions of a feed are what the user specified, the others what the flowsheet calculated
+                var specified = false;
+                try { var go = (ms as ISimulationObject)?.GraphicObject; specified = go != null && go.InputConnectors.Count > 0 && !go.InputConnectors[0].IsAttached; } catch (Exception) { }
+                Obj Operating(Obj value) => value.Data("Provenance", Enum("Core/DataTypes.QuantityProvenance." + (specified ? "Specified" : "Calculated")))
+                    .Data("Scope", Enum("Core/DataTypes.Scope.Operating"));
+                if (Real(t) && t > 0) stream.Comp("Temperature", temperatureValue = Operating(Value("TemperatureUnit.DegreeCelsius", Math.Round(t - 273.15, 6))));
+                if (Real(p) && p > 0) stream.Comp("Pressure", pressureValue = Operating(Value("PressureAbsoluteUnit.Bar", Math.Round(p / 1e5, 8))));
+                var flow = Real(w) && w >= 0 ? w * 3600 : (double?)null;
+                if (flow.HasValue) stream.Comp("MassFlow", flowValue = Operating(Value("MassFlowRateUnit.KilogramPerHour", Round(flow.Value))));
+                if (template == null) return;
+                stream.Ref("MaterialTemplateReference", template);
+
+                // the overall composition, in the template's order
+                IPhase overall = null;
+                try { overall = ms.Phases[0]; } catch (Exception) { }
+                if (overall == null) return;
+                var type = StateType(overall, compounds, flow, tag, "MST-" + tag, "Overall state of " + tag);
+                if (type == null) return;
                 var state = new Obj(Id("MaterialState"), "Process/Process.MaterialState").Comp("State", type)
                     .Data("Description", Str("Material state of " + tag)).Data("Identifier", Str("MS-" + tag)).Data("Label", Str(tag));
+
+                // the phases present, each with its own flow, composition and properties
+                double Flow(int index)
+                {
+                    try { var f = ms.Phases[index]?.Properties.massflow; return f.HasValue && Real(f.Value) ? f.Value : 0; }
+                    catch (Exception) { return 0; }
+                }
+                // two liquids are written each on its own, a single one as the liquid of the stream
+                var twoLiquids = Flow(3) > 0 && Flow(4) > 0;
+                var written = twoLiquids
+                    ? new[] { (Index: 2, Label: "Vapour"), (Index: 3, Label: "Liquid"), (Index: 4, Label: "Liquid 2"), (Index: 7, Label: "Solid") }
+                    : new[] { (Index: 2, Label: "Vapour"), (Index: 1, Label: "Liquid"), (Index: 7, Label: "Solid") };
+                foreach (var one in written)
+                {
+                    var phaseFlow = Flow(one.Index);
+                    if (phaseFlow <= 0) continue;
+                    var part = StateType(ms.Phases[one.Index], compounds, phaseFlow * 3600, one.Label, "MST-" + tag + "-" + one.Label.Replace(" ", ""), one.Label + " phase of " + tag);
+                    if (part != null) state.Comp("Phases", part);
+                }
                 states.Add(state);
                 stream.Ref("MaterialStateReference", state);
             }
@@ -621,7 +732,229 @@ namespace DWSIM.Extensions.SolidCraft
                 return x;
             }
 
-            static double Round(double v) => v == 0 ? 0 : Math.Round(v, Math.Max(0, 9 - (int)Math.Floor(Math.Log10(Math.Abs(v))) - 1));
+            static double Round(double v) => v == 0 ? 0 : Math.Round(v, Math.Min(15, Math.Max(0, 9 - (int)Math.Floor(Math.Log10(Math.Abs(v))) - 1)));
+
+            #endregion
+
+            #region energy
+
+            /// <summary>A material stream as written: its connection, the step it leaves and the values a measurement refers to.</summary>
+            sealed class Written
+            {
+                public Obj Stream, Temperature, Pressure, Flow;
+                public Step From;
+            }
+
+            readonly Dictionary<string, Written> written = new Dictionary<string, Written>();
+            readonly HashSet<string> instruments = new HashSet<string>();
+            readonly List<(Obj Stream, Step From, int FromPort, Step To, int ToPort, IGraphicObject Go)> energyLines =
+                new List<(Obj, Step, int, Step, int, IGraphicObject)>();
+            readonly Dictionary<Step, int> energyPorts = new Dictionary<Step, int>();
+            Obj temperatureValue, pressureValue, flowValue;
+
+            static bool Mechanical(Step step)
+            {
+                var type = step?.Unit?.GraphicObject.ObjectType;
+                return type == ObjectType.Pump || type == ObjectType.Compressor || type == ObjectType.Expander || type == ObjectType.CompressorExpander;
+            }
+
+            /// <summary>
+            /// Each energy stream attached to a step as an energy flow: mechanical for the shaft power
+            /// of a pump, a compressor or an expander, thermal for a duty. The end that is open on
+            /// the flowsheet starts at a source (the energy the step takes) or ends at a sink (the
+            /// energy it gives off), as the material streams do.
+            /// </summary>
+            void Energy(Obj process, List<ISimulationObject> objects)
+            {
+                foreach (var e in objects.Where(o => o.GraphicObject.ObjectType == ObjectType.EnergyStream).OrderBy(o => o.GraphicObject.Tag, StringComparer.OrdinalIgnoreCase))
+                {
+                    var go = e.GraphicObject;
+                    var cin = go.InputConnectors.Count > 0 && go.InputConnectors[0].IsAttached ? go.InputConnectors[0].AttachedConnector : null;
+                    var cout = go.OutputConnectors.Count > 0 && go.OutputConnectors[0].IsAttached ? go.OutputConnectors[0].AttachedConnector : null;
+                    var from = cin?.AttachedFrom != null && steps.TryGetValue(cin.AttachedFrom.Name, out var a) ? a : null;
+                    var to = cout?.AttachedTo != null && steps.TryGetValue(cout.AttachedTo.Name, out var b) ? b : null;
+                    if (from == null && to == null) continue;
+
+                    var mechanical = Mechanical(from) || Mechanical(to);
+                    var tag = Identifier(go.Tag);
+                    var flow = new Obj(Id("EnergyFlow"), "Process/Process." + (mechanical ? "MechanicalEnergyFlow" : "ThermalEnergyFlow"))
+                        .Data("Identifier", Str(tag)).Data("Label", Str(go.Tag ?? tag));
+                    double? duty = null;
+                    try { duty = (e as IEnergyStream)?.GetEnergyFlow(); } catch (Exception) { }
+                    if (duty.HasValue && !double.IsNaN(duty.Value) && !double.IsInfinity(duty.Value))
+                        flow.Comp("Duty", Value("PowerUnit.Kilowatt", Round(Math.Abs(duty.Value))));
+
+                    if (from == null) from = Boundary(go, true, tag);
+                    if (to == null) to = Boundary(go, false, tag);
+                    var source = EnergyPort(from, flow, true, mechanical);
+                    var sourceDrawn = from.Drawn.Count - 1;
+                    var target = EnergyPort(to, flow, false, mechanical);
+                    flow.Ref("Source", source).Ref("Target", target);
+                    process.Comp("ProcessConnections", flow);
+                    energyLines.Add((flow, from, sourceDrawn, to, to.Drawn.Count - 1, go));
+                    Result.EnergyFlows++;
+                }
+            }
+
+            /// <summary>The energy port of a step for a flow, drawn on the bottom side of a unit operation, the ports side by side.</summary>
+            Obj EnergyPort(Step step, Obj flow, bool outlet, bool mechanical)
+            {
+                step.Ports++;
+                var port = new Obj(Id("Port"), "Process/Process." + (mechanical ? "MechanicalEnergyPort" : "ThermalEnergyPort"))
+                    .Ref("ConnectorReference", flow).Ref("PerformedRoles", Role(outlet ? "Output" : "Input"))
+                    .Data("Identifier", Str("E" + step.Ports.ToString(CultureInfo.InvariantCulture)))
+                    .Data("NominalDirection", Enum("Process/Enumerations.PortDirection." + (outlet ? "Outlet" : "Inlet")));
+                step.Object.Comp("Ports", port);
+                energyPorts.TryGetValue(step, out var n);
+                energyPorts[step] = ++n;
+                double x, y;
+                if (step.Unit == null) { x = outlet ? step.X + step.Width : step.X; y = step.Y + step.Height / 2; }
+                else { x = step.X + step.Width * Math.Min(0.9, 0.25 * n); y = step.Y + step.Height; }
+                var position = new Obj(Id("Position"), "Process/Diagram.PortNodePosition").Ref("Port", port).Data("Position", Point(x, y));
+                step.Drawn.Add((port, position, x, y));
+                return port;
+            }
+
+            #endregion
+
+            #region control
+
+            /// <summary>
+            /// The PID controllers and the gauges as instrumentation activities. A controller is an
+            /// instrumentation system with a measuring activity and a controlling activity: an
+            /// information flow goes from the measured step (for a stream, the step it leaves) to the
+            /// measurement, one from the measurement to the controller and one from the controller
+            /// to the step it moves. A gauge is a system with the measuring activity alone.
+            /// </summary>
+            void Control(Obj process, List<ISimulationObject> objects)
+            {
+                var systems = new List<Obj>();
+                foreach (var o in objects.OrderBy(x => x.GraphicObject.Tag, StringComparer.OrdinalIgnoreCase))
+                {
+                    var go = o.GraphicObject;
+                    var controller = go.ObjectType == ObjectType.Controller_PID && o is IAdjust;
+                    var indicator = !controller && o is IIndicator;
+                    if (!controller && !indicator) continue;
+
+                    string measuredId, property, units;
+                    UnitOfMeasure kind;
+                    if (controller)
+                    {
+                        var data = ((IAdjust)o).ControlledObjectData;
+                        measuredId = data?.ID; property = data?.PropertyName ?? ""; units = data?.Units ?? ""; kind = data?.UnitsType ?? UnitOfMeasure.none;
+                    }
+                    else
+                    {
+                        var gauge = (IIndicator)o;
+                        measuredId = gauge.SelectedObjectID; property = gauge.SelectedProperty ?? ""; units = gauge.SelectedPropertyUnits ?? ""; kind = gauge.SelectedPropertyType;
+                    }
+                    if (string.IsNullOrEmpty(measuredId) || !fs.SimulationObjects.TryGetValue(measuredId, out var measured))
+                    {
+                        Result.Notes.Add(go.Tag + ": it does not measure an object of the flowsheet; left out");
+                        continue;
+                    }
+                    var letter = Instruments.Letter(fs, kind, property, go.Tag);
+                    var quantity = letter == "P" ? "Pressure" : letter == "F" ? "Flow" : letter == "L" ? "Level" : null;
+                    var what = letter == "T" ? "temperature" : letter == "P" ? "pressure" : letter == "F" ? "flow" : letter == "L" ? "level" : "value";
+                    var measuredTag = measured.GraphicObject?.Tag ?? measured.Name;
+
+                    // where the measurement is taken: on a stream (read at the step it leaves) or on a step
+                    Step at;
+                    Written stream = null;
+                    if (written.TryGetValue(measured.Name, out stream)) at = stream.From;
+                    else if (!steps.TryGetValue(measured.Name, out at))
+                    {
+                        Result.Notes.Add(go.Tag + ": " + measuredTag + ", which it measures, is not in the model; left out");
+                        continue;
+                    }
+
+                    var tag = Identifier(go.Tag);
+                    double Finite(double? v) => v.HasValue && !double.IsNaN(v.Value) && !double.IsInfinity(v.Value) ? v.Value : 0.0;
+                    var pv = Finite(controller ? Num(o, "PVValue") : Num(o, "CurrentValue"));
+                    var description = "the " + what + " of " + measuredTag + (units.Length > 0 ? " in " + units : "");
+
+                    var sensed = Signal(tag + ".1", "Measured " + what + " of " + measuredTag, pv);
+                    var measuring = new Obj(Id("Activity"), "Process/Process.MeasuringProcessVariable")
+                        .Data("Identifier", Str(Identifier(controller ? tag + ".M" : tag + ".I")))
+                        .Data("Label", Str(letter + (controller ? "T" : "I") + " " + measuredTag))
+                        .Data("Description", Text("Measures " + description))
+                        .Comp("OutputValue", Value(Dbl(pv)));
+                    if (quantity != null) measuring.Data("MeasuredVariable", Enum("Process/Enumerations.MeasuredQuantity." + quantity));
+                    if (stream != null)
+                    {
+                        measuring.Ref("ConnectionReference", stream.Stream);
+                        var value = letter == "T" ? stream.Temperature : letter == "P" ? stream.Pressure : letter == "F" && property == "PROP_MS_2" ? stream.Flow : null;
+                        if (value != null) measuring.Ref("MeasuredVariableReference", value);
+                    }
+                    else measuring.Ref("ProcessStepReference", at.Object);
+                    sensed.Ref("Source", InformationPort(at.Object, "Ports", ref at.Ports, "S", sensed, true)).Ref("Target", ActivityPort(measuring, tag + (controller ? ".M" : ".I"), 1, sensed, false));
+                    process.Comp("ProcessConnections", sensed);
+
+                    var system = new Obj(Id("InstrumentationSystem"), "Process/Process.InstrumentationSystemActivity")
+                        .Comp("InstrumentationActivities", measuring)
+                        .Data("Identifier", Str(tag)).Data("Label", Str(go.Tag ?? tag))
+                        .Data("Description", Text((controller ? "Controls " : "Indicates ") + description));
+                    systems.Add(system);
+                    instruments.Add(o.Name);
+                    if (!controller) { Result.Indicators++; continue; }
+                    Result.ControlLoops++;
+
+                    var sp = Finite(Num(o, "SetPoint"));
+                    var mv = Finite(Num(o, "MVValue"));
+                    var controlling = new Obj(Id("Activity"), "Process/Process.ControllingProcessVariable")
+                        .Data("Identifier", Str(Identifier(tag + ".C")))
+                        .Data("Label", Str(letter + "C " + (go.Tag ?? tag)))
+                        .Data("Description", Text("Controls " + description + (units.Length > 0 ? "; the setpoint is in " + units : "")))
+                        .Comp("InputValue", Value(Dbl(pv))).Comp("OutputValue", Value(Dbl(mv))).Comp("Setpoint", Value(Dbl(sp)));
+                    system.Comp("InstrumentationActivities", controlling);
+                    var reading = Signal(tag + ".2", "Reading of " + tag, pv);
+                    reading.Ref("Source", ActivityPort(measuring, tag + ".M", 2, reading, true)).Ref("Target", ActivityPort(controlling, tag + ".C", 1, reading, false));
+                    process.Comp("ProcessConnections", reading);
+
+                    // what the controller moves: a step (a valve), or the step a manipulated stream leaves
+                    var moved = ((IAdjust)o).ManipulatedObjectData;
+                    Step target = null;
+                    if (!string.IsNullOrEmpty(moved?.ID) && !steps.TryGetValue(moved.ID, out target) && written.TryGetValue(moved.ID, out var movedStream)) target = movedStream.From;
+                    if (target == null)
+                    {
+                        Result.Notes.Add(go.Tag + ": what it moves is not in the model; the loop is written without its output");
+                        continue;
+                    }
+                    var movedTag = fs.SimulationObjects.TryGetValue(moved.ID, out var movedObject) ? movedObject.GraphicObject?.Tag ?? moved.ID : moved.ID;
+                    var output = Signal(tag + ".3", "Output of " + tag + " to " + movedTag, mv);
+                    output.Ref("Source", ActivityPort(controlling, tag + ".C", 2, output, true)).Ref("Target", InformationPort(target.Object, "Ports", ref target.Ports, "S", output, false));
+                    process.Comp("ProcessConnections", output);
+                }
+                process.Comp("InstrumentationSystemActivities", systems.ToArray());
+            }
+
+            /// <summary>An information flow carrying one number.</summary>
+            Obj Signal(string identifier, string label, double value) => new Obj(Id("Signal"), "Process/Process.InformationFlow")
+                .Comp("InformationValue", new Obj(Id("SignalValue"), "Process/Process.InformationVariant")
+                    .Data("BooleanValue", new XElement("Boolean", "false")).Data("DoubleValue", Dbl(value)).Data("IntegerValue", Int(0))
+                    .Data("VariantType", Enum("Process/Enumerations.InformationVariantType.Double")).Data("VectorSize", Int(1)))
+                .Data("Identifier", Str(Identifier(identifier))).Data("Label", Str(label));
+
+            /// <summary>An information port among a step's ports, numbered with them.</summary>
+            Obj InformationPort(Obj owner, string slot, ref int count, string prefix, Obj flow, bool outlet)
+            {
+                count++;
+                var port = new Obj(Id("Port"), "Process/Process.InformationPort").Ref("ConnectorReference", flow).Ref("PerformedRoles", Role(outlet ? "Output" : "Input"))
+                    .Data("Identifier", Str(prefix + count.ToString(CultureInfo.InvariantCulture)))
+                    .Data("NominalDirection", Enum("Process/Enumerations.PortDirection." + (outlet ? "Outlet" : "Inlet")));
+                owner.Comp(slot, port);
+                return port;
+            }
+
+            /// <summary>An information port of an instrumentation activity.</summary>
+            Obj ActivityPort(Obj activity, string name, int number, Obj flow, bool outlet)
+            {
+                var port = new Obj(Id("Port"), "Process/Process.InformationPort").Ref("ConnectorReference", flow).Ref("PerformedRoles", Role(outlet ? "Output" : "Input"))
+                    .Data("Identifier", Str(name + "." + number.ToString(CultureInfo.InvariantCulture)))
+                    .Data("NominalDirection", Enum("Process/Enumerations.PortDirection." + (outlet ? "Outlet" : "Inlet")));
+                activity.Comp("InformationPorts", port);
+                return port;
+            }
 
             #endregion
 
@@ -631,7 +964,8 @@ namespace DWSIM.Extensions.SolidCraft
             /// The flowsheet's layout: a block with its tag for each step, its ports where the
             /// flowsheet's connectors are, and a line for each stream through where the stream is drawn.
             /// </summary>
-            Obj Diagram(Obj process, List<(Obj Stream, Step From, int FromPort, Step To, int ToPort, IGraphicObject Go)> lines)
+            Obj Diagram(Obj process, List<(Obj Stream, Step From, int FromPort, Step To, int ToPort, IGraphicObject Go)> lines,
+                List<(Obj Stream, Step From, int FromPort, Step To, int ToPort, IGraphicObject Go)> energy)
             {
                 var diagram = new Obj("Diagram_1", "Core/Diagram.Diagram").Ref("Represents", process);
                 double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
@@ -655,11 +989,12 @@ namespace DWSIM.Extensions.SolidCraft
                         .Comp("NodePositions", s.Drawn.Select(d => d.Position).ToArray()).Ref("Represents", s.Object);
                     diagram.Comp("Groups", group);
                 }
-                foreach (var l in lines)
+                // the energy flows are drawn as the streams are, with a dashed line
+                foreach (var l in lines.Select(x => (Line: x, Dash: "Solid")).Concat(energy.Select(x => (Line: x, Dash: "Dash"))).Select(x => (x.Line.Stream, x.Line.From, x.Line.FromPort, x.Line.To, x.Line.ToPort, x.Line.Go, x.Dash)))
                 {
                     var a = l.From.Drawn[l.FromPort];
                     var b = l.To.Drawn[l.ToPort];
-                    var line = new Obj(Id("Line"), "Core/Diagram.ConnectorLine").Ref("Source", a.Position).Ref("Target", b.Position).Data("Stroke", Stroke(0.25));
+                    var line = new Obj(Id("Line"), "Core/Diagram.ConnectorLine").Ref("Source", a.Position).Ref("Target", b.Position).Data("Stroke", Stroke(0.25, l.Dash));
                     // through the stream's own place on the flowsheet, when both ends are unit operations
                     if (l.From.Unit != null && l.To.Unit != null)
                     {

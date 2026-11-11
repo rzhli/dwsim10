@@ -38,6 +38,12 @@ namespace DWSIM.Extensions.SolidCraft
         public DrawingReading Reading;
         public ImportSetup Setup = new ImportSetup();
         public DrawingImportBuilder.Result Built;
+
+        /// <summary>
+        /// Bring the flowsheet's own items and streams up to date with the reading, found by their
+        /// tags, and add nothing: for a new revision of a drawing or model already imported.
+        /// </summary>
+        public bool UpdateExisting;
         public List<ImportIssue> Solve = new List<ImportIssue>();
 
         /// <summary>The equipment parameters the fit may move, found after a build where the Patreon edition's reconciliation is installed.</summary>
@@ -104,6 +110,11 @@ namespace DWSIM.Extensions.SolidCraft
         public void Propose()
         {
             Tidied = Reading.Tidy();
+            // by a name the database knows, else by the CAS number an IUPAC name or a ChEBI identifier stands for
+            var renamed = Reading.ResolveCompounds(n => DrawingImportBuilder.CompoundName(Flowsheet, n) ??
+                (DexpiIdentifiers.CasOf(n) is string cas ? DrawingImportBuilder.CompoundName(Flowsheet, cas) : null));
+            if (renamed.Count > 0)
+                Tidied.Add(new ImportIssue(ImportIssue.Levels.Info, "", "compounds found by their CAS number or other name: " + string.Join(", ", renamed)));
             Setup = new ImportSetup();
             var names = Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys.Concat(l.MoleFractions.Keys))).Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (var n in names)
@@ -178,7 +189,9 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var n in UnmatchedCompounds())
                 issues.Add(new ImportIssue(ImportIssue.Levels.Warning, n, "not found in the compound database; its flows are left out"));
             if (Flowsheet.SimulationObjects.Count > 0)
-                issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", "the flowsheet is not empty; the drawing is added to what is there"));
+                issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", UpdateExisting
+                    ? "the items and streams of the flowsheet with the reading's tags are brought up to date; nothing is added"
+                    : "the flowsheet is not empty; the drawing is added to what is there"));
             issues.AddRange(Tidied);
             return issues.OrderBy(i => i.Level).ToList();
         }
@@ -187,7 +200,7 @@ namespace DWSIM.Extensions.SolidCraft
         public void Build(bool solve, Action<string> step)
         {
             step?.Invoke("Building the flowsheet");
-            Built = DrawingImportBuilder.Build(Flowsheet, Reading, Setup);
+            Built = UpdateExisting ? DrawingImportBuilder.Update(Flowsheet, Reading, Setup) : DrawingImportBuilder.Build(Flowsheet, Reading, Setup);
             try { Flowsheet.UpdateInterface(); } catch (Exception) { }
             Solve = new List<ImportIssue>();
             if (!solve) return;
@@ -206,6 +219,8 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var e in errors.Take(10))
                 Solve.Add(new ImportIssue(ImportIssue.Levels.Error, "", e.GetBaseException().Message));
             Solve.AddRange(DrawingImportBuilder.Compare(Reading, Built));
+            Solve.AddRange(DrawingImportBuilder.DesignCheck(Flowsheet, Reading, Built));
+            Solve.AddRange(DrawingImportBuilder.SettleControllers(Flowsheet, Built));
             Fitted = null;
             FitParameters = DrawingImportFit.Available ? DrawingImportFit.Parameters(Reading, Built) : new List<DrawingImportFit.Parameter>();
             try { Flowsheet.UpdateInterface(); } catch (Exception) { }
@@ -246,9 +261,24 @@ namespace DWSIM.Extensions.SolidCraft
             var withData = Built.Streams.Count(kv => !kv.Key.Feed && kv.Key.HasData);
             var off = Solve.Count(i => i.Level == ImportIssue.Levels.Warning && i.Subject.Length > 0);
             var errors = Solve.Count(i => i.Level == ImportIssue.Levels.Error);
-            return Built.Items.Count + " items and " + Built.Streams.Count + " streams built" + (Built.Recycles > 0 ? ", " + Built.Recycles + " recycles" : "") + ". " +
+            return Built.Items.Count + " items and " + Built.Streams.Count + (Built.Updated ? " streams updated" : " streams built") +
+                (Built.Pipes > 0 ? ", " + Built.Pipes + " pipe segments" : "") + (Built.Recycles > 0 ? ", " + Built.Recycles + " recycles" : "") + ". " +
                 (withData > 0 ? (withData - off) + " of " + withData + " streams match the drawing's table" + (errors > 0 ? "; the solver reported errors" : "") + "." : "");
         }
+
+        /// <summary>How many of the reading's items the flowsheet already has, by tag: an update is offered when there are any.</summary>
+        public int MatchingTags()
+        {
+            if (Reading == null) return 0;
+            return Reading.ItemsByTag().Keys.Count(tag =>
+            {
+                var obj = Flowsheet.GetFlowsheetSimulationObject(tag);
+                return obj != null && obj.GraphicObject != null && obj.GraphicObject.ObjectType != DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream;
+            });
+        }
+
+        /// <summary>How many of the reading's lines give their size in the line number: pipe segments are offered when there are any.</summary>
+        public int SizedLines() => Reading == null ? 0 : Reading.Lines.Count(l => l.Include && DrawingImportBuilder.LineSize(l.LineNumber) != null);
 
         public static bool IsReading(string file) => file.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 
