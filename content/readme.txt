@@ -53,6 +53,7 @@ Version 10.2.17
 - [CHG] Flowsheet Check: warns when the streams of one fluid around a unit use different property packages
 - [CHG] Fail-safe flash with solids: a warning in the log names the stream, the specification and the original error
 - [CHG] Windows installers of final releases are signed with a code signing certificate
+- [CHG] Naphtali-Sandholm column solver: the bubble point pass that prepares its estimates solves the column once and leaves a composition or stream ratio specification to the Newton iteration; it used to search for the reflux or bottoms rate that met it, which could take longer than the solve itself
 - [FIX] Pipe Segment and Pipe Network with Beggs and Brill: the two-phase friction factor used the wrong branch of the correlation in part of its range, with friction about 3.4 times too high in one band and jumps near another
 - [FIX] Pipe Network: the nodal solver could not raise its damping factor again once it fell below 0.3 and ran to the iteration limit
 - [FIX] Excess enthalpy of NRTL, UNIQUAC, UNIFAC, Modified UNIFAC, NIST-MFAC and Wilson (Excess and Experimental Liquid + Excess modes) was too large where the activity coefficients are far from one
@@ -71,6 +72,7 @@ Version 10.2.17
 - [FIX] Spreadsheet: formulas referring to a worksheet stored later in the file were lost when the flowsheet was opened
 - [FIX] Scripts: the ideal gas heat capacity of a ChEDL compound requested with the compound object was 1000 times the molar mass too small
 - [FIX] Filter: a feed whose solid compounds don't have a solid density gave a filter area that was not a number; the block now stops with a message that names the compounds
+- [FIX] Bubble and dew point of a mixture with one compound above 99.999 mol %: the K-values returned were those of the starting temperature or of the estimates, so a column stage of nearly pure water could keep K = 0.78 for water and the bubble point column solver stopped on a profile that did not close the mass balance
 
 Version 10.2.16
 
