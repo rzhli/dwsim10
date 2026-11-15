@@ -543,7 +543,80 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Dim rspec As New ColumnSpec()
                 rspec.SpecValue = bottomsrate
                 rspec.SType = ColumnSpec.SpecType.Product_Molar_Flow_Rate
-                newspecs.Add("C", specs("C"))
+
+                ' A condenser specification that fixes the distillate rate fixes the bottoms rate too,
+                ' through the overall balance, and what is left free is the reflux. Searching the
+                ' bottoms rate then moved the distillate away from its specification while the reflux
+                ' stayed at whatever the estimates held, or drifted without bound inside one solve.
+                ' In that case the bottoms rate is set from the balance and the search runs on the
+                ' reflux ratio, in its logarithm.
+                Dim searchReflux As Boolean = False
+                Dim cspec As New ColumnSpec()
+                cspec.SType = ColumnSpec.SpecType.Stream_Ratio
+                Dim ulo As Double = Math.Log(0.001)
+                Dim uhi As Double = Math.Log(1000.0)
+                Dim u0 As Double = 0.0
+
+                ' With a distillate rate in mass, the bottoms rate that closes the balance depends on the
+                ' compositions of the other products, the side draws and the overhead vapour. Their mass
+                ' is taken with the compositions at hand: those of the estimates before the first solve
+                ' and, after each solve of the search, those it returned.
+                Dim otherproducts As Boolean = False
+                Dim feedmass As Double = 0.0
+                Dim othermass As Func(Of Double()(), Double()(), Double(), Double(), Double(), Double) =
+                    Function(xs, ys, lss1, vss1, v1)
+                        Dim m As Double = 0.0
+                        For j = 0 To ns
+                            If j > 0 AndAlso lss1(j) > 0.0 Then m += lss1(j) * pp.AUX_MMM(xs(j)) / 1000.0
+                            If vss1(j) > 0.0 Then m += vss1(j) * pp.AUX_MMM(ys(j)) / 1000.0
+                        Next
+                        If condt = Column.condtype.Partial_Condenser AndAlso v1(0) > 0.0 Then m += v1(0) * pp.AUX_MMM(ys(0)) / 1000.0
+                        Return m
+                    End Function
+
+                If Not DirectCast(rc, DistillationColumn).ReboiledAbsorber Then
+                    Dim draws As Double = 0.0
+                    For j = 0 To ns
+                        If j > 0 Then draws += LSS(j)
+                        draws += VSS(j)
+                    Next
+                    ' the vapour leaving the condenser is a product of its own only with a partial condenser:
+                    ' the estimates of a total condenser carry a floor of 1E-10 there
+                    Dim overheadvapor As Double = If(condt = Column.condtype.Partial_Condenser, V(0), 0.0)
+                    Select Case specs("C").SType
+                        Case ColumnSpec.SpecType.Product_Molar_Flow_Rate
+                            rspec.SpecValue = F.Sum - draws - overheadvapor - spval1
+                            searchReflux = True
+                        Case ColumnSpec.SpecType.Product_Mass_Flow_Rate
+                            For j = 0 To ns
+                                If F(j) > 0.0 Then feedmass += F(j) * pp.AUX_MMM(z(j)) / 1000.0
+                            Next
+                            otherproducts = draws > 0.0 OrElse overheadvapor > 0.0
+                            rspec.SType = ColumnSpec.SpecType.Product_Mass_Flow_Rate
+                            rspec.SpecValue = feedmass - spval1
+                            If otherproducts Then rspec.SpecValue -= othermass(x, y, LSS, VSS, V)
+                            searchReflux = True
+                    End Select
+                End If
+
+                If searchReflux Then
+                    If rspec.SpecValue <= 0.0 Then Throw New Exception("the distillate rate specified is not below what the feeds supply after the side draws")
+                    Dim rr0 As Double
+                    If specs("C").InitialEstimate.HasValue Then
+                        rr0 = specs("C").InitialEstimate.GetValueOrDefault()
+                    ElseIf condt <> Column.condtype.Full_Reflux Then
+                        rr0 = L(0) / LSS(0)
+                    Else
+                        rr0 = (V(1) + F(0)) / V(0) - 1
+                    End If
+                    If Double.IsNaN(rr0) OrElse Double.IsInfinity(rr0) Then rr0 = 1.0
+                    rr0 = Math.Min(Math.Max(rr0, 0.05), 50.0)
+                    u0 = Math.Log(rr0)
+                    cspec.SpecValue = rr0
+                    newspecs.Add("C", cspec)
+                Else
+                    newspecs.Add("C", specs("C"))
+                End If
                 newspecs.Add("R", rspec)
 
                 Dim result As Object = Nothing
@@ -572,7 +645,11 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Dim freb As Func(Of Double, Integer, Double) =
                 Function(xvar, mode)
 
-                    rspec.SpecValue = Math.Min(Math.Max(xvar, blo), bhi)
+                    If searchReflux Then
+                        cspec.SpecValue = Math.Exp(Math.Min(Math.Max(xvar, ulo), uhi))
+                    Else
+                        rspec.SpecValue = Math.Min(Math.Max(xvar, blo), bhi)
+                    End If
 
                     ' with the same temperature-step fallbacks as the column's own first solve (and as
                     ' the condenser's outer loop above): a column that needs a smaller step needs it at
@@ -603,6 +680,14 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         x = result(6)
                         Kval = result(7)
                         Q = result(8)
+                    End If
+
+                    ' bottoms rate of the next solve, with the other products as this one left them
+                    If searchReflux AndAlso otherproducts Then
+                        Dim bm As Double = feedmass - spval1 - othermass(DirectCast(result(6), Double()()), DirectCast(result(5), Double()()),
+                                                                         DirectCast(result(4), Double()), DirectCast(result(3), Double()),
+                                                                         DirectCast(result(1), Double()))
+                        If bm > 0.0 Then rspec.SpecValue = bm
                     End If
 
                     Select Case specs("C").SType
@@ -696,9 +781,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 ObjFunctionValues.Clear()
                 ResultsVector.Clear()
 
-                SearchBottomsRate(Function(xvar)
-                                      Return freb.Invoke(xvar, 1)
-                                  End Function, bottomsrate, blo, bhi, tolerance, maxits)
+                If searchReflux Then
+                    SearchBottomsRate(Function(xvar)
+                                          Return freb.Invoke(xvar, 1)
+                                      End Function, u0, ulo, uhi, tolerance, maxits)
+                Else
+                    SearchBottomsRate(Function(xvar)
+                                          Return freb.Invoke(xvar, 1)
+                                      End Function, bottomsrate, blo, bhi, tolerance, maxits)
+                End If
 
                 If Double.IsNaN(errfunc) Or Math.Abs(errfunc) > tolerance Then Throw New Exception(pp.Flowsheet?.GetTranslatedString("DCGeneralError"))
 
