@@ -277,8 +277,51 @@ public partial class MainWindow : Window
 
         // Case Library
         BtnCaseLibraryRepo.Click += (_, _) => OpenUrl("https://github.com/DanWBR/dwsim-case-library");
+        DetailsOpen.Click += (_, _) => _detailsOpen?.Invoke();
         BtnCaseLibraryContribute.Click += (_, _) => OpenUrl("https://github.com/DanWBR/dwsim-case-library/blob/main/CONTRIBUTING.md");
         CaseLibraryList.DoubleTapped += (_, _) => OpenCaseLibraryFlowsheet();
+
+        // details panel: follows the selection of the list on top
+        RecentFilesList.SelectionChanged += (_, _) =>
+        {
+            if (RecentFilesList.SelectedItem is string p)
+            {
+                SetOpenButton("Open", () => OpenFlowsheetFile(p));
+                ShowDetails(Path.GetFileNameWithoutExtension(p), () => DWSIM.SharedClasses.FlowsheetFileInfo.Read(p));
+            }
+        };
+        SamplesList.SelectionChanged += (_, _) =>
+        {
+            if (SamplesList.SelectedItem is SampleItem s)
+            {
+                SetOpenButton("Open", () => OpenFlowsheetFile(s.FilePath));
+                ShowDetails(s.DisplayName, () => DWSIM.SharedClasses.FlowsheetFileInfo.Read(s.FilePath));
+            }
+        };
+        CaseLibraryList.SelectionChanged += (_, _) =>
+        {
+            if (CaseLibraryList.SelectedItem is CaseLibraryItem c)
+            {
+                SetOpenButton("Download and Open", OpenCaseLibraryFlowsheet);
+                ShowDetails(c.Flowsheet.Title, () => DWSIM.SharedClasses.FlowsheetFileInfo.ReadCaseLibrary(c.Flowsheet));
+            }
+        };
+        FosseeList.SelectionChanged += (_, _) =>
+        {
+            if (FosseeList.SelectedItem is FosseeItem f)
+            {
+                SetOpenButton("Download and Open", OpenFosseeFlowsheet);
+                ShowDetails(f.Flowsheet.Title, () => DWSIM.SharedClasses.FlowsheetFileInfo.FromFossee(f.Flowsheet));
+            }
+        };
+        WelcomeTabs.SelectionChanged += (_, e) =>
+        {
+            // the lists raise the same routed event; only a change of tab clears the panel
+            if (!ReferenceEquals(e.Source, WelcomeTabs)) return;
+            foreach (var lb in new[] { RecentFilesList, SamplesList, CaseLibraryList, FosseeList })
+                lb.SelectedItem = null;
+            ClearDetails();
+        };
 
         BtnSettings.Click += async (_, _) => { await new PreferencesWindow().ShowDialog(this); FlowsheetView.NotifyGlobalSettingsChanged(); };
         BtnAbout.Click += (_, _) => ShowAbout();
@@ -301,6 +344,158 @@ public partial class MainWindow : Window
     // -------------------------------------------------------------------------
     // FOSSEE flowsheets
     // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // Details panel of the welcome screen
+    // -------------------------------------------------------------------------
+
+    private int _detailsRequest;
+
+    // what the Open button at the bottom of the panel does for the item shown
+    private Action? _detailsOpen;
+
+    private void SetOpenButton(string text, Action? action)
+    {
+        _detailsOpen = action;
+        DetailsOpen.Content = text;
+        DetailsOpen.IsVisible = action != null;
+    }
+
+    private void ClearDetails()
+    {
+        _detailsRequest++;
+        DetailsTitle.Text = "Simulation Details";
+        DetailsSubtitle.IsVisible = false;
+        DetailsWarning.IsVisible = false;
+        SetDetailsPreview(null);
+        SetOpenButton("Open", null);
+        DetailsComments.IsVisible = false;
+        DetailsSections.Children.Clear();
+        DetailsFooter.Children.Clear();
+        DetailsFooter.IsVisible = false;
+        DetailsNote.Text = "Select a simulation in the list to see its details.";
+        DetailsNote.IsVisible = true;
+    }
+
+    /// <summary>Reads the details in the background; only the last request reaches the panel.</summary>
+    private async void ShowDetails(string title, Func<DWSIM.SharedClasses.FlowsheetFileInfo> read)
+    {
+        var req = ++_detailsRequest;
+        DetailsTitle.Text = title;
+        DWSIM.SharedClasses.FlowsheetFileInfo info;
+        try
+        {
+            info = await Task.Run(read);
+        }
+        catch (Exception ex)
+        {
+            if (req != _detailsRequest) return;
+            DetailsNote.Text = ex.Message;
+            DetailsNote.IsVisible = true;
+            return;
+        }
+        if (req != _detailsRequest) return;
+
+        DetailsTitle.Text = info.DisplayTitle();
+        var subtitle = info.Subtitle();
+        DetailsSubtitle.Text = subtitle;
+        DetailsSubtitle.IsVisible = subtitle != "";
+        SetDetailsPreview(info.Preview);
+
+        DetailsWarningText.Text = info.Warning;
+        DetailsWarning.IsVisible = !string.IsNullOrEmpty(info.Warning);
+
+        DetailsComments.Text = info.Comments;
+        DetailsComments.IsVisible = !string.IsNullOrWhiteSpace(info.Comments);
+
+        DetailsSections.Children.Clear();
+        foreach (var section in info.GetSections())
+            DetailsSections.Children.Add(BuildDetailsSection(section));
+
+        DetailsFooter.Children.Clear();
+        var footer = info.FooterLines();
+        for (int i = 0; i < footer.Count; i++)
+        {
+            // the folder is the last line: one line, shortened at the start, the whole path in the tooltip
+            bool folder = i == footer.Count - 1;
+            var tb = new TextBlock
+            {
+                Text = footer[i],
+                FontSize = 11,
+                TextWrapping = folder ? TextWrapping.NoWrap : TextWrapping.Wrap,
+                TextTrimming = folder ? TextTrimming.LeadingCharacterEllipsis : TextTrimming.None
+            };
+            if (folder) ToolTip.SetTip(tb, footer[i]);
+            DetailsFooter.Children.Add(tb);
+        }
+        DetailsFooter.IsVisible = DetailsFooter.Children.Count > 0;
+
+        var note = "";
+        if (!string.IsNullOrEmpty(info.ErrorMessage))
+            note = info.ErrorMessage;
+        else if (info.Preview == null && !string.IsNullOrEmpty(info.FilePath))
+            note = "This file doesn't have a flowsheet picture yet. It gets one the next time it's saved.";
+        DetailsNote.Text = note;
+        DetailsNote.IsVisible = note != "";
+    }
+
+    /// <summary>A header in small capitals, then the items as tags or the facts as a two-column table.</summary>
+    private static Control BuildDetailsSection(DWSIM.SharedClasses.FlowsheetFileInfo.DetailSection section)
+    {
+        var panel = new StackPanel { Spacing = 8 };
+        var header = new TextBlock { Text = section.Header.ToUpperInvariant() };
+        header.Classes.Add("detailsHeader");
+        panel.Children.Add(header);
+
+        if (section.Items.Count > 0)
+        {
+            var tags = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, -6) };
+            foreach (var item in section.Items)
+            {
+                var chip = new Border { Child = new TextBlock { Text = item } };
+                chip.Classes.Add("detailsChip");
+                tags.Children.Add(chip);
+            }
+            panel.Children.Add(tags);
+        }
+
+        if (section.Facts.Count > 0)
+        {
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+            int row = 0;
+            foreach (var kv in section.Facts)
+            {
+                grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                var label = new TextBlock { Text = kv.Key, Opacity = 0.6, FontSize = 12, Margin = new Thickness(0, 0, 14, 4) };
+                var value = new SelectableTextBlock { Text = kv.Value, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+                Grid.SetRow(label, row);
+                Grid.SetRow(value, row);
+                Grid.SetColumn(value, 1);
+                grid.Children.Add(label);
+                grid.Children.Add(value);
+                row++;
+            }
+            panel.Children.Add(grid);
+        }
+
+        return panel;
+    }
+
+    private void SetDetailsPreview(byte[]? png)
+    {
+        var old = DetailsPreview.Source as IDisposable;
+        DetailsPreview.Source = null;
+        old?.Dispose();
+        DetailsPreviewCard.IsVisible = false;
+        if (png == null) return;
+        try
+        {
+            using var ms = new MemoryStream(png);
+            DetailsPreview.Source = new global::Avalonia.Media.Imaging.Bitmap(ms);
+            DetailsPreviewCard.IsVisible = true;
+        }
+        catch { }
+    }
 
     private sealed class FosseeItem
     {

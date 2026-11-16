@@ -1038,6 +1038,15 @@ public partial class FlowsheetView : UserControl
         SetStatus("Saving...");
         AppendLog($"Saving to {Path.GetFileName(path)}...");
 
+        // the flowsheet picture shown by the welcome screens, drawn here on the UI thread
+        byte[]? preview = null;
+        try
+        {
+            preview = _surface?.RenderThumbnailPng(DWSIM.SharedClasses.FlowsheetFileInfo.PreviewMaxWidth,
+                                                   DWSIM.SharedClasses.FlowsheetFileInfo.PreviewMaxHeight);
+        }
+        catch { }
+
         try
         {
             await Task.Run(() =>
@@ -1054,6 +1063,14 @@ public partial class FlowsheetView : UserControl
                         using var zip = new ZipArchive(File.Create(path), ZipArchiveMode.Create);
                         zip.CreateEntryFromFile(xmlfile, Path.GetFileName(xmlfile),
                             CompressionLevel.Optimal);
+                        if (preview != null)
+                        {
+                            // PNG is compressed already
+                            var entry = zip.CreateEntry(DWSIM.SharedClasses.FlowsheetFileInfo.PreviewEntryName,
+                                                        CompressionLevel.NoCompression);
+                            using var es = entry.Open();
+                            es.Write(preview, 0, preview.Length);
+                        }
                     }
                     finally
                     {
@@ -4052,7 +4069,8 @@ public partial class FlowsheetView : UserControl
                         var menuItem = new MenuItem
                         {
                             Header = ext.DisplayText,
-                            Icon = IconHelper.MIcon("\U0001FA9B") // swiss knife
+                            // the icon the extension supplies; the screwdriver for those without one
+                            Icon = IconHelper.MIcon(ExtensionImage(ext), "\U0001FA9B")
                         };
                         menuItem.Click += (_, _) =>
                         {
@@ -4190,6 +4208,12 @@ public partial class FlowsheetView : UserControl
     /// Puts an extension on the toolbar, using the icon it publishes. An extension with no icon is
     /// reachable from its menu only.
     /// </summary>
+    private static byte[]? ExtensionImage(DWSIM.Interfaces.IExtender ext)
+    {
+        try { return ext.DisplayImage; }
+        catch { return null; }
+    }
+
     private void AddExtensionButton(DWSIM.Interfaces.IExtender ext)
     {
         byte[]? png = null;
