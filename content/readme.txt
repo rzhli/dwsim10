@@ -70,6 +70,7 @@ Version 10.2.17
 - [CHG] Welcome screen (Classic): a click on an item of the lists selects it and shows its details, a double-click opens it
 - [CHG] Samples and Case Library cases: process type, description, key compounds, reactants and products, and a picture of the flowsheet in the samples
 - [CHG] PH flash, fast mode: near a boiling point it takes about half the PT flashes, with the same result (a cane juice heater: 21 against 41)
+- [CHG] ADM1 Full Parameters window (cross-platform interface): every parameter group with the on/off options and the solver settings, a description of each parameter, and load and save of JSON parameter sets (the BSM2, swine manure and thermophilic sets open from the Samples folder)
 - [FIX] Pipe Segment and Pipe Network with Beggs and Brill: the two-phase friction factor used the wrong branch of the correlation in part of its range, with friction about 3.4 times too high in one band and jumps near another
 - [FIX] Pipe Network: the nodal solver could not raise its damping factor again once it fell below 0.3 and ran to the iteration limit
 - [FIX] Excess enthalpy of NRTL, UNIQUAC, UNIFAC, Modified UNIFAC, NIST-MFAC and Wilson (Excess and Experimental Liquid + Excess modes) was too large where the activity coefficients are far from one
@@ -113,6 +114,24 @@ Version 10.2.17
 - [FIX] Valve with a large pressure drop: the first estimate of the outlet temperature could reach thousands of kelvin and the flash failed
 - [FIX] Flowsheet solver: a large flowsheet without loops could stop with a message about an infinite loop
 - [FIX] Falling Film Evaporator: the concentrated liquid lost the crystals formed in the evaporator, and each profile point cost a full PH flash (an evaporator effect took 7.5 s, now 1.5 s)
+- [FIX] Solid-liquid-vapor flash in concentrated solutions of nonvolatile solutes oscillated or failed and fell back to the ideal flash, which loses the crystals (a sugar syrup at Bx 65 and 0.2 bar between 64 and 72 °C)
+- [FIX] UNIFAC-LL: the liquid-liquid parameters landed on the wrong group pairs, so water came out miscible with toluene, 1-butanol, ethyl acetate, methyl ethyl ketone and aniline
+- [FIX] Sour Water: the PS and PH flashes of pure water returned saturated vapor where the answer is wet steam
+- [FIX] Heat Exchanger: with both inlets at the same temperature (an evaporator effect heated by vapor) it transferred no heat; an outlet vapor fraction that needs heat from the cold side stops with a message
+- [FIX] Conversion, Equilibrium and Gibbs reactors: with two liquid phases in the product, the liquid outlet lost the compounds of the second liquid
+- [FIX] Biomass compounds: the heat capacity was 114 to 2500 times too small
+- [FIX] Scripts and Fluent API: a property package set on a material stream through the generic object didn't reach the stream
+- [FIX] Biodiesel Production sample: stream M2 came out as vapor and liquid where it is two liquids; the sample uses the vapor-liquid-liquid flash
+- [FIX] Advanced Heat Exchanger with a gas or vapor stream: an all-vapor side took the properties of an absent liquid (shell pressure drop near 46 MPa, tube coefficient near 1e27), steam condensing in the tubes was treated as vapor, and Simulation mode put the pressure drops on the wrong sides with the cold fluid in the shell
+- [FIX] AI Assistant settings: the General and Ollama tabs list every model installed in Ollama, mark the models without tool calling, show why Ollama can't be reached, and the GPU shown is the one of this computer
+- [FIX] Advanced Heat Exchanger in counter-current flow: the cold fluid was marched from the wrong end, so the exchanger behaved almost as co-current and transferred too little heat (808 kW instead of about 927 kW in a water/water case)
+- [FIX] Advanced Heat Exchanger Design mode: the required duty came from the inlet heat capacity and missed the outlet temperature spec, and the maximum shell-side pressure drop wasn't enforced; the baffle spacing is widened and tubes are added to meet it
+- [FIX] Advanced Heat Exchanger overall coefficient: the Rating results applied the correction factor of a 1-2 exchanger to a pure counter-current profile and read about 25 % high; the Fouling Factor mode took the duty from the inlet heat capacity and gave its outlets the duty of its internal clean rating
+- [FIX] Advanced Heat Exchanger with more than one tube pass: the Rating mode computed a single tube stream, as in a pure counter-current or co-current exchanger; each pass is now computed in its own direction along the shell (858 kW instead of 930 kW in a water/water case with 2 passes, within 0.4 % of a 1-2 shell), and Design warns when more tubes no longer add duty
+- [FIX] Advanced Heat Exchanger with shells in series: the rating computed a single shell; the shells are now computed in series, each with its tube passes, with the area and the pressure drops of every shell, and the Simulation mode uses the matching correction factor
+- [FIX] Scripts and MCP server: compound names are matched ignoring case when the exact name isn't found (n-butane adds N-butane); the MCP server lists each compound once and returns the stored names
+- [FIX] Anaerobic Digester (ADM1 Full and ADM1-S): the ammonia and the ammonium of the feed stream were ignored and only Sin_IN counted, so a high-ammonia slurry didn't show inhibition; the new Inorganic N from Feed option adds them (the ammonium with its bicarbonate) and the digestate leaves with the ammonia nitrogen of the reactor; Feed Alkalinity is shown in both editors
+- [FIX] Anaerobic Digester: ADM1 parameters changed after the first calculation (cross-platform parameter window, scripts, MCP server) were replaced by the saved copy and didn't change the results
 
 Version 10.2.16
 
