@@ -57,12 +57,22 @@ Version 10.2.17
 - [NEW] Contact Dryer unit operation (Patreon, Premium+): vacuum contact drying of a wet cake in batches, with an agitated bed (filter-dryer, pan, paddle, conical or tumble dryer) or a bed at rest on heated plates (tray dryer); drying time, bed temperature, capacity, duties, drying curve, operating map and the solvents left in the product against the ICH Q3C limits
 - [NEW] Lyophilizer unit operation (Patreon, Premium+): freeze drying of aqueous solutions in vials, with the time of the freezing, primary drying and secondary drying steps, the product temperature against the collapse temperature, the capacity of the freeze dryer, cycle charts and an operating map
 - [NEW] Import of simulations from other process simulators (Patreon): reads CHEMCAD 7 simulations (.cc7) and, for CHEMCAD 8 and NXT, the report sent to Excel; converts mixers, dividers, flashes, valves, pumps, compressors, expanders, heat exchangers, fired heaters, the SCDS and Tower columns and the equilibrium and Gibbs reactors, and compares the streams with the results saved in the simulation
-- [NEW] Sugar Solutions property package (Patreon, Premium+): S-UNIFAC for water, sucrose, glucose, fructose and ethanol fitted to the solubility of sucrose, the boiling point elevation of sugar solutions and the solubility coefficient of cane molasses; cane ash and organic non-sugars dissolved, fibre and mud solids solid; density, viscosity, heat capacity and thermal conductivity of sugar solutions
+- [NEW] Sugar Solutions property package (Patreon, Premium+): S-UNIFAC for water, sucrose, glucose and fructose fitted to the solubility of sucrose, the boiling point elevation of sugar solutions and the solubility coefficient of cane molasses; ethanol and the other non-sugar compounds by NRTL with distillation parameters for ethanol, water and the higher alcohols; cane ash and organic non-sugars dissolved, fibre and mud solids solid; ICUMSA density to 95 C and a 100-150 C correlation, viscosity with the purity term, heat capacity, thermal conductivity and surface tension of sugar solutions; Brix, purities, ART and ethanol degrees as stream properties; analytical derivatives for the flashes and the Naphtali-Sandholm column solver
 - [NEW] Additional compounds: sugarcane fibre, cane ash, cane organic non-sugars and cane mud solids
-- [NEW] Sugar Stream Analysis (Patreon, Premium+; Utilities): Brix, pol, purities, impurities, crystal content, saturation, supersaturation, solubility coefficient and boiling point elevation of a stream; sets a stream from its Brix, purity and impurity ratios
+- [NEW] Sugar Stream Analysis (Patreon, Premium+; Utilities): Brix, pol, purities, impurities, crystal content, saturation, supersaturation, solubility coefficient and boiling point elevation of a stream; sets a stream from its Brix, purity and impurity ratios; ART, ART flow, theoretical ethanol, INPM and GL degrees; presets for mixed juice, clarified juice, syrup, final molasses and fermentation must
 - [NEW] Welcome screen: details panel for the selected simulation (picture of the flowsheet, description, property packages, compounds, unit operations, process type and key compounds) with an Open button; the picture is saved in the .dwxmz file
 - [NEW] Fluent API: Flowsheet.WithMetadata sets the process type, the process description and the key compounds, reactants and products
 - [NEW] Case Library: raw sugar mill (100 t/h of cane: diffuser, five-effect falling film evaporator, three-boiling pan house with the B and C sugars as seed, sugar dryer, bagasse boiler and back-pressure turbine; Sugar Solutions package)
+- [NEW] Three-phase column stages: Three-phase stages (VLLE) field in the column editors (all, or ranges such as 18-26, 30); the solvers test the stage liquid for a split and use the K-values of the total liquid, and in dynamic mode the holdup of those stages is flashed with two liquids
+- [NEW] Alcoholic Fermenter unit operation (Patreon, Premium+): cane must fermentation by yields, with sucrose inversion, ART consumption and shares to ethanol, glycerol, yeast, acetic acid, higher alcohols and lactic acid; wine, gas and heat removed outlets, fermentation yield and a chart of the sugar destination
+- [NEW] Isoamyl alcohol (3-methyl-1-butanol) in the additional compounds folder
+- [NEW] ChemSep column profiles: Column Profiles button in the CAPE-OPEN editor (Classic and Cross-Platform) with the temperature, pressure, flows, compositions and K-values of each stage of a ChemSep column; GetChemSepProfiles, ToCsv and GetChemSepFile for scripts
+- [NEW] Operator Training: quasi-steady column, a rigorous column solved again in the background while the plant runs, with the reboiler on a heating valve, a condenser limited by its coolant temperature and a sump level
+- [NEW] Operator Training: flow-through exchanger (effectiveness-NTU, two process streams or a utility) and refrigeration package whose evaporating temperature rises when the load passes the capacity of the compressors running
+- [NEW] Operator Training: vapor pressure analyzer on a product stream, with one result per analyzer cycle
+- [NEW] Operator Training: leaner feed gas, reboiler heating medium loss and refrigeration compressor trip malfunctions
+- [NEW] Operator Training: field bypass of a failed or stuck control valve, opened from the valve faceplate
+- [NEW] Operator Training: exercise objectives watched from a set time
 - [CHG] Flowsheet Check: warns when the streams of one fluid around a unit use different property packages
 - [CHG] Fail-safe flash with solids: a warning in the log names the stream, the specification and the original error
 - [CHG] Windows installers of final releases are signed with a code signing certificate
@@ -71,6 +81,8 @@ Version 10.2.17
 - [CHG] Samples and Case Library cases: process type, description, key compounds, reactants and products, and a picture of the flowsheet in the samples
 - [CHG] PH flash, fast mode: near a boiling point it takes about half the PT flashes, with the same result (a cane juice heater: 21 against 41)
 - [CHG] ADM1 Full Parameters window (cross-platform interface): every parameter group with the on/off options and the solver settings, a description of each parameter, and load and save of JSON parameter sets (the BSM2, swine manure and thermophilic sets open from the Samples folder)
+- [CHG] Naphtali-Sandholm column solver: each Newton step is solved by stage blocks; an ethanol column of about 70 stages with 16 compounds solves in 73 s, where it took more than 5 minutes
+- [CHG] Operator Training: a valve's flow is carried back through recycle blocks and flow-through exchangers to the holdup it draws from
 - [FIX] Pipe Segment and Pipe Network with Beggs and Brill: the two-phase friction factor used the wrong branch of the correlation in part of its range, with friction about 3.4 times too high in one band and jumps near another
 - [FIX] Pipe Network: the nodal solver could not raise its damping factor again once it fell below 0.3 and ran to the iteration limit
 - [FIX] Excess enthalpy of NRTL, UNIQUAC, UNIFAC, Modified UNIFAC, NIST-MFAC and Wilson (Excess and Experimental Liquid + Excess modes) was too large where the activity coefficients are far from one
@@ -132,6 +144,8 @@ Version 10.2.17
 - [FIX] Scripts and MCP server: compound names are matched ignoring case when the exact name isn't found (n-butane adds N-butane); the MCP server lists each compound once and returns the stored names
 - [FIX] Anaerobic Digester (ADM1 Full and ADM1-S): the ammonia and the ammonium of the feed stream were ignored and only Sin_IN counted, so a high-ammonia slurry didn't show inhibition; the new Inorganic N from Feed option adds them (the ammonium with its bicarbonate) and the digestate leaves with the ammonia nitrogen of the reactor; Feed Alkalinity is shown in both editors
 - [FIX] Anaerobic Digester: ADM1 parameters changed after the first calculation (cross-platform parameter window, scripts, MCP server) were replaced by the saved copy and didn't change the results
+- [FIX] Dynamic valve: an inlet that didn't pass any flow on one step left the valve shut on every following step
+- [FIX] Dynamic pump: an inlet left without flow gave the outlet an undefined pressure and stopped the run
 
 Version 10.2.16
 
