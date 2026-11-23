@@ -189,6 +189,10 @@
     <Style Selector="TextBox">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
     </Style>
+    <!-- Semi centres the text of a text box vertically; a multi-line box starts its text at the top. -->
+    <Style Selector="TextBox[AcceptsReturn=True]">
+      <Setter Property="VerticalContentAlignment" Value="Top" />
+    </Style>
 
     <!-- Combo boxes: keep Semi's natural height (forcing a short MinHeight squished them);
          only bring the font down to 11. -->
@@ -198,6 +202,13 @@
     <!-- Check boxes: match the 11 px type, add a gap between the box and its label, and
          breathe vertically between rows (Semi packs them tight). -->
     <Style Selector="CheckBox">
+      <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="8,0,0,0" />
+      <Setter Property="Margin" Value="0,3,0,3" />
+    </Style>
+    <!-- Option buttons: the same type and spacing as the check boxes. -->
+    <Style Selector="RadioButton">
       <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}" />
       <Setter Property="MinHeight" Value="0" />
       <Setter Property="Padding" Value="8,0,0,0" />

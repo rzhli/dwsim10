@@ -60,14 +60,10 @@ Namespace GraphicObjects
                         .IsStroke = True
                         .IsAntialias = GlobalSettings.Settings.DrawingAntiAlias
                     End With
-                    SetupPositioning(ConDir.Down, ConDir.Down)
-                    Using path As New SKPath()
-                        Dim points() As SKPoint = PointList.Select(Function(x) New SKPoint(x.X, x.Y)).ToArray
-                        path.MoveTo(points(0).X, points(0).Y)
-                        For i As Integer = 1 To points.Length - 1
-                            path.LineTo(points(i).X, points(i).Y)
-                        Next
-                        canvas.DrawPath(path, aPen)
+                    'the line runs in the flowsheet's coordinates: undo the object's flip, rotation and zoom
+                    Using New SKAutoCanvasRestore(canvas)
+                        UnTransformCanvas(canvas)
+                        LogicalLinks.Draw(canvas, Me, SelectedObject.GraphicObject, aPen)
                     End Using
                 End Using
             End If
@@ -92,29 +88,33 @@ Namespace GraphicObjects
                 End Using
             End If
 
-            Dim strx, stry As Single
+            If LogicArt.DrawDisplay(canvas, Me, "input", valtext, Font) Then
+                w = Width
+            Else
+                Dim strx, stry As Single
 
-            Using paint As New SKPaint With {.TextSize = 30.0 * f, .Color = GetForeColor(), .IsAntialias = False}
-                paint.Typeface = Font
-                Dim trect As New SKRect(0, 0, 2, 2)
-                paint.GetTextPath(valtext, 0, 0).GetBounds(trect)
-                strx = (w - trect.Width) / 2
-                stry = (h + trect.Height) / 2
-                w = trect.Width + 30 * f
-                strx = (w - trect.Width) / 2
-                Width = w
-            End Using
+                Using paint As New SKPaint With {.TextSize = 30.0 * f, .Color = GetForeColor(), .IsAntialias = False}
+                    paint.Typeface = Font
+                    Dim trect As New SKRect(0, 0, 2, 2)
+                    paint.GetTextPath(valtext, 0, 0).GetBounds(trect)
+                    strx = (w - trect.Width) / 2
+                    stry = (h + trect.Height) / 2
+                    w = trect.Width + 30 * f
+                    strx = (w - trect.Width) / 2
+                    Width = w
+                End Using
 
-            Using paint As New SKPaint With {.TextSize = 30.0 * f, .Color = GetForeColor(), .IsAntialias = True}
-                paint.Typeface = Font
-                Using paint2 As New SKPaint With {.Color = SKColors.SteelBlue, .IsStroke = False, .IsAntialias = True}
-                    canvas.DrawRect(X - 2 * f, Y - 2 * f, w + 4 * f, h + 4 * f, paint2)
+                Using paint As New SKPaint With {.TextSize = 30.0 * f, .Color = GetForeColor(), .IsAntialias = True}
+                    paint.Typeface = Font
+                    Using paint2 As New SKPaint With {.Color = SKColors.SteelBlue, .IsStroke = False, .IsAntialias = True}
+                        canvas.DrawRect(X - 2 * f, Y - 2 * f, w + 4 * f, h + 4 * f, paint2)
+                    End Using
+                    Using paint2 As New SKPaint With {.Color = GetBackColor(), .IsStroke = False, .IsAntialias = True}
+                        canvas.DrawRect(X, Y, w, h, paint2)
+                    End Using
+                    canvas.DrawText(valtext, X + strx, Y + stry, paint)
                 End Using
-                Using paint2 As New SKPaint With {.Color = GetBackColor(), .IsStroke = False, .IsAntialias = True}
-                    canvas.DrawRect(X, Y, w, h, paint2)
-                End Using
-                canvas.DrawText(valtext, X + strx, Y + stry, paint)
-            End Using
+            End If
 
             Owner.Calculate()
 

@@ -95,39 +95,18 @@
                     'the lines run in the flowsheet's coordinates: undo the object's flip, rotation and zoom
                     UnTransformCanvas(canvas)
                     If Not Me.ConnectedToMv Is Nothing Then
-                        If Y < ConnectedToMv.Y Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToMv.X + Me.ConnectedToMv.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToMv.X + Me.ConnectedToMv.Width / 2, Me.ConnectedToMv.Y)}, aPen)
-                        Else
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToMv.X + Me.ConnectedToMv.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToMv.X + Me.ConnectedToMv.Width / 2, Me.ConnectedToMv.Y + Me.ConnectedToMv.Height)}, aPen)
-                        End If
+                        LogicalLinks.Draw(canvas, Me, Me.ConnectedToMv, aPen)
                     End If
                     If Not Me.ConnectedToCv Is Nothing Then
-                        If Y < ConnectedToCv.Y Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToCv.X + Me.ConnectedToCv.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToCv.X + Me.ConnectedToCv.Width / 2, Me.ConnectedToCv.Y)}, aPen)
-                        Else
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToCv.X + Me.ConnectedToCv.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToCv.X + Me.ConnectedToCv.Width / 2, Me.ConnectedToCv.Y + Me.ConnectedToCv.Height)}, aPen)
-                        End If
+                        LogicalLinks.Draw(canvas, Me, Me.ConnectedToCv, aPen)
                     End If
                     If Not Me.ConnectedToRv Is Nothing Then
-                        canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToRv.X + Me.ConnectedToRv.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.ConnectedToRv.X + Me.ConnectedToRv.Width / 2, Me.ConnectedToRv.Y + Me.ConnectedToRv.Height / 2)}, aPen)
+                        LogicalLinks.Draw(canvas, Me, Me.ConnectedToRv, aPen)
                     End If
                 End Using
             End Using
 
-            If Image Is Nothing Then
-
-                Dim assm = Me.GetType.Assembly
-                Using filestr As IO.Stream = assm.GetManifestResourceStream("DWSIM.Drawing.SkiaSharp.control_panel.png")
-                    Using bitmap = SKBitmap.Decode(filestr)
-                        Image = SKImage.FromBitmap(bitmap)
-                    End Using
-                End Using
-
-            End If
-
-            Using p As New SKPaint With {.IsAntialias = GlobalSettings.Settings.DrawingAntiAlias, .FilterQuality = SKFilterQuality.High}
-                canvas.DrawImage(Image, New SKRect(X, Y, X + Width, Y + Height), p)
-            End Using
+            LogicArt.Draw(canvas, "pid_controller", DrawMode, New SKRect(X, Y, X + Width, Y + Height), Active)
 
             Using paint As New SKPaint With {.TextSize = 10.0 * f, .Color = GetForeColor(), .IsAntialias = True, .TextEncoding = SKTextEncoding.Utf8}
                 Select Case GlobalSettings.Settings.RunningPlatform
@@ -145,14 +124,6 @@
                 canvas.DrawText("PV " + Convert.ToDouble(Owner?.PVValue).ToString("G2"), X + Width + 3 * f, Y + Height * 0.8 + trect.Height + 2 * f, paint)
                 canvas.DrawText("MV " + Convert.ToDouble(Owner?.MVValueDisplay).ToString("G2"), X + Width + 3 * f, Y + Height * 0.8 + 2 * trect.Height + 4 * f, paint)
             End Using
-
-            If Not Owner?.Active Then
-                Using p As New SKPaint() With {.FilterQuality = SKFilterQuality.High}
-                    p.BlendMode = SKBlendMode.Color
-                    p.ColorFilter = SKColorFilter.CreateBlendMode(SKColors.Gray, SKBlendMode.SrcIn)
-                    canvas.DrawImage(Image, New SKRect(X, Y, X + Width, Y + Height), p)
-                End Using
-            End If
 
         End Sub
 

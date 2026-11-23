@@ -273,6 +273,10 @@ Imports DWSIM.ExtensionMethods
                 gObj = New HTMLTextGraphic(xcoord, ycoord)
                 prefix = "HTMLTEXT"
 
+            Case ObjectType.GO_MarkdownText
+                gObj = New MarkdownTextGraphic(xcoord, ycoord)
+                prefix = "MDTEXT"
+
             Case ObjectType.GO_Rectangle
                 gObj = New RectangleGraphic(New SKPoint(xcoord, ycoord), "")
                 prefix = "RECT"
@@ -465,6 +469,7 @@ Imports DWSIM.ExtensionMethods
                         gobj.ObjectType = ObjectType.GO_SpreadsheetTable Or
                         gobj.ObjectType = ObjectType.GO_Text Or
                         gobj.ObjectType = ObjectType.GO_HTMLText Or
+                        gobj.ObjectType = ObjectType.GO_MarkdownText Or
                         gobj.ObjectType = ObjectType.GO_Button Or
                         gobj.ObjectType = ObjectType.GO_Chart Then
 
@@ -3463,6 +3468,8 @@ Imports DWSIM.ExtensionMethods
         Next
 
 
+        ' the inlet ports carry "objID|index" in ConnectorName while the outlets reconnect; their names come back afterwards
+        Dim portNames As New Dictionary(Of Global.DWSIM.Interfaces.IConnectionPoint, String)
         For Each xel As XElement In data
             Try
                 If xel.Element("Name") Is Nothing Then Continue For      ' the same empty element
@@ -3475,6 +3482,7 @@ Imports DWSIM.ExtensionMethods
                             Dim i As Integer = 0
                             For Each xel2 As XElement In xel.Element("InputConnectors").Elements
                                 If CBool(xel2.@IsAttached) = True Then
+                                    If Not portNames.ContainsKey(obj.InputConnectors(i)) Then portNames(obj.InputConnectors(i)) = obj.InputConnectors(i).ConnectorName
                                     obj.InputConnectors(i).ConnectorName = pkey & xel2.@AttachedFromObjID & "|" & xel2.@AttachedFromConnIndex
                                     obj.InputConnectors(i).Type = CType([Enum].Parse(obj.InputConnectors(i).Type.GetType, xel2.@ConnType), ConType)
                                     If reconnectinlets Then
@@ -3540,6 +3548,9 @@ Imports DWSIM.ExtensionMethods
             Catch ex As Exception
                 excs.Add(New Exception("Error Loading Flowsheet Object Connection Information", ex))
             End Try
+        Next
+        For Each kv In portNames
+            kv.Key.ConnectorName = kv.Value
         Next
 
     End Sub
@@ -5655,6 +5666,8 @@ Label_00CC:
                         End Try
                     Next
 
+                    ' the inlet ports carry "objID|index" in ConnectorName while the outlets reconnect; their names come back afterwards
+                    Dim portNames As New Dictionary(Of Global.DWSIM.Interfaces.IConnectionPoint, String)
                     For Each xel As XElement In data
                         Try
                             Dim id As String = xel.Element("Name").Value
@@ -5666,6 +5679,7 @@ Label_00CC:
                                         Dim i As Integer = 0
                                         For Each xel2 As XElement In xel.Element("InputConnectors").Elements
                                             If xel2.@IsAttached = True Then
+                                                If Not portNames.ContainsKey(obj.InputConnectors(i)) Then portNames(obj.InputConnectors(i)) = obj.InputConnectors(i).ConnectorName
                                                 obj.InputConnectors(i).ConnectorName = xel2.@AttachedFromObjID & "|" & xel2.@AttachedFromConnIndex
                                                 obj.InputConnectors(i).Type = [Enum].Parse(obj.InputConnectors(i).Type.GetType, xel2.@ConnType)
                                             End If
@@ -5731,6 +5745,9 @@ Label_00CC:
                         Catch ex As Exception
                             excs.Add(New Exception("Error Loading Flowsheet Object Connection Information", ex))
                         End Try
+                    Next
+                    For Each kv In portNames
+                        kv.Key.ConnectorName = kv.Value
                     Next
 
                     For Each obj In GraphicObjects.Values
