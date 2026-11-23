@@ -1,0 +1,325 @@
+{
+  "industry": "Pharma and Food",
+  "processes": [
+    {
+      "id": "cooling-crystallization",
+      "name": "Cooling crystallization",
+      "description": "A concentrated solution cooled in a crystallizer, where the solute above its solubility at the operating temperature comes out as crystals and the rest leaves with the mother liquor. The example solute is glucose in water.",
+      "processType": "PhysicalSeparation",
+      "compounds": [
+        "Water",
+        "Glucose"
+      ],
+      "keyCompounds": [
+        "Glucose"
+      ],
+      "products": [
+        "Glucose"
+      ],
+      "propertyPackage": {
+        "name": "NRTL"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "FEED",
+            "type": "MaterialStream",
+            "temperature": 333.15,
+            "pressure": 101325,
+            "massFlow": 1,
+            "composition": {
+              "Water": 0.6,
+              "Glucose": 0.4
+            },
+            "compositionBasis": "mass"
+          },
+          {
+            "tag": "CR-100",
+            "external": "Crystallizer",
+            "properties": {
+              "Mode": "Cooling",
+              "SoluteCompound": "Glucose",
+              "SolventCompound": "Water",
+              "OperatingT_K": 278.15,
+              "Sol_A": 0.4,
+              "Sol_B": 0.005,
+              "Sol_C": 0.0,
+              "EvaporationFraction": 0.0
+            }
+          },
+          {
+            "tag": "CRYSTALS",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "MOTHER LIQUOR",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "FEED",
+            "to": "CR-100",
+            "toPort": 0
+          },
+          {
+            "from": "CR-100",
+            "to": "CRYSTALS",
+            "fromPort": 0
+          },
+          {
+            "from": "CR-100",
+            "to": "MOTHER LIQUOR",
+            "fromPort": 1
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Ibuprofen cooling crystallization with recycle",
+          "case": "separation-processes/ibuprofen-cooling-crystallization-with-recycle"
+        },
+        {
+          "title": "Aspirin synthesis with cooling crystallization",
+          "case": "reaction-systems/aspirin-acetylation-cooling-crystallization-acetic-acid-recovery"
+        }
+      ]
+    },
+    {
+      "id": "solvent-recovery",
+      "name": "Solvent recovery by distillation",
+      "description": "A spent aqueous solvent stream distilled to recover the solvent at the top for reuse, with the water at the bottom. The example solvent is methanol.",
+      "processType": "PhysicalSeparation",
+      "compounds": [
+        "Methanol",
+        "Water"
+      ],
+      "keyCompounds": [
+        "Methanol"
+      ],
+      "products": [
+        "Methanol"
+      ],
+      "propertyPackage": {
+        "name": "NRTL"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "SPENT SOLVENT",
+            "type": "MaterialStream",
+            "temperature": 343.15,
+            "pressure": 101325,
+            "massFlow": 5,
+            "composition": {
+              "Methanol": 0.4,
+              "Water": 0.6
+            },
+            "compositionBasis": "mass"
+          },
+          {
+            "tag": "T-100",
+            "type": "DistillationColumn",
+            "calls": [
+              {
+                "method": "SetNumberOfStages",
+                "args": [
+                  20
+                ]
+              },
+              {
+                "method": "ConnectFeed",
+                "args": [
+                  "@SPENT SOLVENT",
+                  10
+                ]
+              },
+              {
+                "method": "ConnectDistillate",
+                "args": [
+                  "@METHANOL"
+                ]
+              },
+              {
+                "method": "ConnectBottoms",
+                "args": [
+                  "@WATER"
+                ]
+              },
+              {
+                "method": "ConnectCondenserDuty",
+                "args": [
+                  "@QC"
+                ]
+              },
+              {
+                "method": "ConnectReboilerDuty",
+                "args": [
+                  "@QR"
+                ]
+              },
+              {
+                "method": "SetCondenserSpec",
+                "args": [
+                  "Reflux_Ratio",
+                  2,
+                  ""
+                ]
+              },
+              {
+                "method": "SetReboilerSpec",
+                "args": [
+                  "Product_Mass_Flow_Rate",
+                  3.1,
+                  "kg/s"
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "METHANOL",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "WATER",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "QC",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "QR",
+            "type": "EnergyStream"
+          }
+        ],
+        "connections": []
+      },
+      "examples": [
+        {
+          "title": "Ibuprofen solvent swap from ethanol to heptane",
+          "case": "separation-processes/ibuprofen-solvent-swap-ethanol-to-heptane"
+        }
+      ]
+    },
+    {
+      "id": "freeze-drying",
+      "name": "Freeze drying in vials",
+      "description": "A product solution filled in vials, frozen, and dried under vacuum in a lyophilizer: the ice sublimes in the primary drying and the bound water leaves in the secondary drying. The example is a 5 % mannitol solution.",
+      "processType": "PhysicalSeparation",
+      "compounds": [
+        "Water",
+        "d-Mannitol"
+      ],
+      "keyCompounds": [
+        "Water",
+        "d-Mannitol"
+      ],
+      "products": [
+        "d-Mannitol"
+      ],
+      "propertyPackage": {
+        "name": "NRTL"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "SOLUTION",
+            "type": "MaterialStream",
+            "temperature": 293.15,
+            "pressure": 101325,
+            "massFlow": 0.000492,
+            "composition": {
+              "Water": 0.95,
+              "d-Mannitol": 0.05
+            },
+            "compositionBasis": "mass"
+          },
+          {
+            "tag": "LYO-100",
+            "external": "Lyophilizer"
+          },
+          {
+            "tag": "SHELF HEAT",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "DRIED CAKE",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "WATER VAPOR",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "SOLUTION",
+            "to": "LYO-100",
+            "toPort": 0
+          },
+          {
+            "from": "SHELF HEAT",
+            "to": "LYO-100",
+            "toPort": 1
+          },
+          {
+            "from": "LYO-100",
+            "to": "DRIED CAKE",
+            "fromPort": 0
+          },
+          {
+            "from": "LYO-100",
+            "to": "WATER VAPOR",
+            "fromPort": 1
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Freeze drying of a mannitol solution",
+          "case": "separation-processes/freeze-drying-mannitol-solution-vials"
+        },
+        {
+          "title": "Freeze drying of a sucrose solution",
+          "case": "separation-processes/freeze-drying-sucrose-solution-vials"
+        }
+      ]
+    },
+    {
+      "id": "ibuprofen-synthesis",
+      "name": "Ibuprofen synthesis",
+      "industry": "Pharma and Food",
+      "description": "The three-step BHC route to ibuprofen: acylation of isobutylbenzene, hydrogenation and carbonylation, with the product recovered. Open the ready-made simulation to start from it.",
+      "processType": "Transformation",
+      "propertyPackage": {
+        "name": ""
+      },
+      "examples": [
+        {
+          "title": "Ibuprofen BHC three-step synthesis",
+          "case": "reaction-systems/ibuprofen-bhc-three-step-synthesis"
+        }
+      ]
+    },
+    {
+      "id": "uht-milk",
+      "name": "UHT milk by direct steam injection",
+      "industry": "Pharma and Food",
+      "description": "Milk heated to the UHT temperature by direct steam injection, held, and flash-cooled to take the added water out again. Open the ready-made simulation to start from it.",
+      "processType": "Unspecified",
+      "propertyPackage": {
+        "name": ""
+      },
+      "examples": [
+        {
+          "title": "UHT milk by direct steam injection",
+          "case": "other/uht-milk-direct-steam-injection"
+        }
+      ]
+    }
+  ]
+}
