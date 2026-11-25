@@ -362,7 +362,10 @@
           },
           {
             "tag": "REC-100",
-            "type": "OT_Recycle"
+            "type": "OT_Recycle",
+            "properties": {
+              "MaximumIterations": 1000
+            }
           },
           {
             "tag": "RECYCLE",
