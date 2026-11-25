@@ -39,6 +39,11 @@ VERSION HISTORY / CHANGELOG
 
 The full changelog including souce code changes can be viewed at https://github.com/DanWBR/dwsim10/commits/windows
 
+Version 10.3.1
+
+- [NEW] Download and install of new versions (Options in the classic interface, Preferences in the cross-platform one): when the startup check finds a newer version, DWSIM offers to download the installer of its edition and platform, checks it against the checksum of the release and installs it when DWSIM closes; the installer wizard on Windows, the new DWSIM.app over the installed one on macOS, the Debian package with the system password dialog on Linux, and DWSIM starts again on macOS and Linux; a portable copy opens the release page
+- [CHG] Update check at startup: reads the latest published release of the running edition on GitHub (open edition or Patreon Edition), skips release candidates and shows its list of changes; opens the release page when download and install is off
+
 Version 10.3.0
 
 - [NEW] Reservoir Coupling (Patreon, Premium+; Tools > Reservoir Coupling (OPM Flow)): runs a reservoir simulation model with OPM Flow together with the Pipe Network and the plant of the flowsheet; each report step the reservoir gives the well rates and the network the wellhead pressures, and streams of the flowsheet can set injection rates, group production limits and lift gas; the window installs OPM Flow (through WSL on Windows) and generates the black-oil PVT and the lift tables of the reservoir model from the fluid of the flowsheet
@@ -112,6 +117,9 @@ Version 10.3.0
 - [NEW] TEA and LCA of the 10.3 unit operations: the Contact Dryer, Alcoholic Fermenter, kraft mill and Bayer refinery blocks are sized and priced from their results and add their utilities and emissions to the inventory; the Lyophilizer, Recovery Boiler, Lime Kiln and Hydrate Calciner are listed with their size for an override price
 - [NEW] CAD Tools: Plant layout setting of the 3D model: Compact (the default; the columns and rows of the flowsheet packed together, and trains of identical equipment as a matrix), Medium (room for access) or Sparse (the flowsheet drawing scaled up)
 - [NEW] Markdown text block (Insert > Markdown Text): headings, emphasis, lists, task lists, quotes, code, rules and tables, wraps at the block width, shows Watch panel values ({1:V} {1:U}); Classic editor with a live preview drawn like the flowsheet, Cross-Platform editor panel with formatting buttons
+- [NEW] Heater and Cooler: outlet vapor fraction on a mass basis, with a mol/mol or kg/kg selector next to the field
+- [NEW] Fire Protection: PIPENET Standard project import (the .sdf file with its .slf library)
+- [NEW] Fire Protection: Amazonas fire requirement profile (BR-AM-2019, CBMAM)
 - [CHG] Flowsheet Check: warns when the streams of one fluid around a unit use different property packages
 - [CHG] Fail-safe flash with solids: a warning in the log names the stream, the specification and the original error
 - [CHG] Windows installers of final releases are signed with a code signing certificate
@@ -213,6 +221,12 @@ Version 10.3.0
 - [FIX] Cross-Platform: option buttons used a larger font than the check boxes and the rest of the window
 - [FIX] Cross-Platform: the text of multi-line text boxes sat in the middle of the box instead of at the top
 - [FIX] Flowsheet: rotated objects placed their ports as if mirrored, and flipped objects kept the line direction at their ports
+- [FIX] Forced solid without a melting point: the solid enthalpy from Cp gave an infinite entropy and stopped the flowsheet
+- [FIX] Fire network at rest held by a jockey pump stopped with an error about a supply running backwards
+- [FIX] Fire pump pressure switch with a separate check valve read the pressure before the valve in dynamic runs
+- [FIX] Pipe Network node without a composition after loading solved with wrong pressures
+- [FIX] Offline help: the chapters on pulp and paper, alumina, the Contact Dryer and the Lyophilizer were missing
+- [FIX] API documentation links of the script editors point to dwsim.org/help/api
 
 Version 10.2.16
 
