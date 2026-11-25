@@ -81,7 +81,7 @@ namespace DWSIM.UI.Desktop.Editors
 
                 if (_objects.Count == 0)
                 {
-                    Children.Add(Description("Nothing selected."));
+                    Children.Add(Description("You haven't selected anything."));
                     return;
                 }
 
@@ -96,7 +96,7 @@ namespace DWSIM.UI.Desktop.Editors
                 var descriptors = AppearanceDescriptors.ForObject(_objects[0]);
                 if (descriptors.Count == 0)
                 {
-                    Children.Add(Description("This object has no appearance settings."));
+                    Children.Add(Description("This object doesn't have appearance settings."));
                     return;
                 }
 

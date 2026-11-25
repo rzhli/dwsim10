@@ -501,6 +501,13 @@ Namespace PropertyPackages
 
         Public Overridable ReadOnly Property DisplayDescription As String = "A Property Package consists in a set of property methods and procedures used to calculate chemical phase equilibria and physical properties." Implements IPropertyPackage.DisplayDescription
 
+        ''' <summary>Seconds of one fugacity coefficient call of this package in DW_CalcKvalue, averaged over the
+        ''' calls made one after the other; negative before the first.</summary>
+        <NonSerialized> Private _lnFugSeconds As Double = -1.0
+        <NonSerialized> Private _lnFugCalls As Integer = 0
+        ''' <summary>Above this cost of one fugacity coefficient call, DW_CalcKvalue takes the two phases in parallel.</summary>
+        Public Shared Property ParallelLnFugSeconds As Double = 0.0001
+
         Public Property OverrideKvalFugCoeff As Boolean = False
 
         Public KvalFugacityCoefficientOverride As Func(Of Double(), Double, Double, State, PropertyPackage, Double())
@@ -601,6 +608,8 @@ Namespace PropertyPackages
                     Return GetFlash()
                 Else
                     If CurrentMaterialStream IsNot Nothing Then
+                        Dim ms = TryCast(CurrentMaterialStream, Streams.MaterialStream)
+                        If ms IsNot Nothing AndAlso ms.FlashOverride IsNot Nothing Then Return ms.FlashOverride
                         Select Case CurrentMaterialStream.ForcePhase
                             Case ForcedPhase.None
                                 Return GetFlash()
@@ -1305,8 +1314,12 @@ Namespace PropertyPackages
             Me.CurrentMaterialStream.Phases(phaseID).Properties.molarflow = result
             result = result * Me.AUX_MMM(Phase.Solid) / 1000
             Me.CurrentMaterialStream.Phases(phaseID).Properties.massflow = result
-            result = phasemolarfrac * overallmolarflow * Me.AUX_MMM(Phase.Solid) / 1000 / Me.CurrentMaterialStream.Phases(0).Properties.massflow.GetValueOrDefault
-            Me.CurrentMaterialStream.Phases(phaseID).Properties.massfraction = result
+            'a stream without flow keeps the mass fraction the equilibrium calculation gave the phase: from the
+            'flows it is 0 / 0, and the overall enthalpy of the stream followed it
+            If Me.CurrentMaterialStream.Phases(0).Properties.massflow.GetValueOrDefault > 0.0 Then
+                result = phasemolarfrac * overallmolarflow * Me.AUX_MMM(Phase.Solid) / 1000 / Me.CurrentMaterialStream.Phases(0).Properties.massflow.GetValueOrDefault
+                Me.CurrentMaterialStream.Phases(phaseID).Properties.massfraction = result
+            End If
 
             result = Me.AUX_SOLIDDENS
             Me.CurrentMaterialStream.Phases(phaseID).Properties.density = result
@@ -1517,14 +1530,22 @@ Namespace PropertyPackages
 
                 IObj?.SetCurrent()
 
-                If Settings.EnableParallelProcessing Then
+                'the two phases at the same time only when one call costs more than starting a task does: for a
+                'cubic or an activity model the task costs as much as the call, and the callers (a column's
+                'stages, a solver's copies of the flowsheet) are often parallel already. Every 32nd call is
+                'timed one after the other to keep the estimate current.
+                Dim fugCalls = Threading.Interlocked.Increment(_lnFugCalls)
+                If Settings.EnableParallelProcessing AndAlso _lnFugSeconds > ParallelLnFugSeconds AndAlso fugCalls Mod 32 <> 0 Then
                     Dim t1 = Task.Run(Sub() lnfugliq = Me.DW_CalcLnFugCoeff(Vx, T, P, State.Liquid))
                     Dim t2 = Task.Run(Sub() lnfugvap = Me.DW_CalcLnFugCoeff(Vy, T, P, st2))
                     Task.WaitAll(t1, t2)
                 Else
+                    Dim t0 = Stopwatch.GetTimestamp()
                     lnfugliq = Me.DW_CalcLnFugCoeff(Vx, T, P, State.Liquid)
                     IObj?.SetCurrent()
                     lnfugvap = Me.DW_CalcLnFugCoeff(Vy, T, P, st2)
+                    Dim one = (Stopwatch.GetTimestamp() - t0) / Stopwatch.Frequency / 2.0
+                    _lnFugSeconds = If(_lnFugSeconds < 0.0, one, 0.8 * _lnFugSeconds + 0.2 * one)
                 End If
 
                 For i = 0 To n
@@ -4975,7 +4996,7 @@ redirect2:                  IObj?.SetCurrent()
                                             VB.Add(1 / Me.AUX_LIQDENS(T, Vz, P, P) * Me.AUX_MMM(Phase.Mixture))
                                             KI = rOk(6)
                                             bubK.Add(DirectCast(KI.Clone(), Double()))
-                                            Flowsheet?.ShowMessage("Phase Envelope generation: the liquid has no stable bubble point from " & tFail.ToString("G6") & " K down; the bubble line starts at " & tOk.ToString("G6") & " K.", IFlowsheet.MessageType.Warning)
+                                            Flowsheet?.ShowMessage("Phase Envelope generation: the liquid doesn't have a stable bubble point from " & tFail.ToString("G6") & " K down; the bubble line starts at " & tOk.ToString("G6") & " K.", IFlowsheet.MessageType.Warning)
                                             T += options.BubbleCurveDeltaT
                                             beta = 10.0
                                             consecutiveFailures = 0
@@ -6662,8 +6683,9 @@ redirect2:                  IObj?.SetCurrent()
                         Dim L1, L2 As Double
 
                         If SolidSolution Then
-                            L1 = 0.0#
-                            L2 = 1.0#
+                            'solid fractions: series 1 is the solidus, series 2 the liquidus
+                            L1 = 1.0#
+                            L2 = 0.0#
                         Else
                             L1 = 0.001
                             L2 = 0.999
@@ -7023,6 +7045,19 @@ redirect2:                  IObj?.SetCurrent()
 
 #Region "   Commmon Functions"
 
+        ''' <summary>One IronPython engine for the property override scripts of every property package, created on first use.</summary>
+        Private Shared ReadOnly OverrideScriptEngine As New Lazy(Of ScriptEngine)(
+            Function()
+                Dim eng = IronPython.Hosting.Python.CreateEngine()
+                SharedClasses.Scripting.IronPythonHost.Prepare(eng)
+                eng.Runtime.LoadAssembly(GetType(System.String).Assembly)
+                eng.Runtime.LoadAssembly(GetType(BaseClasses.ConstantProperties).Assembly)
+                Return eng
+            End Function)
+
+        ''' <summary>The property override scripts compiled once, by their text.</summary>
+        Private Shared ReadOnly OverrideScriptCode As New System.Collections.Concurrent.ConcurrentDictionary(Of String, CompiledCode)
+
         Public Sub ProcessOverridenProperties(ptype As PhaseType)
 
             If PropertyOverrides.Count > 0 Then
@@ -7030,10 +7065,8 @@ redirect2:                  IObj?.SetCurrent()
                 Dim engine As ScriptEngine
                 Dim scope As ScriptScope
 
-                engine = IronPython.Hosting.Python.CreateEngine()
-                SharedClasses.Scripting.IronPythonHost.Prepare(engine)
-                engine.Runtime.LoadAssembly(GetType(System.String).Assembly)
-                engine.Runtime.LoadAssembly(GetType(BaseClasses.ConstantProperties).Assembly)
+                ' creating the engine and compiling the scripts took more than 99 % of the time of the overrides
+                engine = OverrideScriptEngine.Value
                 scope = engine.CreateScope()
                 scope.SetVariable("flowsheet", CurrentMaterialStream.Flowsheet)
                 scope.SetVariable("this", Me)
@@ -7043,14 +7076,15 @@ redirect2:                  IObj?.SetCurrent()
 
                 For Each item In PropertyOverrides
 
-                    Dim source As Microsoft.Scripting.Hosting.ScriptSource = engine.CreateScriptSourceFromString(item.Value, Microsoft.Scripting.SourceCodeKind.Statements)
                     Try
+                        Dim code = OverrideScriptCode.GetOrAdd(item.Value,
+                            Function(text) engine.CreateScriptSourceFromString(text, Microsoft.Scripting.SourceCodeKind.Statements).Compile())
                         Dim phasename As String = item.Key.Split("/")(0)
                         Dim propname As String = item.Key.Split("/")(1)
                         Dim phase = CurrentMaterialStream.GetPhase(phasename)
                         scope.SetVariable("currval", phase.Properties.GetType.GetProperty(propname).GetValue(phase.Properties))
                         scope.SetVariable("phase", phase)
-                        source.Execute(scope)
+                        code.Execute(scope)
                         Dim value = scope.GetVariable("propval")
                         phase.Properties.GetType.GetProperty(propname).SetValue(phase.Properties, New Nullable(Of Double)(Convert.ToDouble(value)))
                     Catch ex As Exception
@@ -7061,8 +7095,6 @@ redirect2:                  IObj?.SetCurrent()
                         Else
                             Throw New Exception("[" & Tag & "] Error calculating overriden property '" & item.Key & "': " & ops.FormatException(ex).ToString)
                         End If
-                    Finally
-                        source = Nothing
                     End Try
 
                 Next
@@ -7615,7 +7647,7 @@ redirect2:                  IObj?.SetCurrent()
 
                 KHx = AUX_PVAPi(CompName, T)
 
-                IObj?.Paragraphs.Add(String.Format("No Henry's Constant available, using the Vapor Pressure: {0} Pa", KHx))
+                IObj?.Paragraphs.Add(String.Format("Henry's Constant isn't available, using the Vapor Pressure: {0} Pa", KHx))
 
                 IObj?.Close()
 
@@ -7903,7 +7935,7 @@ redirect2:                  IObj?.SetCurrent()
                     'CAL/MOL.K [CP=A+(B*T)+(C*T^2)+(D*T^3)], T in K
                     result = A + B * T + C * T ^ 2 + D * T ^ 3
                     Return result / cprops.Molar_Weight * 4.1868 'kJ/kg.K
-                ElseIf db = "ChemSep" Or db = "ChEDL Thermo" Or db = "User" Then
+                ElseIf db = "ChemSep" Or db = "User" Then
                     Dim A, B, C, D, E, result As Double
                     Dim eqno As String = cprops.IdealgasCpEquation
                     Dim mw As Double = cprops.Molar_Weight
@@ -8344,11 +8376,10 @@ redirect2:                  IObj?.SetCurrent()
                 i += 1
             Next
 
-            If T < Tf Then
-                Return AUX_PSUBLi(nome, T)
-            Else
-                Return AUX_PVAPi(nome, T)
-            End If
+            'The vapor pressure of the liquid, subcooled below the melting point: the liquid fugacity of a dissolved
+            'compound is built on it, and DW_CalcSolidFugCoeff applies the fusion term to it. The vapor pressure of
+            'the solid is AUX_PSUBLi.
+            Return AUX_PVAPi(nome, T)
 
         End Function
 
@@ -8845,9 +8876,89 @@ Final3:
             Dim cpc = Me.CurrentMaterialStream.Phases(0).Compounds(sub1).ConstantProperties
             Dim Tfus = cpc.TemperatureOfFusion
 
-            Dim cpterm = cpc.GetSolidHeatCapacity(T) * (T - Tfus)
+            'Away from the melting point the enthalpy of fusion changes with the difference between the liquid and the
+            'solid heat capacities: dHfus(T) = dHfus(Tf) + (CpL - CpS).(T - Tf).
+            Dim dCp As Double = FusionHeatCapacityDifference(cpc, T)
 
-            Return cpc.EnthalpyOfFusionAtTf * 1000 / cpc.Molar_Weight + cpterm
+            'the solid never has more enthalpy than the liquid at the same temperature
+            Return Math.Max(cpc.EnthalpyOfFusionAtTf * 1000 / cpc.Molar_Weight + dCp * (T - Tfus), 0.0)
+
+        End Function
+
+        ''' <summary>
+        ''' Entropy of fusion of a compound at T, kJ/[kg.K]: dSfus(T) = dHfus(Tf)/Tf + (CpL - CpS).ln(T/Tf).
+        ''' </summary>
+        ''' <remarks>
+        ''' The entropy of fusion is the enthalpy of fusion over the temperature only at the melting point. Away from it
+        ''' the two follow the heat capacity difference separately, and this form keeps the Gibbs energy of fusion equal to
+        ''' the one behind the solid-liquid equilibrium.
+        ''' </remarks>
+        Public Overridable Function AUX_SFUSi(ByVal sub1 As String, ByVal T As Double) As Double
+
+            Dim cpc = Me.CurrentMaterialStream.Phases(0).Compounds(sub1).ConstantProperties
+            Dim Tfus = cpc.TemperatureOfFusion
+            Dim Hf = cpc.EnthalpyOfFusionAtTf * 1000 / cpc.Molar_Weight
+
+            If Tfus <= 0.0 OrElse T <= 0.0 Then Return If(T > 0.0, Hf / T, 0.0)
+
+            Return Hf / Tfus + FusionHeatCapacityDifference(cpc, T) * Math.Log(T / Tfus)
+
+        End Function
+
+        ''' <summary>Entropy of fusion of a mixture at T from mass fractions, kJ/[kg.K].</summary>
+        Public Function RET_SFUSM(ByVal Vxw As Array, ByVal T As Double) As Double
+
+            Dim val As Double = 0.0#
+            Dim i As Integer = 0
+            For Each subst As Interfaces.ICompound In Me.CurrentMaterialStream.Phases(0).Compounds.Values
+                val += Vxw(i) * Me.AUX_SFUSi(subst.Name, T)
+                i += 1
+            Next
+            Return val
+
+        End Function
+
+        ''' <summary>
+        ''' Liquid minus solid heat capacity of a compound, kJ/[kg.K], for the enthalpy and the entropy of fusion away
+        ''' from the melting point.
+        ''' </summary>
+        ''' <remarks>
+        ''' It comes, in this order, from the value given with the compound (the same one the solid-liquid equilibrium
+        ''' uses), from the heat capacity correlations when the compound has solid heat capacity data, or is taken as zero.
+        ''' </remarks>
+        Protected Function FusionHeatCapacityDifference(cpc As Interfaces.ICompoundConstantProperties, T As Double) As Double
+
+            If cpc.HeatCapacityDifferenceAtTf <> 0.0 Then Return cpc.HeatCapacityDifferenceAtTf / cpc.Molar_Weight
+
+            If HasSolidHeatCapacityData(cpc) Then
+                'mean of the difference at T and at the melting point: with it the fusion terms integrate the heat
+                'capacities between the two temperatures to second order, and the solid keeps its own heat capacity
+                Dim Tfus = cpc.TemperatureOfFusion
+                Dim cps = cpc.GetSolidHeatCapacity(T)
+                Dim cpsf = If(Tfus > 0.0, cpc.GetSolidHeatCapacity(Tfus), cps)
+                If cps > 0.0 AndAlso cpsf > 0.0 Then
+                    Dim dCp = AUX_LIQ_Cpi(cpc, T) - cps
+                    Dim dCpf = If(Tfus > 0.0, AUX_LIQ_Cpi(cpc, Tfus) - cpsf, dCp)
+                    If Not Double.IsNaN(dCp) AndAlso Not Double.IsInfinity(dCp) Then
+                        If Double.IsNaN(dCpf) OrElse Double.IsInfinity(dCpf) Then dCpf = dCp
+                        Return 0.5 * (dCp + dCpf)
+                    End If
+                End If
+            End If
+
+            Return 0.0
+
+        End Function
+
+        ''' <summary>
+        ''' True when the solid heat capacity of the compound comes from data or a correlation, and not from the fixed
+        ''' value that stands in when there is none.
+        ''' </summary>
+        Private Shared Function HasSolidHeatCapacityData(cpc As Interfaces.ICompoundConstantProperties) As Boolean
+
+            If cpc.OriginalDB = "ChemSep" OrElse cpc.OriginalDB = "ChEDL Thermo" Then Return cpc.SolidHeatCapacityEquation <> ""
+            If cpc.OriginalDB = "User" Then Return cpc.SolidHeatCapacityEquation <> "" AndAlso cpc.SolidHeatCapacityEquation <> "0"
+            Return False
 
         End Function
 
@@ -8972,11 +9083,17 @@ Final3:
                 If LiquidViscosity_CorrectExpDataForPressure And LiquidViscosityCalculationMode_Subcritical = LiquidViscosityCalcMode.ExpData And subst.MoleFraction.GetValueOrDefault() > 0.0 Then
                     'pressure correction
                     Dim pcorr As Double = 1.0
+                    Dim psat As Double
                     If (T / subst.ConstantProperties.Critical_Temperature) > 1.0 Then
-                        pcorr = Auxiliary.PROPS.viscl_pcorrection_lucas(T / subst.ConstantProperties.Critical_Temperature, P, subst.ConstantProperties.Critical_Pressure, AUX_KHenry(subst.Name, T), subst.ConstantProperties.Acentric_Factor)
+                        psat = AUX_KHenry(subst.Name, T)
                     Else
-                        pcorr = Auxiliary.PROPS.viscl_pcorrection_lucas(T / subst.ConstantProperties.Critical_Temperature, P, subst.ConstantProperties.Critical_Pressure, AUX_PVAPi(subst.Name, T), subst.ConstantProperties.Acentric_Factor)
+                        psat = AUX_PVAPi(subst.Name, T)
                     End If
+                    'a vapor pressure extrapolated far beyond its range can overflow: the correction is skipped
+                    If Not Double.IsNaN(psat) AndAlso Not Double.IsInfinity(psat) Then
+                        pcorr = Auxiliary.PROPS.viscl_pcorrection_lucas(T / subst.ConstantProperties.Critical_Temperature, P, subst.ConstantProperties.Critical_Pressure, psat, subst.ConstantProperties.Acentric_Factor)
+                    End If
+                    If Double.IsNaN(pcorr) OrElse Double.IsInfinity(pcorr) OrElse pcorr <= 0.0 Then pcorr = 1.0
                     IObj?.Paragraphs.Add(String.Format("Compressed Liquid Viscosity Correction Factor: {0}", pcorr))
                     lval = lval * pcorr
                     IObj?.Paragraphs.Add(String.Format("Corrected Liquid Viscosity : {0} Pa.s", Exp(lval)))
@@ -10276,18 +10393,88 @@ Final3:
 
         End Function
 
+        ''' <summary>
+        ''' A solid phase split into the compounds that are solid at the reference state (marked as solids, or listed in
+        ''' the forced solids of the package) and the rest.
+        ''' </summary>
+        ''' <remarks>
+        ''' The formation values of a compound that is solid at 25 C refer to the solid, so its enthalpy comes from the solid
+        ''' heat capacity. The rest keep the package's route (liquid minus fusion), which is the right one for compounds that
+        ''' melt and boil, such as ice against liquid water.
+        ''' </remarks>
+        Public Class SolidReferenceSplit
+            ''' <summary>Mass fraction of the compounds solid at the reference state.</summary>
+            Public ReferenceMassFraction As Double
+            ''' <summary>Mole fractions of those compounds, normalized.</summary>
+            Public Reference As Double()
+            ''' <summary>Mole fractions of the other compounds, normalized; the whole phase when there are none.</summary>
+            Public Rest As Double()
+            Public ReadOnly Property AllAtReference As Boolean
+                Get
+                    Return ReferenceMassFraction >= 1.0
+                End Get
+            End Property
+            ''' <summary>The mass-weighted property of the phase from the value of the rest and that of the reference solids.</summary>
+            Public Function Combine(restValue As Double, referenceValue As Func(Of Double)) As Double
+                If ReferenceMassFraction <= 0.0 Then Return restValue
+                Return (1.0 - ReferenceMassFraction) * restValue + ReferenceMassFraction * referenceValue()
+            End Function
+        End Class
+
+        ''' <summary>Splits the solid phase Vx (mole fractions) into the compounds solid at the reference state and the rest.</summary>
+        Public Function SplitSolidsAtReference(Vx As Array) As SolidReferenceSplit
+            Dim x As Double() = TryCast(Vx, Double())
+            If x Is Nothing Then x = Vx.Cast(Of Double).ToArray()
+            Dim cprops = DW_GetConstantProperties()
+            Dim names = RET_VNAMES()
+            Dim mw = RET_VMM()
+            Dim n = x.Length
+            Dim ref(n - 1), rest(n - 1) As Double
+            Dim wref, wtot As Double
+            For i = 0 To n - 1
+                Dim m = x(i) * mw(i)
+                wtot += m
+                If x(i) > 0.0 AndAlso (cprops(i).IsSolid OrElse (ForcedSolids IsNot Nothing AndAlso ForcedSolids.Contains(names(i)))) Then
+                    ref(i) = x(i)
+                    wref += m
+                Else
+                    rest(i) = x(i)
+                End If
+            Next
+            If wref <= 0.0 OrElse wtot <= 0.0 Then Return New SolidReferenceSplit With {.ReferenceMassFraction = 0.0, .Reference = ref, .Rest = x}
+            Return New SolidReferenceSplit With {.ReferenceMassFraction = wref / wtot, .Reference = ref.NormalizeY(), .Rest = If(wref < wtot, rest.NormalizeY(), rest)}
+        End Function
+
+        ''' <summary>
+        ''' True when the formation values of the compound refer to the solid at 25 C: the compound is marked as a solid, or
+        ''' the package lists it as a forced solid. Its solid enthalpy and entropy then start at zero at 298.15 K, without the
+        ''' enthalpy of fusion that the other compounds lose on freezing.
+        ''' </summary>
+        Private Function IsSolidAtReference(cprop As Interfaces.ICompoundConstantProperties) As Boolean
+            Return cprop.IsSolid OrElse (ForcedSolids IsNot Nothing AndAlso ForcedSolids.Contains(cprop.Name))
+        End Function
+
+        ''' <summary>
+        ''' Constant solid heat capacity [kJ/(kg.K)] of a compound of the electrolyte database (its Cp at 25 C), or zero when the
+        ''' database doesn't carry a positive value.
+        ''' </summary>
+        Private Shared Function ElectrolyteSolidCp(cprop As Interfaces.ICompoundConstantProperties) As Double
+            If cprop.OriginalDB <> "Electrolytes" OrElse cprop.Electrolyte_Cp0 <= 0.0 OrElse cprop.Molar_Weight <= 0.0 Then Return 0.0
+            Return cprop.Electrolyte_Cp0 * 1000 / cprop.Molar_Weight
+        End Function
+
         Public Function CalcSolidEnthalpyFromCp(ByVal T As Double, ByVal Vx As Double(), cprops As List(Of Interfaces.ICompoundConstantProperties)) As Double
 
             Dim n As Integer = Vx.Length - 1
             Dim i As Integer
             Dim HS As Double = 0.0#
-            Dim Cpi As Double
             Dim VMF() As Double
 
             VMF = RET_VMM().MultiplyY(Vx).NormalizeY 'calculate mass fractions
 
             For i = 0 To n
                 If Vx(i) > 0 Then
+                    Dim atReference = IsSolidAtReference(cprops(i))
                     If cprops(i).OriginalDB = "ChemSep" Or cprops(i).OriginalDB = "User" Then
                         Dim A, B, C, D, E As Double
                         Dim eqno As String = cprops(i).SolidHeatCapacityEquation
@@ -10298,18 +10485,15 @@ Final3:
                         D = cprops(i).Solid_Heat_Capacity_Const_D
                         E = cprops(i).Solid_Heat_Capacity_Const_E
                         '<SolidHeatCapacityCp name="Solid heat capacity"  units="J/kmol/K" >
-                        If Integer.TryParse(eqno, New Integer) Then
-                            Cpi = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) / 1000 / mw 'kJ/kg.K
-                        Else
-                            Cpi = ParseEquation(eqno, A, B, C, D, E, T) / 1000 / mw 'kJ/kg.K
-                        End If
-                        If cprops(i).TemperatureOfFusion < 298.15 Then
+                        Dim numbered = Integer.TryParse(eqno, New Integer)
+                        Dim cpAt As Func(Of Double, Double) = Function(tt) If(numbered, CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0), ParseEquation(eqno, A, B, C, D, E, tt)) / 1000 / mw 'kJ/kg.K
+                        If cprops(i).TemperatureOfFusion > 0.0 AndAlso cprops(i).TemperatureOfFusion < 298.15 Then
                             HS += VMF(i) * Me.AUX_INT_CPDTi_L(298.15, cprops(i).TemperatureOfFusion, cprops(i).Name)
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (cprops(i).TemperatureOfFusion - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, cprops(i).TemperatureOfFusion)
                         Else
-                            HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (298.15 - T)
+                            If Not atReference Then HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, 298.15)
                         End If
                     ElseIf cprops(i).OriginalDB = "ChEDL Thermo" Then
                         Dim A, B, C, D, E As Double
@@ -10320,18 +10504,22 @@ Final3:
                         C = cprops(i).Solid_Heat_Capacity_Const_C
                         D = cprops(i).Solid_Heat_Capacity_Const_D
                         E = cprops(i).Solid_Heat_Capacity_Const_E
-                        Cpi = CalcCSTDepProp(eqno, A, B, C, D, E, T, 0) 'kJ/kg.K
-                        If cprops(i).TemperatureOfFusion < 298.15 Then
+                        Dim cpAt As Func(Of Double, Double) = Function(tt) CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0) 'kJ/kg.K
+                        If cprops(i).TemperatureOfFusion > 0.0 AndAlso cprops(i).TemperatureOfFusion < 298.15 Then
                             HS += VMF(i) * Me.AUX_INT_CPDTi_L(298.15, cprops(i).TemperatureOfFusion, cprops(i).Name)
                             HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (cprops(i).TemperatureOfFusion - T)
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, cprops(i).TemperatureOfFusion)
                         Else
-                            HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
-                            HS -= VMF(i) * Cpi * (298.15 - T)
+                            If Not atReference Then HS -= VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / mw
+                            HS -= VMF(i) * SolidCpIntegral(cpAt, T, 298.15)
                         End If
 
-                    ElseIf cprops(i).TemperatureOfFusion <> 0.0# Then
-                        HS += -VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / cprops(i).Molar_Weight
+                    Else
+                        If cprops(i).TemperatureOfFusion <> 0.0# AndAlso Not atReference Then
+                            HS += -VMF(i) * cprops(i).EnthalpyOfFusionAtTf * 1000 / cprops(i).Molar_Weight
+                        End If
+                        'the electrolyte database carries the solid heat capacity at 25 C only
+                        HS += VMF(i) * ElectrolyteSolidCp(cprops(i)) * (T - 298.15)
                     End If
                 End If
             Next
@@ -10340,10 +10528,98 @@ Final3:
 
         End Function
 
+        ''' <summary>
+        ''' The integral of a solid heat capacity (kJ/kg.K) from T1 to T2, in kJ/kg (Simpson's rule, 20 intervals; exact
+        ''' for a constant or polynomial heat capacity up to the third degree).
+        ''' </summary>
+        ''' <summary>
+        ''' Solid entropy [kJ/(kg.K)] along the path of <see cref="CalcSolidEnthalpyFromCp"/>: the liquid at 298.15 K (heated or
+        ''' cooled to the melting point first when it melts below 298.15 K) freezes, taking Hfus/Tf, and the solid then follows
+        ''' its heat capacity to T. A compound solid at the reference state starts from its solid at 298.15 K, without Hfus/Tf.
+        ''' Same data and the same branches as the enthalpy, so that H and S describe one path.
+        ''' </summary>
+        Public Function CalcSolidEntropyFromCp(ByVal T As Double, ByVal Vx As Double(), cprops As List(Of Interfaces.ICompoundConstantProperties)) As Double
+
+            Dim n As Integer = Vx.Length - 1
+            Dim SS As Double = 0.0#
+            Dim VMF() As Double = RET_VMM().MultiplyY(Vx).NormalizeY
+
+            For i = 0 To n
+                If Vx(i) > 0 Then
+                    Dim tf = cprops(i).TemperatureOfFusion
+                    Dim mw As Double = cprops(i).Molar_Weight
+                    Dim A = cprops(i).Solid_Heat_Capacity_Const_A, B = cprops(i).Solid_Heat_Capacity_Const_B, C = cprops(i).Solid_Heat_Capacity_Const_C
+                    Dim D = cprops(i).Solid_Heat_Capacity_Const_D, E = cprops(i).Solid_Heat_Capacity_Const_E
+                    Dim eqno As String = cprops(i).SolidHeatCapacityEquation
+                    Dim cpAt As Func(Of Double, Double) = Nothing
+                    If cprops(i).OriginalDB = "ChemSep" Or cprops(i).OriginalDB = "User" Then
+                        Dim numbered = Integer.TryParse(eqno, New Integer)
+                        cpAt = Function(tt) If(numbered, CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0), ParseEquation(eqno, A, B, C, D, E, tt)) / 1000 / mw
+                    ElseIf cprops(i).OriginalDB = "ChEDL Thermo" Then
+                        cpAt = Function(tt) CalcCSTDepProp(eqno, A, B, C, D, E, tt, 0)
+                    End If
+                    Dim sfus = If(tf > 0.0, cprops(i).EnthalpyOfFusionAtTf * 1000 / mw / tf, 0.0)
+                    Dim atReference = IsSolidAtReference(cprops(i))
+                    If cpAt IsNot Nothing Then
+                        If tf > 0.0 AndAlso tf < 298.15 Then
+                            SS += VMF(i) * AUX_INT_CPDT_Ti_L(298.15, tf, i)
+                            SS -= VMF(i) * sfus
+                            SS -= VMF(i) * SolidCpIntegral(Function(tt) cpAt(tt) / tt, T, tf)
+                        Else
+                            If Not atReference Then SS -= VMF(i) * sfus
+                            SS -= VMF(i) * SolidCpIntegral(Function(tt) cpAt(tt) / tt, T, 298.15)
+                        End If
+                    Else
+                        If tf <> 0.0# AndAlso Not atReference Then SS -= VMF(i) * sfus
+                        Dim cpe = ElectrolyteSolidCp(cprops(i))
+                        If cpe > 0.0 AndAlso T > 0.0 Then SS += VMF(i) * cpe * Math.Log(T / 298.15)
+                    End If
+                End If
+            Next
+
+            Return SS
+
+        End Function
+
+        Private Shared Function SolidCpIntegral(cp As Func(Of Double, Double), T1 As Double, T2 As Double) As Double
+
+            If T1 = T2 Then Return 0.0
+
+            Const m As Integer = 20
+            Dim h = (T2 - T1) / m
+            Dim s = cp(T1) + cp(T2)
+            For k = 1 To m - 1
+                s += If(k Mod 2 = 1, 4.0, 2.0) * cp(T1 + k * h)
+            Next
+
+            Return s * h / 3
+
+        End Function
+
+        ''' <summary>
+        ''' Heat capacity term of the solid-liquid fugacity ratio, to be added to the exponent of the fusion term.
+        ''' </summary>
+        ''' <remarks>
+        ''' ln(fS/fL) = -dHf/(R.T).(1 - T/Tf) - dCp/R.((T - Tf)/T + ln(Tf/T)), where dCp is the liquid minus solid heat
+        ''' capacity at the melting point. The result is exactly zero for a compound without a dCp value, which keeps
+        ''' the fusion-only result.
+        ''' </remarks>
+        Public Function AUX_SolidFusionCpTerm(cprop As Interfaces.ICompoundConstantProperties, T As Double) As Double
+
+            Dim dCp = cprop.HeatCapacityDifferenceAtTf 'J/[mol.K]
+            Dim Tf = cprop.TemperatureOfFusion
+
+            If dCp = 0.0 OrElse Tf <= 0.0 OrElse T <= 0.0 Then Return 0.0
+
+            Return -dCp / 8.31446 * ((T - Tf) / T + Math.Log(Tf / T))
+
+        End Function
+
         Public Function DW_CalcSolidFugCoeff(T As Double, P As Double) As Double()
 
             Dim Tf = RET_VTF()
             Dim Hf = RET_VHF()
+            Dim cprops = DW_GetConstantProperties()
 
             Dim names = RET_VNAMES()
 
@@ -10358,7 +10634,7 @@ Final3:
             For i = 0 To n
                 cterm(i) = Math.Exp(Hf(i) * 1000 / (8.314 * Tf(i)) * (Tf(i) / T - 1))
                 Pvapl(i) = AUX_PVAPi(i, T)
-                Pvaps(i) = Math.Exp(Math.Log(Pvapl(i)) - Hf(i) * 1000 / 8.314 * (1 / T - 1 / Tf(i)))
+                Pvaps(i) = Math.Exp(Math.Log(Pvapl(i)) - Hf(i) * 1000 / 8.314 * (1 / T - 1 / Tf(i)) + AUX_SolidFusionCpTerm(cprops(i), T))
             Next
 
             For i = 0 To n
@@ -10691,8 +10967,11 @@ Final3:
                 If Vz(i) > 0.0 Then
                     Tv = If(T > Tb, Tb, T)
                     Tvm += Vw(i) * Tv
-                    t1 += Vw(i) * AUX_INT_CPDTi_L(298.15, Tv, i) / T
-                    t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tv) / T
+                    t1 += Vw(i) * AUX_INT_CPDT_Ti_L(298.15, Tv, i)
+                    'vaporization at Tv and at the vapor pressure there; RET_Sid_i then takes the gas from 1 atm to P
+                    t2 += Vw(i) * AUX_HVAPi(props(i).Name, Tv) / Tv
+                    Dim psat = AUX_PVAPi(i, Tv)
+                    If psat > 0.0 Then t2 += Vw(i) * 8.314 / props(i).Molar_Weight * Math.Log(psat / 101325)
                     t3 += Vw(i) * RET_Sid_i(Tv, T, P, props(i).Name)
                 End If
             Next
@@ -11216,6 +11495,69 @@ Final3:
             For Each subst In Me.CurrentMaterialStream.Phases(0).Compounds.Values
                 If Vw(i) > 0.0 Then val += Vw(i) * Me.AUX_INT_CPDTi_L(T1, T2, i)
                 i += 1
+            Next
+
+            Return val
+
+        End Function
+
+        ''' <summary>Term that takes the liquid entropy of the ideal path, S_ig(T, P) - Hvap/T, to the gas at the vapor pressure of
+        ''' each compound: sum of w_i.R/M_i.ln(P/Psat_i(T)), kJ/(kg.K). Without it the liquid entropy fell with the pressure
+        ''' as a gas does. Compounds without a vapor pressure take none.</summary>
+        Public Function RET_Sid_LiquidVaporPressureTerm(ByVal Vx As Double(), ByVal T As Double, ByVal P As Double) As Double
+
+            Dim props = DW_GetConstantProperties()
+            Dim Vw = AUX_CONVERT_MOL_TO_MASS(Vx)
+            Dim val As Double = 0.0
+            For i = 0 To Vx.Length - 1
+                If Vw(i) > 0.0 Then
+                    Dim psat = AUX_PVAPi(i, T)
+                    If psat > 0.0 Then val += Vw(i) * 8.314 / props(i).Molar_Weight * Math.Log(P / psat)
+                End If
+            Next
+
+            Return val
+
+        End Function
+
+        ''' <summary>Integral of the liquid heat capacity of compound <paramref name="index"/> divided by T, from T1 to T2,
+        ''' kJ/(kg.K): the entropy counterpart of <see cref="AUX_INT_CPDTi_L"/>, with the same midpoint rule.</summary>
+        Public Function AUX_INT_CPDT_Ti_L(ByVal T1 As Double, ByVal T2 As Double, ByVal index As Integer) As Double
+
+            Dim nsteps As Integer = Math.Abs(T2 - T1) / 10
+
+            If nsteps < 10 Then
+                If Math.Abs(T2 - T1) < 1 Then
+                    nsteps = 2
+                ElseIf Math.Abs(T2 - T1) < 3 Then
+                    nsteps = 4
+                ElseIf Math.Abs(T2 - T1) < 5 Then
+                    nsteps = 6
+                Else
+                    nsteps = 10
+                End If
+            End If
+
+            Dim deltaT As Double = (T2 - T1) / nsteps
+
+            Dim cprops = DW_GetConstantProperties()
+
+            Dim sum As Double = 0.0
+            For i = 0 To nsteps - 1
+                Dim Ti = T1 + deltaT / 2 + i * deltaT
+                sum += AUX_LIQ_Cpi(cprops(index), Ti) / Ti
+            Next
+
+            Return sum * deltaT
+
+        End Function
+
+        ''' <summary>Mass-weighted <see cref="AUX_INT_CPDT_Ti_L"/> of a liquid mixture, kJ/(kg.K).</summary>
+        Public Function AUX_INT_CPDT_Tm_L(ByVal T1 As Double, ByVal T2 As Double, ByVal Vw As Double()) As Double
+
+            Dim val As Double
+            For i = 0 To Vw.Length - 1
+                If Vw(i) > 0.0 Then val += Vw(i) * AUX_INT_CPDT_Ti_L(T1, T2, i)
             Next
 
             Return val

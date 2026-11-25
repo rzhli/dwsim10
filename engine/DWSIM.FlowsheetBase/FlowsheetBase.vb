@@ -273,6 +273,10 @@ Imports DWSIM.ExtensionMethods
                 gObj = New HTMLTextGraphic(xcoord, ycoord)
                 prefix = "HTMLTEXT"
 
+            Case ObjectType.GO_MarkdownText
+                gObj = New MarkdownTextGraphic(xcoord, ycoord)
+                prefix = "MDTEXT"
+
             Case ObjectType.GO_Rectangle
                 gObj = New RectangleGraphic(New SKPoint(xcoord, ycoord), "")
                 prefix = "RECT"
@@ -465,6 +469,7 @@ Imports DWSIM.ExtensionMethods
                         gobj.ObjectType = ObjectType.GO_SpreadsheetTable Or
                         gobj.ObjectType = ObjectType.GO_Text Or
                         gobj.ObjectType = ObjectType.GO_HTMLText Or
+                        gobj.ObjectType = ObjectType.GO_MarkdownText Or
                         gobj.ObjectType = ObjectType.GO_Button Or
                         gobj.ObjectType = ObjectType.GO_Chart Then
 
@@ -2655,7 +2660,12 @@ Imports DWSIM.ExtensionMethods
     Public Sub CheckTag(obj As IGraphicObject)
 
         While GetFlowsheetSimulationObject(obj.Tag) IsNot Nothing
-            obj.Tag = Regex.Replace(obj.Tag, "\d+", Function(m) (Integer.Parse(m.Value) + 1).ToString(New String("0", m.Value.Length)))
+            If Regex.IsMatch(obj.Tag, "\d") Then
+                obj.Tag = Regex.Replace(obj.Tag, "\d+", Function(m) (Integer.Parse(m.Value) + 1).ToString(New String("0", m.Value.Length)))
+            Else
+                'a tag without digits gets a number, because incrementing its digits would leave it unchanged
+                obj.Tag = obj.Tag & " 2"
+            End If
         End While
 
     End Sub
@@ -3124,8 +3134,12 @@ Imports DWSIM.ExtensionMethods
         xel = xdoc.Element("DWSIM_Simulation_Data").Element("GeneralInfo")
 
         'The loader reads the build version to decide which defaults a file predates, so a
-        'headless save writes it too; without an entry assembly it is this assembly's version.
-        Dim appver = If(Assembly.GetEntryAssembly()?.GetName().Version, GetType(FlowsheetBase).Assembly.GetName().Version)
+        'headless save writes it too; without an entry assembly, or with one older than the engine
+        '(an automation program of its own at 1.0.0.0, read back as a file from before 5.0), it is
+        'this assembly's version.
+        Dim engineVersion = GetType(FlowsheetBase).Assembly.GetName().Version
+        Dim appver = Assembly.GetEntryAssembly()?.GetName().Version
+        If appver Is Nothing OrElse appver < engineVersion Then appver = engineVersion
         xel.Add(New XElement("BuildVersion", appver.ToString))
         If Not DWSIM.GlobalSettings.Settings.AutomationMode Then
             xel.Add(New XElement("BuildDate", CType("01/01/2000", DateTime).AddDays(appver.Build).AddSeconds(appver.Revision * 2)))
@@ -3437,6 +3451,8 @@ Imports DWSIM.ExtensionMethods
         Next
 
 
+        ' the inlet ports carry "objID|index" in ConnectorName while the outlets reconnect; their names come back afterwards
+        Dim portNames As New Dictionary(Of Global.DWSIM.Interfaces.IConnectionPoint, String)
         For Each xel As XElement In data
             Try
                 If xel.Element("Name") Is Nothing Then Continue For      ' the same empty element
@@ -3449,6 +3465,7 @@ Imports DWSIM.ExtensionMethods
                             Dim i As Integer = 0
                             For Each xel2 As XElement In xel.Element("InputConnectors").Elements
                                 If CBool(xel2.@IsAttached) = True Then
+                                    If Not portNames.ContainsKey(obj.InputConnectors(i)) Then portNames(obj.InputConnectors(i)) = obj.InputConnectors(i).ConnectorName
                                     obj.InputConnectors(i).ConnectorName = pkey & xel2.@AttachedFromObjID & "|" & xel2.@AttachedFromConnIndex
                                     obj.InputConnectors(i).Type = CType([Enum].Parse(obj.InputConnectors(i).Type.GetType, xel2.@ConnType), ConType)
                                     If reconnectinlets Then
@@ -3514,6 +3531,9 @@ Imports DWSIM.ExtensionMethods
             Catch ex As Exception
                 excs.Add(New Exception("Error Loading Flowsheet Object Connection Information", ex))
             End Try
+        Next
+        For Each kv In portNames
+            kv.Key.ConnectorName = kv.Value
         Next
 
     End Sub
@@ -4706,7 +4726,19 @@ Label_00CC:
     End Function
 
     Public Function GetCompound(name As String) As ICompoundConstantProperties Implements IFlowsheet.GetCompound
-        Return AvailableCompounds(name)
+        Dim c As ICompoundConstantProperties = Nothing
+        If AvailableCompounds.TryGetValue(name, c) Then Return c
+        ' the databases spell some names in another case (ChemSep writes N-butane and P-xylene, CoolProp
+        ' n-Butane and p-Xylene) and the flowsheet keeps one of them: a single name that differs only in
+        ' case is the same compound
+        Dim matches = AvailableCompounds.Keys.Where(Function(k) String.Equals(k, name, StringComparison.OrdinalIgnoreCase)).ToList()
+        If matches.Count = 1 Then Return AvailableCompounds(matches(0))
+        ' the same compound from two databases (same CAS number): the first one loaded
+        If matches.Count > 1 AndAlso matches.Select(Function(k) AvailableCompounds(k).CAS_Number).Distinct().Count() = 1 Then Return AvailableCompounds(matches(0))
+        If matches.Count > 1 Then
+            Throw New KeyNotFoundException(String.Format("Compound '{0}' matches {1}; give the name exactly as listed.", name, String.Join(", ", matches)))
+        End If
+        Throw New KeyNotFoundException(String.Format("Compound '{0}' isn't in the compound database.", name))
     End Function
 
     Public Function GetPropertyPackage(name As String) As IPropertyPackage Implements IFlowsheet.GetPropertyPackage
@@ -5143,6 +5175,8 @@ Label_00CC:
     Public Function AddCompound(compname As String) As ICompoundConstantProperties Implements IFlowsheet.AddCompound
 
         Dim c = GetCompound(compname)
+        ' a compound already in the flowsheet (the name may differ in case) stays as it is
+        If Options.SelectedComponents.ContainsKey(c.Name) Then Return Options.SelectedComponents(c.Name)
         Options.SelectedComponents.Add(c.Name, c)
         If Options.NotSelectedComponents.ContainsKey(c.Name) Then Options.NotSelectedComponents.Remove(c.Name)
         Return c
@@ -5648,6 +5682,8 @@ Label_00CC:
                         End Try
                     Next
 
+                    ' the inlet ports carry "objID|index" in ConnectorName while the outlets reconnect; their names come back afterwards
+                    Dim portNames As New Dictionary(Of Global.DWSIM.Interfaces.IConnectionPoint, String)
                     For Each xel As XElement In data
                         Try
                             Dim id As String = xel.Element("Name").Value
@@ -5659,6 +5695,7 @@ Label_00CC:
                                         Dim i As Integer = 0
                                         For Each xel2 As XElement In xel.Element("InputConnectors").Elements
                                             If xel2.@IsAttached = True Then
+                                                If Not portNames.ContainsKey(obj.InputConnectors(i)) Then portNames(obj.InputConnectors(i)) = obj.InputConnectors(i).ConnectorName
                                                 obj.InputConnectors(i).ConnectorName = xel2.@AttachedFromObjID & "|" & xel2.@AttachedFromConnIndex
                                                 obj.InputConnectors(i).Type = [Enum].Parse(obj.InputConnectors(i).Type.GetType, xel2.@ConnType)
                                             End If
@@ -5724,6 +5761,9 @@ Label_00CC:
                         Catch ex As Exception
                             excs.Add(New Exception("Error Loading Flowsheet Object Connection Information", ex))
                         End Try
+                    Next
+                    For Each kv In portNames
+                        kv.Key.ConnectorName = kv.Value
                     Next
 
                     For Each obj In GraphicObjects.Values
@@ -6650,6 +6690,19 @@ Label_00CC:
         End Try
 
     End Sub
+
+    ''' <summary>
+    ''' The flowsheet picture stored in .dwxmz files for the welcome screens, or Nothing for an empty
+    ''' flowsheet. The zoom and the positions of the objects aren't changed.
+    ''' </summary>
+    Public Function GetPreviewPng() As Byte()
+        Try
+            If FlowsheetSurface.Flowsheet Is Nothing Then FlowsheetSurface.Flowsheet = Me
+            Return FlowsheetSurface.RenderThumbnailPng(SharedClasses.FlowsheetFileInfo.PreviewMaxWidth, SharedClasses.FlowsheetFileInfo.PreviewMaxHeight)
+        Catch ex As Exception
+            Return Nothing
+        End Try
+    End Function
 
     Public Sub SavePFDScreenshotToPNG(pngfilepath As String) Implements IFlowsheet.SavePFDScreenshotToPNG
 

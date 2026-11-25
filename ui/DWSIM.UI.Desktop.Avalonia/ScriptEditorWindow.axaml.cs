@@ -725,7 +725,7 @@ public partial class ScriptEditorWindow : UserControl
             {
                 FileName = _current?.PythonInterpreter == Scripts.Interpreter.Julia
                     ? "https://docs.julialang.org/en/v1/"
-                    : "https://dwsim.org/api_help/html/R_Project_DWSIM_Class_Library_Documentation.htm",
+                    : "https://dwsim.org/help/api/",
                 UseShellExecute = true
             });
         }

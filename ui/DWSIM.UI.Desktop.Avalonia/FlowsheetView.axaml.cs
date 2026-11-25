@@ -71,7 +71,11 @@ public partial class FlowsheetView : UserControl
     public void ShowSetupWizard()
     {
         if (_flowsheet == null) return;
-        new SimulationSetupWizard(_flowsheet).Show(HostWindow);
+        new SimulationSetupWizard(_flowsheet)
+        {
+            ZoomToFit = () => { Canvas.Refresh(); ZoomFit(); },
+            OpenExample = HostWindow is MainWindow mw ? path => mw.ReplaceDocument(this, path) : null
+        }.Show(HostWindow);
     }
 
     /// <summary>Opens the data regression tool over this simulation, for the welcome screen.</summary>
@@ -270,6 +274,10 @@ public partial class FlowsheetView : UserControl
         ResultsPanel = new ResultsViewerPanel();
         MaterialStreamsPanel = new MaterialStreamListPanel();
         LogList = new LogPanel();
+        LogList.AskAssistant = message =>
+        {
+            if (_flowsheet != null) DWSIM.GlobalSettings.Settings.AskAssistant?.Invoke(_flowsheet, "", message);
+        };
         SpreadsheetGrid = new ReoGridControl();
         // Scale the spreadsheet with the interface scaling factor (the Avalonia ReoGrid
         // build hardcodes DPI = 96 and never scales on HiDPI/Linux).
@@ -308,6 +316,7 @@ public partial class FlowsheetView : UserControl
         WireToolbarGroups();
         PopulatePalette();
         SetupBackupTimer();
+        WireUIContextTracking();
         // closing is confirmed by the host through ConfirmCloseAsync()
 
         // the menu bar belongs to the main window, which shows the one of the active
@@ -332,6 +341,16 @@ public partial class FlowsheetView : UserControl
     {
         // Build palette content: header + scrollable items
         var paletteContent = new DockPanel();
+        // The tool tab already labels this "Objects"; no in-panel header is needed. The search box
+        // and the industry buttons stay above the scrolling list.
+        var searchArea = new StackPanel { Margin = new Thickness(4, 4, 4, 2) };
+        global::Avalonia.Automation.AutomationProperties.SetAutomationId(_paletteSearch, "PaletteSearch");
+        _paletteIndustryBar.Margin = new Thickness(0, 4, 0, 2);
+        searchArea.Children.Add(_paletteSearch);
+        searchArea.Children.Add(_paletteIndustryBar);
+        DockPanel.SetDock(searchArea, global::Avalonia.Controls.Dock.Top);
+        paletteContent.Children.Add(searchArea);
+        WirePaletteSearch();
         paletteContent.Children.Add(new ScrollViewer
         {
             HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
@@ -838,6 +857,8 @@ public partial class FlowsheetView : UserControl
         fs.OnCloseOpenEditForms = CloseAllEditors;
         // an extension asking for a page from a local server gets a docked panel here
         fs.OnWebPanelRequested = ShowWebPanel;
+        // the assistant asks what the user is working on, to fit its suggestions to it
+        fs.OnGetUIContext = GetUIContext;
 
         // Wire spreadsheet BEFORE file load: LoadSpreadsheetData callback
         // is invoked during LoadFromXML/LoadZippedXML on the background thread.
@@ -938,7 +959,7 @@ public partial class FlowsheetView : UserControl
         var flowsheet = _flowsheet;
         if (flowsheet == null)
         {
-            editor.AppendOutput("No simulation loaded.");
+            editor.AppendOutput("A simulation isn't loaded.");
             editor.NotifyRunCompleted();
             return;
         }
@@ -1021,6 +1042,8 @@ public partial class FlowsheetView : UserControl
         fs.OnCloseOpenEditForms = CloseAllEditors;
         // an extension asking for a page from a local server gets a docked panel here
         fs.OnWebPanelRequested = ShowWebPanel;
+        // the assistant asks what the user is working on, to fit its suggestions to it
+        fs.OnGetUIContext = GetUIContext;
 
         var dlg = new LoadingDialog("New Simulation", "Loading databases...");
         dlg.Show(HostWindow);
@@ -1070,7 +1093,11 @@ public partial class FlowsheetView : UserControl
 
         if (showWizard)
         {
-            var wizard = new SimulationSetupWizard(fs);
+            var wizard = new SimulationSetupWizard(fs)
+            {
+                ZoomToFit = () => { Canvas.Refresh(); ZoomFit(); },
+                OpenExample = HostWindow is MainWindow mw ? path => mw.ReplaceDocument(this, path) : null
+            };
             wizard.Show();
         }
     }
@@ -1081,6 +1108,15 @@ public partial class FlowsheetView : UserControl
 
         SetStatus("Saving...");
         AppendLog($"Saving to {Path.GetFileName(path)}...");
+
+        // the flowsheet picture shown by the welcome screens, drawn here on the UI thread
+        byte[]? preview = null;
+        try
+        {
+            preview = _surface?.RenderThumbnailPng(DWSIM.SharedClasses.FlowsheetFileInfo.PreviewMaxWidth,
+                                                   DWSIM.SharedClasses.FlowsheetFileInfo.PreviewMaxHeight);
+        }
+        catch { }
 
         try
         {
@@ -1098,6 +1134,14 @@ public partial class FlowsheetView : UserControl
                         using var zip = new ZipArchive(File.Create(path), ZipArchiveMode.Create);
                         zip.CreateEntryFromFile(xmlfile, Path.GetFileName(xmlfile),
                             CompressionLevel.Optimal);
+                        if (preview != null)
+                        {
+                            // PNG is compressed already
+                            var entry = zip.CreateEntry(DWSIM.SharedClasses.FlowsheetFileInfo.PreviewEntryName,
+                                                        CompressionLevel.NoCompression);
+                            using var es = entry.Open();
+                            es.Write(preview, 0, preview.Length);
+                        }
                     }
                     finally
                     {
@@ -1139,7 +1183,7 @@ public partial class FlowsheetView : UserControl
 
     private async Task SaveAsAsync()
     {
-        if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+        if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
 
         var topLevel = TopLevel.GetTopLevel(this) ?? throw new InvalidOperationException("No top level");
 
@@ -1170,7 +1214,7 @@ public partial class FlowsheetView : UserControl
     {
         if (_flowsheet == null)
         {
-            AppendLog("No simulation loaded.");
+            AppendLog("A simulation isn't loaded.");
             return;
         }
 
@@ -1376,11 +1420,16 @@ public partial class FlowsheetView : UserControl
                         {
                             _spreadsheet.Grid.RemoveWorksheet(0);
                             _spreadsheet.Loaded = false;
+                            // every worksheet exists before any is loaded: LoadRGF drops a formula that
+                            // refers to a worksheet stored later in the file, and the cell kept its saved value
+                            var sheets = new Dictionary<string, Worksheet>();
+                            foreach (var item in sdict)
+                                sheets[item.Key] = _spreadsheet.Grid.NewWorksheet(item.Key);
                             foreach (var item in sdict)
                             {
                                 try
                                 {
-                                    var sheet = _spreadsheet.Grid.NewWorksheet(item.Key);
+                                    var sheet = sheets[item.Key];
                                     var xmldoc = Newtonsoft.Json.JsonConvert.DeserializeXmlNode(
                                         DWSIM.Automation.Flowsheet2.DefaultSheetFont(item.Value));
                                     var tmpfile = DWSIM.SharedClasses.Utility.GetTempFileName();
@@ -1592,7 +1641,7 @@ public partial class FlowsheetView : UserControl
             DWSIM.FlowsheetSolver.FlowsheetSolver.FlowsheetSolvers.Count == 0 &&
             !_flowsheet.ExternalSolvers.Values.Any(es => es is Interfaces.IExternalFlowsheetSolver))
         {
-            AppendLog("Solver strategy set, but no flowsheet solver is installed: the sequential solver will run until one is.",
+            AppendLog("Solver strategy set, but a flowsheet solver isn't installed: the sequential solver will run until one is.",
                       Interfaces.IFlowsheet.MessageType.Warning);
         }
         else
@@ -2076,7 +2125,7 @@ public partial class FlowsheetView : UserControl
         MenuAddEnergyStream.Click      += (_, _) => AddObjectAtCenter(ObjectType.EnergyStream, "Energy Stream");
         // annotations have no simulation object behind them and take the other entry point
         MenuAddText.Click              += (_, _) => AddAnnotationAtCenter(ObjectType.GO_Text);
-        MenuAddHTMLText.Click          += (_, _) => AddAnnotationAtCenter(ObjectType.GO_HTMLText);
+        MenuAddMarkdownText.Click      += (_, _) => AddAnnotationAtCenter(ObjectType.GO_MarkdownText);
         MenuAddRectangle.Click         += (_, _) => AddAnnotationAtCenter(ObjectType.GO_Rectangle);
         MenuAddButton.Click            += (_, _) => AddAnnotationAtCenter(ObjectType.GO_Button);
         MenuAddImage.Click             += async (_, _) => await AddImageAsync();
@@ -2104,73 +2153,73 @@ public partial class FlowsheetView : UserControl
         MenuUtilBE.Click  += (_, _) => OpenUtilityWindow(Interfaces.Enums.FlowsheetUtility.PhaseEnvelopeBinary);
         MenuUnitSystems.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new UnitSystemEditorWindow(_flowsheet).Show(HostWindow);
         };
         MenuPetroleumChar.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new PetroleumCharacterizationWindow(_flowsheet).Show(HostWindow);
         };
         MenuDistCurve.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new DistillationCurveWindow(_flowsheet).Show(HostWindow);
         };
         MenuAssayManager.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new AssayManagerWindow(_flowsheet).Show(HostWindow);
         };
         MenuPolymerChar.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new PolymerCharacterizationWindow(_flowsheet).Show(HostWindow);
         };
         MenuBulkPseudos.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new BulkPseudocompoundsWindow(_flowsheet).Show(HostWindow);
         };
         MenuUtilLLE.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new LLEEnvelopeWindow(_flowsheet).Show(HostWindow);
         };
         MenuPureComp.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new CompoundPropertyEditorWindow(_flowsheet).Show(HostWindow);
         };
         MenuHydrates.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new HydratesWindow(_flowsheet).Show(HostWindow);
         };
         MenuColdFlow.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ColdFlowPropertiesWindow(_flowsheet).Show(HostWindow);
         };
         MenuStreamDistCurves.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             var sel = _surface?.SelectedObject;
             new StreamDistillationCurvesWindow(_flowsheet, sel != null && sel.ObjectType == ObjectType.MaterialStream ? sel.Tag : null).Show(HostWindow);
         };
         MenuSepSizing.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new SeparatorSizingWindow(_flowsheet).Show(HostWindow);
         };
         MenuDepressurization.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new DepressurizationWindow(_flowsheet).Show(HostWindow);
         };
         MenuColumnInternals.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ColumnInternalsWindow(_flowsheet).Show(HostWindow);
         };
         DWSIM.UI.Desktop.Editors.AttachedUtilitiesEditor.OpenUtility = utility =>
@@ -2181,72 +2230,72 @@ public partial class FlowsheetView : UserControl
         };
         MenuMcCabeThiele.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The McCabe-Thiele diagram needs two compounds in the simulation."); return; }
             new McCabeThieleWindow(_flowsheet).Show(HostWindow);
         };
         MenuPackageComparison.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             if (_flowsheet.SelectedCompounds.Count < 2) { AppendLog("The property package comparison needs two compounds in the simulation."); return; }
             new PackageComparisonWindow(_flowsheet).Show(HostWindow);
         };
         MenuEosExplorer.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             if (_flowsheet.SelectedCompounds.Count < 1) { AppendLog("The equation of state explorer needs a compound in the simulation."); return; }
             new EosExplorerWindow(_flowsheet).Show(HostWindow);
         };
         MenuPsvSizing.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new PsvSizingWindow(_flowsheet).Show(HostWindow);
         };
 
         MenuReactions.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ReactionManagerWindow(_flowsheet).Show();
         };
 
         MenuSensitivity.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new SensitivityAnalysisWindow(_flowsheet).Show();
         };
         MenuOptimizer.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new OptimizerWindow(_flowsheet).Show();
         };
         MenuPropertyChart.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new PropertyChartWindow(_flowsheet).Show();
         };
         MenuBalance.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new BalanceSummaryWindow(_flowsheet).Show();
         };
         MenuLiveSliders.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new LiveSlidersWindow(_flowsheet).Show(HostWindow);
         };
         MenuScenarioComparison.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ScenarioComparisonWindow(_flowsheet).Show(HostWindow);
         };
         MenuExplainResult.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ExplainResultWindow(_flowsheet, _surface?.SelectedObject?.Name).Show(HostWindow);
         };
         MenuFlowsheetCheck.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new FlowsheetCheckWindow(_flowsheet, name =>
             {
                 if (_flowsheet.SimulationObjects.TryGetValue(name, out var obj) && obj.GraphicObject != null)
@@ -2262,14 +2311,14 @@ public partial class FlowsheetView : UserControl
         };
         MenuCreateCompound.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new CompoundCreatorWindow(_flowsheet).Show();
         };
         MenuBiomassCompound.Click += (_, _) =>
             new BiomassCompoundCreatorWindow(_flowsheet).Show(HostWindow);
         MenuDataRegression.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new DataRegressionWindow(_flowsheet).Show(HostWindow);
         };
 
@@ -2287,7 +2336,7 @@ public partial class FlowsheetView : UserControl
 
         MenuSimSettings.Click += async (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             var dlg = new SimulationSettingsWindow(_flowsheet, refreshCanvas: () => Canvas?.Refresh());
             await dlg.ShowDialog(HostWindow);
         };
@@ -2375,7 +2424,7 @@ public partial class FlowsheetView : UserControl
 
         MenuSave.Click += async (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             var path = _flowsheet.FilePath;
             if (string.IsNullOrEmpty(path))
                 await SaveAsAsync();
@@ -2395,7 +2444,7 @@ public partial class FlowsheetView : UserControl
         // --- Dynamics menu ---
         MenuDynamicsToggle.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             _flowsheet.DynamicMode = !_flowsheet.DynamicMode;
             var state = _flowsheet.DynamicMode ? "enabled" : "disabled";
             AppendLog($"Dynamic mode {state}.");
@@ -2403,26 +2452,26 @@ public partial class FlowsheetView : UserControl
         };
         MenuDynManager.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             // Activate the Dynamics Manager document tab
             if (_dockFactory?.DynamicsManagerDocument != null)
                 _dockFactory.DynamicsManagerDocument.IsActive = true;
         };
         MenuDynIntegrator.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             // Activate the Integrator tool tab in the bottom dock
             if (_dockFactory?.IntegratorTool != null)
                 _dockFactory.IntegratorTool.IsActive = true;
         };
         MenuDynPIDTuning.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new PIDTuningWindow(_flowsheet).Show(HostWindow);
         };
         MenuDynWizard.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             var wizard = new DynamicsWizard(_flowsheet);
             // The manager builds its lists once; anything the wizard creates needs it to reload.
             wizard.OnApplied = () => DynManagerPanel?.Populate();
@@ -2432,12 +2481,12 @@ public partial class FlowsheetView : UserControl
         // --- Results menu ---
         MenuResultsReport.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new ReportConfigWindow(_flowsheet, SimulationName + " - Results Report").Show(HostWindow);
         };
         MenuMarkdownReport.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             OpenMarkdownReportViewer();
         };
 
@@ -2453,7 +2502,7 @@ public partial class FlowsheetView : UserControl
         // --- UO Extensions Manager ---
         MenuUOExtManager.Click += (_, _) =>
         {
-            if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+            if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
             new UnitOpExtensionsManagerWindow(_flowsheet).Show(HostWindow);
         };
     }
@@ -3008,7 +3057,7 @@ public partial class FlowsheetView : UserControl
                             {
                                 new TextBox
                                 {
-                                    Text = report ?? "(no debug data)",
+                                    Text = report ?? "(there isn't any debug data)",
                                     IsReadOnly = true,
                                     AcceptsReturn = true,
                                     TextWrapping = global::Avalonia.Media.TextWrapping.Wrap,
@@ -3026,6 +3075,19 @@ public partial class FlowsheetView : UserControl
                 catch (Exception ex) { AppendLog($"Debug error: {ex.Message}"); }
             };
             ctx.Items.Add(debug);
+
+            // only when the DWSIM Assistant is loaded and the object ended its calculation with an error
+            if (simObj != null && DWSIM.GlobalSettings.Settings.AskAssistant != null &&
+                !string.IsNullOrWhiteSpace(simObj.ErrorMessage))
+            {
+                var ask = new MenuItem { Header = "Ask the DWSIM Assistant Why It Failed", Icon = IconHelper.MIcon("\U0001F4AC") }; // speech balloon
+                ask.Click += (_, _) =>
+                {
+                    // the assistant reads the object's own error
+                    if (_flowsheet != null) DWSIM.GlobalSettings.Settings.AskAssistant?.Invoke(_flowsheet, simObj.Name, "");
+                };
+                ctx.Items.Add(ask);
+            }
 
             // Why this result: the balances and the diagram of the solved object
             if (simObj != null && DWSIM.Automation.DynamicRunner.Insight.UnitInsightStudy.Supports(simObj))
@@ -3271,8 +3333,30 @@ public partial class FlowsheetView : UserControl
     // Object palette population (collapsible process categories with icons)
     // -------------------------------------------------------------------------
 
-    /// <summary>Category name -> palette artwork, description and relative symbol size.</summary>
-    private readonly Dictionary<string, List<(string name, byte[]? icon, string? tip, double scale)>> _paletteCategories = new();
+    /// <summary>One object of the palette: its name, icon and description, the Patreon access level
+    /// it needs (0 for one that anyone can use) and the industries it belongs to (none for a general one).</summary>
+    private sealed record PaletteItem(string name, byte[]? icon, string? tip, int level = 0, string[]? industries = null, double scale = 1);
+
+    /// <summary>A collapsible section of the palette, with its cells, for the search and the industry filter.</summary>
+    private sealed class PaletteSection
+    {
+        public string Category = "";
+        public Control Header = null!;
+        public WrapPanel Items = null!;
+        public TextBlock Arrow = null!;
+        public bool UserExpanded = true;
+        public readonly List<(Control cell, PaletteItem item)> Cells = new();
+    }
+
+    /// <summary>Category name -> the objects in it.</summary>
+    private readonly Dictionary<string, List<PaletteItem>> _paletteCategories = new();
+    private readonly List<PaletteSection> _paletteSections = new();
+    private readonly List<(Border badge, int level)> _paletteBadges = new();
+    private readonly TextBox _paletteSearch = new() { Watermark = "Search objects (name, function or industry)" };
+    private readonly WrapPanel _paletteIndustryBar = new();
+    private string? _paletteIndustry;
+    private bool _paletteFiltering;
+    private DispatcherTimer? _paletteFilterTimer;
 
     /// <summary>Static fallback categories used when ObjectList is empty (before Initialize).</summary>
     private static readonly (string category, string[] items)[] FallbackCategories =
@@ -3393,6 +3477,8 @@ public partial class FlowsheetView : UserControl
     private void PopulatePalette()
     {
         _paletteCategories.Clear();
+        _paletteSections.Clear();
+        _paletteBadges.Clear();
         PaletteStack.Children.Clear();
 
         // Build categories from ObjectList if available (after Initialize)
@@ -3416,9 +3502,12 @@ public partial class FlowsheetView : UserControl
                 var objectType = obj.GraphicObject?.ObjectType ?? PaletteNameToObjectType(displayName) ?? ObjectType.External;
                 var iconScale = GetPaletteIconScale(objectType, obj.ObjectClass, obj.GetType().FullName);
 
+                int level = DWSIM.SharedClasses.Utility.GetRequiredAccessLevel(obj);
+                var industries = DWSIM.SharedClasses.Utility.GetPaletteIndustries(obj);
+
                 if (!_paletteCategories.ContainsKey(category))
-                    _paletteCategories[category] = new List<(string, byte[]?, string?, double)>();
-                _paletteCategories[category].Add((displayName, iconBytes, tip, iconScale));
+                    _paletteCategories[category] = new List<PaletteItem>();
+                _paletteCategories[category].Add(new PaletteItem(displayName, iconBytes, tip, level, industries, iconScale));
             }
         }
 
@@ -3427,8 +3516,8 @@ public partial class FlowsheetView : UserControl
         {
             foreach (var (cat, items) in FallbackCategories)
             {
-                _paletteCategories[cat] = items.Select(n => (name: n, icon: (byte[]?)null, tip: (string?)null,
-                    scale: GetPaletteIconScale(PaletteNameToObjectType(n) ?? ObjectType.Nenhum))).ToList();
+                _paletteCategories[cat] = items.Select(n => new PaletteItem(n, null, null, scale:
+                    GetPaletteIconScale(PaletteNameToObjectType(n) ?? ObjectType.Nenhum))).ToList();
             }
         }
 
@@ -3438,9 +3527,9 @@ public partial class FlowsheetView : UserControl
         if (OperatingSystem.IsWindows() && _paletteCategories.TryGetValue("Columns", out var columnItems)
             && columnItems.All(it => it.name != "ChemSep Column"))
         {
-            var icon = columnItems.FirstOrDefault(it => it.name == "Distillation Column").icon;
-            columnItems.Add(("ChemSep Column", icon, "ChemSep Rigorous Separation Column (CAPE-OPEN)",
-                GetPaletteIconScale(ObjectType.DistillationColumn)));
+            var icon = columnItems.FirstOrDefault(it => it.name == "Distillation Column")?.icon;
+            columnItems.Add(new PaletteItem("ChemSep Column", icon, "ChemSep Rigorous Separation Column (CAPE-OPEN)",
+                scale: GetPaletteIconScale(ObjectType.DistillationColumn)));
         }
 
         // Each visible component appears once, in its functional category.
@@ -3486,13 +3575,18 @@ public partial class FlowsheetView : UserControl
                 Orientation = global::Avalonia.Layout.Orientation.Horizontal,
                 Margin = new Thickness(4, 2, 4, 6)
             };
+            var section = new PaletteSection { Category = cat, Header = headerPanel, Items = itemsPanel, Arrow = arrowText };
 
             // Share a slot within each category, large enough for its biggest thumbnail.
             // Enlarged columns must not overflow the slot into the label below.
             var iconSlotSize = DWSIM.UI.Shared.Avalonia.UiScale.Size(Math.Max(56, 40 * items.Max(item => item.scale)));
 
-            foreach (var (name, iconBytes, tip, iconScale) in items)
+            foreach (var pit in items)
             {
+                var name = pit.name;
+                var iconBytes = pit.icon;
+                var tip = pit.tip;
+                var iconScale = pit.scale;
                 var cell = new StackPanel
                 {
                     Orientation = global::Avalonia.Layout.Orientation.Vertical,
@@ -3534,7 +3628,7 @@ public partial class FlowsheetView : UserControl
                     Width = iconSlotSize,
                     Height = iconSlotSize,
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    Child = iconCtrl
+                    Child = WithLevelBadge(iconCtrl, pit.level)
                 });
 
                 // Label
@@ -3561,6 +3655,7 @@ public partial class FlowsheetView : UserControl
                 WirePaletteCellDrag(cell, name);
 
                 itemsPanel.Children.Add(cell);
+                section.Cells.Add((cell, pit));
             }
 
             // Toggle expand/collapse on header click
@@ -3569,11 +3664,202 @@ public partial class FlowsheetView : UserControl
                 bool wasVisible = itemsPanel.IsVisible;
                 itemsPanel.IsVisible = !wasVisible;
                 arrowText.Text = wasVisible ? "→" : "↓";  // right arrow = collapsed, down = expanded
+                // while a search or an industry is on, the sections open by themselves, and the
+                // state the user chose comes back when the filter is cleared
+                if (!_paletteFiltering) section.UserExpanded = itemsPanel.IsVisible;
             };
 
             PaletteStack.Children.Add(headerPanel);
             PaletteStack.Children.Add(itemsPanel);
+            _paletteSections.Add(section);
         }
+
+        BuildPaletteIndustryBar();
+        ApplyPaletteFilter();
+    }
+
+    // -------------------------------------------------------------------------
+    // Palette search, industry filter and level badges
+    // -------------------------------------------------------------------------
+
+    private void WirePaletteSearch()
+    {
+        _paletteFilterTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _paletteFilterTimer.Tick += (_, _) => { _paletteFilterTimer.Stop(); ApplyPaletteFilter(); };
+        _paletteSearch.TextChanged += (_, _) => { _paletteFilterTimer.Stop(); _paletteFilterTimer.Start(); };
+        _paletteSearch.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape) { _paletteSearch.Text = ""; e.Handled = true; }
+        };
+
+        // the licence check finishes in the background, after the palette is built
+        EventHandler onLevel = (_, _) => Dispatcher.UIThread.Post(RefreshPaletteBadges);
+        AttachedToVisualTree += (_, _) => DWSIM.SharedClasses.Utility.UserAccessLevelChanged += onLevel;
+        DetachedFromVisualTree += (_, _) => DWSIM.SharedClasses.Utility.UserAccessLevelChanged -= onLevel;
+    }
+
+    /// <summary>One button per industry that the loaded unit operations belong to, plus "All".</summary>
+    private void BuildPaletteIndustryBar()
+    {
+        _paletteIndustryBar.Children.Clear();
+        var industries = DWSIM.SharedClasses.PaletteIndustry.Sort(
+            _paletteSections.SelectMany(s => s.Cells).SelectMany(c => c.item.industries ?? Array.Empty<string>()));
+        if (_paletteIndustry != null && !industries.Contains(_paletteIndustry)) _paletteIndustry = null;
+        _paletteIndustryBar.IsVisible = industries.Count > 0;
+        if (industries.Count == 0) return;
+
+        var buttons = new List<global::Avalonia.Controls.Primitives.ToggleButton>();
+        bool updating = false;
+        foreach (var ind in new string?[] { null }.Concat(industries))
+        {
+            var b = new global::Avalonia.Controls.Primitives.ToggleButton
+            {
+                Content = ind ?? "All",
+                Tag = ind,
+                IsChecked = ind == _paletteIndustry,
+                FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(10),
+                Padding = new Thickness(8, 2),
+                Margin = new Thickness(0, 0, 4, 4),
+                MinHeight = 0,
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            // one button is always on: pressing the selected one again leaves it on
+            b.IsCheckedChanged += (_, _) =>
+            {
+                if (updating) return;
+                updating = true;
+                if (b.IsChecked == true)
+                {
+                    _paletteIndustry = b.Tag as string;
+                    foreach (var other in buttons) if (other != b) other.IsChecked = false;
+                    updating = false;
+                    ApplyPaletteFilter();
+                }
+                else
+                {
+                    if ((b.Tag as string) == _paletteIndustry) b.IsChecked = true;
+                    updating = false;
+                }
+            };
+            buttons.Add(b);
+            _paletteIndustryBar.Children.Add(b);
+        }
+    }
+
+    /// <summary>
+    /// Shows the objects that match the search text and the selected industry. A general unit
+    /// operation (one that doesn't belong to any industry) shows under every industry, after the
+    /// ones of that industry. While a filter is on, every section with a match is open; when the
+    /// filter is cleared, the sections go back to the state the user left them in.
+    /// </summary>
+    private void ApplyPaletteFilter()
+    {
+        var query = _paletteSearch.Text?.Trim() ?? "";
+        bool filtering = query.Length > 0 || _paletteIndustry != null;
+        var cmp = StringComparer.OrdinalIgnoreCase;
+
+        foreach (var s in _paletteSections)
+        {
+            int visible = 0;
+            foreach (var (cell, it) in s.Cells)
+            {
+                var inds = it.industries ?? Array.Empty<string>();
+                bool show = (_paletteIndustry == null || inds.Length == 0 || inds.Contains(_paletteIndustry, cmp))
+                            && DWSIM.SharedClasses.Utility.PaletteSearchMatches(query, it.name, it.tip ?? "", s.Category, string.Join(" ", inds));
+                cell.IsVisible = show;
+                if (show) visible++;
+            }
+
+            // the objects of the selected industry come first in their section
+            var ordered = s.Cells
+                .Select((c, i) => (c.cell, first: _paletteIndustry != null && (c.item.industries ?? Array.Empty<string>()).Contains(_paletteIndustry, cmp), i))
+                .OrderBy(x => x.first ? 0 : 1).ThenBy(x => x.i).Select(x => x.cell).ToList();
+            if (!ordered.SequenceEqual(s.Items.Children))
+            {
+                s.Items.Children.Clear();
+                s.Items.Children.AddRange(ordered);
+            }
+
+            s.Header.IsVisible = visible > 0;
+            bool expanded = filtering ? visible > 0 : s.UserExpanded;
+            s.Items.IsVisible = s.Header.IsVisible && expanded;
+            s.Arrow.Text = expanded ? "↓" : "→";
+        }
+
+        _paletteFiltering = filtering;
+    }
+
+    /// <summary>Puts the level badge on the bottom right corner of an icon (L1, L2 or L3, with a lock
+    /// when the user's level is below it). An object that anyone can use keeps its plain icon.</summary>
+    private Control WithLevelBadge(Control icon, int level)
+    {
+        if (level <= 0) return icon;
+        var badge = new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(3, 0, 3, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, -DWSIM.UI.Shared.Avalonia.UiScale.Size(10), -DWSIM.UI.Shared.Avalonia.UiScale.Size(3)),
+        };
+        _paletteBadges.Add((badge, level));
+        FillLevelBadge(badge, level, DWSIM.SharedClasses.Utility.GetUserAccessLevel());
+        var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
+        grid.Children.Add(icon);
+        grid.Children.Add(badge);
+        return grid;
+    }
+
+    internal static void FillLevelBadge(Border badge, int level, int userLevel)
+    {
+        bool locked = userLevel < level;
+        var (back, fore, border) = level switch
+        {
+            1 => (Color.FromRgb(225, 245, 238), Color.FromRgb(8, 80, 65), Color.FromRgb(15, 110, 86)),
+            2 => (Color.FromRgb(238, 237, 254), Color.FromRgb(60, 52, 137), Color.FromRgb(83, 74, 183)),
+            _ => (Color.FromRgb(250, 238, 218), Color.FromRgb(99, 56, 6), Color.FromRgb(133, 79, 11)),
+        };
+        var foreBrush = new SolidColorBrush(fore);
+        badge.Background = new SolidColorBrush(back);
+        badge.BorderBrush = new SolidColorBrush(border);
+        var row = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal, Spacing = 2 };
+        if (locked)
+        {
+            double s = DWSIM.UI.Shared.Avalonia.UiScale.Size(1);
+            var lockIcon = new global::Avalonia.Controls.Canvas { Width = 7 * s, Height = 9 * s, VerticalAlignment = VerticalAlignment.Center };
+            lockIcon.Children.Add(new global::Avalonia.Controls.Shapes.Path
+            {
+                Data = Geometry.Parse("M1.5,4.5 V3 A2,2 0 0 1 5.5,3 V4.5"),
+                Stroke = foreBrush,
+                StrokeThickness = 1.2,
+                RenderTransform = new ScaleTransform(s, s),
+                RenderTransformOrigin = new RelativePoint(0, 0, RelativeUnit.Absolute)
+            });
+            var body = new global::Avalonia.Controls.Shapes.Rectangle { Width = 6 * s, Height = 4.5 * s, Fill = foreBrush };
+            global::Avalonia.Controls.Canvas.SetLeft(body, 0.5 * s);
+            global::Avalonia.Controls.Canvas.SetTop(body, 4.5 * s);
+            lockIcon.Children.Add(body);
+            row.Children.Add(lockIcon);
+        }
+        row.Children.Add(new TextBlock
+        {
+            Text = "L" + level,
+            FontSize = DWSIM.UI.Shared.Avalonia.UiScale.Font(9),
+            FontWeight = FontWeight.Bold,
+            Foreground = foreBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        badge.Child = row;
+        global::Avalonia.Controls.ToolTip.SetTip(badge, locked
+            ? $"Needs a Patreon membership of Level {level} or higher"
+            : $"Patreon Level {level} unit operation, included in your membership");
+    }
+
+    private void RefreshPaletteBadges()
+    {
+        int userLevel = DWSIM.SharedClasses.Utility.GetUserAccessLevel();
+        foreach (var (badge, level) in _paletteBadges) FillLevelBadge(badge, level, userLevel);
     }
 
     /// <summary>Wires drag-drop from a single palette cell.</summary>
@@ -3843,7 +4129,7 @@ public partial class FlowsheetView : UserControl
     /// </summary>
     private void WriteIntegratorResultsToSpreadsheet()
     {
-        if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+        if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
         if (_spreadsheet == null) { AppendLog("The spreadsheet is not available."); return; }
 
         try
@@ -3854,14 +4140,14 @@ public partial class FlowsheetView : UserControl
 
             var schedule = dm.ScheduleList[dm.CurrentSchedule];
             if (!dm.IntegratorList.ContainsKey(schedule.CurrentIntegrator))
-            { AppendLog("The selected schedule has no integrator."); return; }
+            { AppendLog("The selected schedule doesn't have an integrator."); return; }
 
             var integrator = dm.IntegratorList[schedule.CurrentIntegrator];
 
             if (integrator.MonitoredVariables.Count == 0)
-            { AppendLog("No monitored variables are defined for this integrator."); return; }
+            { AppendLog("Monitored variables aren't defined for this integrator."); return; }
             if (integrator.MonitoredVariableValues.Count == 0)
-            { AppendLog("No results stored yet. Run the integrator first."); return; }
+            { AppendLog("There aren't any stored results yet. Run the integrator first."); return; }
 
             var sheet = _spreadsheet.Grid.NewWorksheet("Integrator Results");
             sheet.RowCount = integrator.MonitoredVariableValues.Count + 1;
@@ -3918,7 +4204,7 @@ public partial class FlowsheetView : UserControl
     /// </summary>
     private async Task ExportFlowsheetAsync(FlowsheetExportFormat format)
     {
-        if (_flowsheet == null || _surface == null) { AppendLog("No simulation loaded."); return; }
+        if (_flowsheet == null || _surface == null) { AppendLog("A simulation isn't loaded."); return; }
 
         var (ext, description) = format switch
         {
@@ -4010,7 +4296,7 @@ public partial class FlowsheetView : UserControl
 
     private void OpenUtilityWindow(Interfaces.Enums.FlowsheetUtility utility)
     {
-        if (_flowsheet == null) { AppendLog("No simulation loaded."); return; }
+        if (_flowsheet == null) { AppendLog("A simulation isn't loaded."); return; }
 
         // Pre-select the stream picked on the canvas, if there is one. Every utility
         // window also exposes its own picker, so a non-stream selection is not an error.
@@ -4247,7 +4533,8 @@ public partial class FlowsheetView : UserControl
                         var menuItem = new MenuItem
                         {
                             Header = ext.DisplayText,
-                            Icon = IconHelper.MIcon("\U0001FA9B") // swiss knife
+                            // the icon the extension supplies; the screwdriver for those without one
+                            Icon = IconHelper.MIcon(ExtensionImage(ext), "\U0001FA9B")
                         };
                         menuItem.Click += (_, _) =>
                         {
@@ -4385,6 +4672,12 @@ public partial class FlowsheetView : UserControl
     /// Puts an extension on the toolbar, using the icon it publishes. An extension with no icon is
     /// reachable from its menu only.
     /// </summary>
+    private static byte[]? ExtensionImage(DWSIM.Interfaces.IExtender ext)
+    {
+        try { return ext.DisplayImage; }
+        catch { return null; }
+    }
+
     private void AddExtensionButton(DWSIM.Interfaces.IExtender ext)
     {
         byte[]? png = null;

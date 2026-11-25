@@ -55,6 +55,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         ' start with, lowered by SolveWithFallbacks when the iteration does not converge.
         Private _trelax As Double = 0.5
 
+        ''' <summary>
+        ''' True when the solve only prepares the estimates of another solver. The specifications this method
+        ''' cannot take directly are then left to that solver: the column is solved once, at the reflux ratio
+        ''' and the bottoms rate of the estimates, and the search for the values that meet them is skipped.
+        ''' Each point of that search is a full solve with its fallbacks, and on a column this method cannot
+        ''' converge away from its start the search cost thousands of sweeps before the other solver began.
+        ''' </summary>
+        Public Property WarmUp As Boolean = False
+
         Public Function Solve(ByVal rc As Column, ByVal nc As Integer, ByVal ns As Integer, ByVal maxits As Integer,
                                 ByVal tol As Double(), ByVal F As Double(), ByVal V As Double(),
                                 ByVal Q As Double(), ByVal L As Double(),
@@ -167,6 +176,12 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 newspecs.Add("R", rspec)
 
                 Dim result As Object = Nothing
+
+                If WarmUp Then
+                    Return SolveWithFallbacks(rc, nc, ns, maxits, tolerance, F, V, Q, L, VSS, LSS, Kval,
+                                              x, y, z, fc, HF, T, P, condt, stopatitnumber, eff,
+                                              coltype, pp, newspecs, IdealK, IdealH, flashalgs)
+                End If
 
                 result = Solve_Internal(rc, nc, ns, maxits, tolerance, F, V, Q, L, VSS, LSS, Kval,
                                            x, y, z, fc, HF, T, P, condt, 50, eff,
@@ -368,6 +383,8 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                             x, y, z, fc, HF, T, P, condt, stopatitnumber, eff,
                                             coltype, pp, newspecs, IdealK, IdealH, flashalgs)
 
+                If WarmUp Then Return result
+
                 T = result(0)
                 V = result(1)
                 L = result(2)
@@ -526,7 +543,80 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Dim rspec As New ColumnSpec()
                 rspec.SpecValue = bottomsrate
                 rspec.SType = ColumnSpec.SpecType.Product_Molar_Flow_Rate
-                newspecs.Add("C", specs("C"))
+
+                ' A condenser specification that fixes the distillate rate fixes the bottoms rate too,
+                ' through the overall balance, and what is left free is the reflux. Searching the
+                ' bottoms rate then moved the distillate away from its specification while the reflux
+                ' stayed at whatever the estimates held, or drifted without bound inside one solve.
+                ' In that case the bottoms rate is set from the balance and the search runs on the
+                ' reflux ratio, in its logarithm.
+                Dim searchReflux As Boolean = False
+                Dim cspec As New ColumnSpec()
+                cspec.SType = ColumnSpec.SpecType.Stream_Ratio
+                Dim ulo As Double = Math.Log(0.001)
+                Dim uhi As Double = Math.Log(1000.0)
+                Dim u0 As Double = 0.0
+
+                ' With a distillate rate in mass, the bottoms rate that closes the balance depends on the
+                ' compositions of the other products, the side draws and the overhead vapour. Their mass
+                ' is taken with the compositions at hand: those of the estimates before the first solve
+                ' and, after each solve of the search, those it returned.
+                Dim otherproducts As Boolean = False
+                Dim feedmass As Double = 0.0
+                Dim othermass As Func(Of Double()(), Double()(), Double(), Double(), Double(), Double) =
+                    Function(xs, ys, lss1, vss1, v1)
+                        Dim m As Double = 0.0
+                        For j = 0 To ns
+                            If j > 0 AndAlso lss1(j) > 0.0 Then m += lss1(j) * pp.AUX_MMM(xs(j)) / 1000.0
+                            If vss1(j) > 0.0 Then m += vss1(j) * pp.AUX_MMM(ys(j)) / 1000.0
+                        Next
+                        If condt = Column.condtype.Partial_Condenser AndAlso v1(0) > 0.0 Then m += v1(0) * pp.AUX_MMM(ys(0)) / 1000.0
+                        Return m
+                    End Function
+
+                If Not DirectCast(rc, DistillationColumn).ReboiledAbsorber Then
+                    Dim draws As Double = 0.0
+                    For j = 0 To ns
+                        If j > 0 Then draws += LSS(j)
+                        draws += VSS(j)
+                    Next
+                    ' the vapour leaving the condenser is a product of its own only with a partial condenser:
+                    ' the estimates of a total condenser carry a floor of 1E-10 there
+                    Dim overheadvapor As Double = If(condt = Column.condtype.Partial_Condenser, V(0), 0.0)
+                    Select Case specs("C").SType
+                        Case ColumnSpec.SpecType.Product_Molar_Flow_Rate
+                            rspec.SpecValue = F.Sum - draws - overheadvapor - spval1
+                            searchReflux = True
+                        Case ColumnSpec.SpecType.Product_Mass_Flow_Rate
+                            For j = 0 To ns
+                                If F(j) > 0.0 Then feedmass += F(j) * pp.AUX_MMM(z(j)) / 1000.0
+                            Next
+                            otherproducts = draws > 0.0 OrElse overheadvapor > 0.0
+                            rspec.SType = ColumnSpec.SpecType.Product_Mass_Flow_Rate
+                            rspec.SpecValue = feedmass - spval1
+                            If otherproducts Then rspec.SpecValue -= othermass(x, y, LSS, VSS, V)
+                            searchReflux = True
+                    End Select
+                End If
+
+                If searchReflux Then
+                    If rspec.SpecValue <= 0.0 Then Throw New Exception("the distillate rate specified is not below what the feeds supply after the side draws")
+                    Dim rr0 As Double
+                    If specs("C").InitialEstimate.HasValue Then
+                        rr0 = specs("C").InitialEstimate.GetValueOrDefault()
+                    ElseIf condt <> Column.condtype.Full_Reflux Then
+                        rr0 = L(0) / LSS(0)
+                    Else
+                        rr0 = (V(1) + F(0)) / V(0) - 1
+                    End If
+                    If Double.IsNaN(rr0) OrElse Double.IsInfinity(rr0) Then rr0 = 1.0
+                    rr0 = Math.Min(Math.Max(rr0, 0.05), 50.0)
+                    u0 = Math.Log(rr0)
+                    cspec.SpecValue = rr0
+                    newspecs.Add("C", cspec)
+                Else
+                    newspecs.Add("C", specs("C"))
+                End If
                 newspecs.Add("R", rspec)
 
                 Dim result As Object = Nothing
@@ -534,6 +624,8 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 result = SolveWithFallbacks(rc, nc, ns, maxits, tolerance, F, V, Q, L, VSS, LSS, Kval,
                                             x, y, z, fc, HF, T, P, condt, stopatitnumber, eff,
                                             coltype, pp, newspecs, IdealK, IdealH, flashalgs)
+
+                If WarmUp Then Return result
 
                 T = result(0)
                 V = result(1)
@@ -553,7 +645,11 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Dim freb As Func(Of Double, Integer, Double) =
                 Function(xvar, mode)
 
-                    rspec.SpecValue = Math.Min(Math.Max(xvar, blo), bhi)
+                    If searchReflux Then
+                        cspec.SpecValue = Math.Exp(Math.Min(Math.Max(xvar, ulo), uhi))
+                    Else
+                        rspec.SpecValue = Math.Min(Math.Max(xvar, blo), bhi)
+                    End If
 
                     ' with the same temperature-step fallbacks as the column's own first solve (and as
                     ' the condenser's outer loop above): a column that needs a smaller step needs it at
@@ -584,6 +680,14 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         x = result(6)
                         Kval = result(7)
                         Q = result(8)
+                    End If
+
+                    ' bottoms rate of the next solve, with the other products as this one left them
+                    If searchReflux AndAlso otherproducts Then
+                        Dim bm As Double = feedmass - spval1 - othermass(DirectCast(result(6), Double()()), DirectCast(result(5), Double()()),
+                                                                         DirectCast(result(4), Double()), DirectCast(result(3), Double()),
+                                                                         DirectCast(result(1), Double()))
+                        If bm > 0.0 Then rspec.SpecValue = bm
                     End If
 
                     Select Case specs("C").SType
@@ -677,9 +781,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 ObjFunctionValues.Clear()
                 ResultsVector.Clear()
 
-                SearchBottomsRate(Function(xvar)
-                                      Return freb.Invoke(xvar, 1)
-                                  End Function, bottomsrate, blo, bhi, tolerance, maxits)
+                If searchReflux Then
+                    SearchBottomsRate(Function(xvar)
+                                          Return freb.Invoke(xvar, 1)
+                                      End Function, u0, ulo, uhi, tolerance, maxits)
+                Else
+                    SearchBottomsRate(Function(xvar)
+                                          Return freb.Invoke(xvar, 1)
+                                      End Function, bottomsrate, blo, bhi, tolerance, maxits)
+                End If
 
                 If Double.IsNaN(errfunc) Or Math.Abs(errfunc) > tolerance Then Throw New Exception(pp.Flowsheet?.GetTranslatedString("DCGeneralError"))
 
@@ -749,7 +859,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     xa = xb : fa = fb
                     xb = xt : fb = ft
                 End If
-                If evals > maxits OrElse fails > 8 Then Throw New Exception("no bottoms rate in reach meets the reboiler specification")
+                If evals > maxits OrElse fails > 8 Then Throw New Exception("couldn't find a bottoms rate in reach that meets the reboiler specification")
                 Dim dir As Integer = Math.Sign(xb - xa)
                 Dim xend As Double = If(dir > 0, hi, lo)
                 Dim xmax As Double = xb + 0.5 * (xend - xb)
@@ -758,7 +868,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     Dim xs As Double = xb - fb * (xb - xa) / (fb - fa)
                     If (xs - xb) * dir > 0 AndAlso (xs - xmax) * dir < 0 Then xn = xs
                 End If
-                If Math.Abs(xn - xb) < 0.000000001 * (bhi - blo) Then Throw New Exception("no bottoms rate in reach meets the reboiler specification")
+                If Math.Abs(xn - xb) < 0.000000001 * (bhi - blo) Then Throw New Exception("couldn't find a bottoms rate in reach that meets the reboiler specification")
                 Dim fn As Double = fsafe(xn)
                 If Double.IsNaN(fn) Then
                     If dir > 0 Then hi = xn Else lo = xn
@@ -1106,7 +1216,17 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         B = (sum3 - sum4 - Vj(0) * Hv(0) - Q(ns)) / Hl(ns)
                 End Select
             Else
-                B = Lj(ns)
+                'no reboiler: nothing heats the bottom stage, and the overall energy balance with no duty there gives
+                'the bottoms (the liquid leaving it was its own estimate, so the bottoms never left the first guess)
+                Q(ns) = 0.0
+                Dim sum3r, sum4r As Double
+                For i = 0 To ns
+                    sum3r += F(i) * Hfj(i) - LSSj(i) * Hl(i) - VSSj(i) * Hv(i)
+                Next
+                For i = 0 To ns - 1
+                    sum4r += Q(i)
+                Next
+                B = (sum3r - sum4r - Vj(0) * Hv(0)) / Hl(ns)
             End If
 
             If Not rebabs Then
@@ -1396,10 +1516,18 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                                                      Sub(ipar)
                                                                          If ipar = 0 AndAlso noliq0 Then Exit Sub
                                                                          Try
-                                                                             Dim tmpvar As Object = flashalgs(ipar).Flash_PV(xc(ipar), P(ipar), 0.0, Tj(ipar), pp, True, K(ipar))
-                                                                             Tj(ipar) = tmpvar(4)
-                                                                             Kant(ipar) = K(ipar)
-                                                                             K(ipar) = tmpvar(6)
+                                                                             If rc.IsThreePhaseStage(ipar) Then
+                                                                                 'two liquids: bubble point of the total liquid from the apparent K-values
+                                                                                 Dim Kb As Double() = Nothing
+                                                                                 Tj(ipar) = rc.StageBubbleTemperature(pp, ipar, xc(ipar), P(ipar), Tj(ipar), Kb)
+                                                                                 Kant(ipar) = K(ipar)
+                                                                                 K(ipar) = Kb
+                                                                             Else
+                                                                                 Dim tmpvar As Object = flashalgs(ipar).Flash_PV(xc(ipar), P(ipar), 0.0, Tj(ipar), pp, True, K(ipar))
+                                                                                 Tj(ipar) = tmpvar(4)
+                                                                                 Kant(ipar) = K(ipar)
+                                                                                 K(ipar) = tmpvar(6)
+                                                                             End If
                                                                              If Tj(ipar) < 0.0 Or Double.IsNaN(Tj(ipar)) Then
                                                                                  Tj(ipar) = Tj_ant(ipar)
                                                                                  K(ipar) = Kant(ipar)
@@ -1419,16 +1547,30 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                             IObj2?.SetCurrent
                             pp.CurrentMaterialStream.Flowsheet.CheckStatus()
                             If i = 0 AndAlso noliq0 Then Continue For
-                            Try
-                                tmp = flashalgs(i).Flash_PV(xc(i), P(i), 0.0, Tj(i), pp, True, K(i))
-                            Catch ex As Exception When Not TypeOf ex Is OperationCanceledException
-                                'the stage keeps its temperature and K values for this sweep
-                                bpfailed = True
-                                Continue For
-                            End Try
-                            Tj(i) = tmp(4)
-                            Kant(i) = K(i)
-                            K(i) = tmp(6)
+                            If rc.IsThreePhaseStage(i) Then
+                                'two liquids: bubble point of the total liquid from the apparent K-values
+                                Dim Kb As Double() = Nothing
+                                Try
+                                    Dim Tb = rc.StageBubbleTemperature(pp, i, xc(i), P(i), Tj(i), Kb)
+                                    Kant(i) = K(i)
+                                    Tj(i) = Tb
+                                    K(i) = Kb
+                                Catch ex As Exception When Not TypeOf ex Is OperationCanceledException
+                                    bpfailed = True
+                                    Continue For
+                                End Try
+                            Else
+                                Try
+                                    tmp = flashalgs(i).Flash_PV(xc(i), P(i), 0.0, Tj(i), pp, True, K(i))
+                                Catch ex As Exception When Not TypeOf ex Is OperationCanceledException
+                                    'the stage keeps its temperature and K values for this sweep
+                                    bpfailed = True
+                                    Continue For
+                                End Try
+                                Tj(i) = tmp(4)
+                                Kant(i) = K(i)
+                                K(i) = tmp(6)
+                            End If
                             If Tj(i) < 0.0 Or Double.IsNaN(Tj(i)) Then
                                 Tj(i) = Tj_ant(i)
                                 K(i) = Kant(i)
@@ -1516,13 +1658,13 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                                                              If pp.ShouldUseKvalueMethod2 Then
                                                                                  K(ipar) = pp.DW_CalcKvalue(xc(ipar).MultiplyConstY(Lj(ipar)).AddY(yc(ipar).MultiplyConstY(Vj(ipar))).MultiplyConstY(1 / (Lj(ipar) + Vj(ipar))), Tj(ipar) - _subcoolingdeltat, P(ipar))
                                                                              Else
-                                                                                 K(ipar) = pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar) - _subcoolingdeltat, P(ipar))
+                                                                                 K(ipar) = rc.StageKvalues(pp, ipar, xc(ipar), yc(ipar), Tj(ipar) - _subcoolingdeltat, P(ipar))
                                                                              End If
                                                                          Else
                                                                              If pp.ShouldUseKvalueMethod2 Then
                                                                                  K(ipar) = pp.DW_CalcKvalue(xc(ipar).MultiplyConstY(Lj(ipar)).AddY(yc(ipar).MultiplyConstY(Vj(ipar))).MultiplyConstY(1 / (Lj(ipar) + Vj(ipar))), Tj(ipar), P(ipar))
                                                                              Else
-                                                                                 K(ipar) = pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar), P(ipar))
+                                                                                 K(ipar) = rc.StageKvalues(pp, ipar, xc(ipar), yc(ipar), Tj(ipar), P(ipar))
                                                                              End If
                                                                          End If
                                                                      End Sub)
@@ -1540,7 +1682,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                 ElseIf pp.ShouldUseKvalueMethod2 Then
                                     K(i) = pp.DW_CalcKvalue(xc(i).MultiplyConstY(Lj(i)).AddY(yc(i).MultiplyConstY(Vj(i))).MultiplyConstY(1 / (Lj(i) + Vj(i))), Tj(i) - _subcoolingdeltat, P(i))
                                 Else
-                                    K(i) = pp.DW_CalcKvalue(xc(i), yc(i), Tj(i) - _subcoolingdeltat, P(i))
+                                    K(i) = rc.StageKvalues(pp, i, xc(i), yc(i), Tj(i) - _subcoolingdeltat, P(i))
                                 End If
                             Else
                                 If pp.ShouldUseKvalueMethod3 Then
@@ -1548,7 +1690,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                 ElseIf pp.ShouldUseKvalueMethod2 Then
                                     K(i) = pp.DW_CalcKvalue(xc(i).MultiplyConstY(Lj(i)).AddY(yc(i).MultiplyConstY(Vj(i))).MultiplyConstY(1 / (Lj(i) + Vj(i))), Tj(i), P(i))
                                 Else
-                                    K(i) = pp.DW_CalcKvalue(xc(i), yc(i), Tj(i), P(i))
+                                    K(i) = rc.StageKvalues(pp, i, xc(i), yc(i), Tj(i), P(i))
                                 End If
                             End If
                         Next
@@ -1690,7 +1832,17 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                             B = (sum3 - sum4 - Vj(0) * Hv(0) - Q(ns)) / Hl(ns)
                     End Select
                 Else
-                    B = Lj(ns)
+                    'no reboiler: nothing heats the bottom stage, and the overall energy balance with no duty there gives
+                    'the bottoms (the liquid leaving it was its own estimate, so the bottoms never left the first guess)
+                    Q(ns) = 0.0
+                    Dim sum3r, sum4r As Double
+                    For i = 0 To ns
+                        sum3r += F(i) * Hfj(i) - LSSj(i) * Hl(i) - VSSj(i) * Hv(i)
+                    Next
+                    For i = 0 To ns - 1
+                        sum4r += Q(i)
+                    Next
+                    B = (sum3r - sum4r - Vj(0) * Hv(0)) / Hl(ns)
                 End If
 
                 sumF = 0
@@ -1813,6 +1965,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                             Q(ns) = sum3 - sum4 - Vj(0) * Hv(0) - Lj(ns) * Hl(ns)
                         End If
                         If rebabs Then Q(0) = 0.0
+                        If refabs Then Q(ns) = 0.0
                     Case Column.ColType.AbsorptionColumn
                         'use provided values
                     Case Column.ColType.RefluxedAbsorber

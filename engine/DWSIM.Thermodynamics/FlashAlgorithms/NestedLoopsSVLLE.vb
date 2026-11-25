@@ -88,6 +88,9 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
             Dim n = Vz.Length - 1
 
+            'the fluid part of the feed: the whole feed, or the feed without the forced solids
+            Dim Vfluid As Double() = Vz
+
             If PP.ForcedSolids.Count > 0 Then
 
                 'we have forced solids
@@ -102,6 +105,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 S = Vs.Sum
                 Vzns = Vzns.NormalizeY
                 Vs = Vs.NormalizeY
+                Vfluid = Vzns
 
                 IObj?.SetCurrent
 
@@ -144,7 +148,19 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                     If L2 > 0.0 Then
 
-                        result = nl2.Flash_PT_3P(Vz, V, L1, L2, Vy, Vx1, Vx2, P, T, PP)
+                        'the three-phase flash works on the fluid part alone, with phase fractions of that part
+                        Dim twophase As Object = result
+                        Try
+                            result = nl2.Flash_PT_3P(Vfluid, V / (1 - S), L1 / (1 - S), L2 / (1 - S), Vy, Vx1, Vx2, P, T, PP)
+                        Catch ex As OperationCanceledException
+                            Throw
+                        Catch ex As Exception
+                            ' The liquid at this point still holds everything that will crystallize. Supersaturated in a
+                            ' solid, it is outside the range a model was fitted for, and the search for two liquids there
+                            ' can fail to converge. The two-phase result is kept, and the solids are precipitated from
+                            ' its liquid below; failing here sent the whole flash to the fallback, which drops the solids.
+                            result = twophase
+                        End Try
 
                     End If
 
@@ -168,7 +184,52 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                 IObj?.SetCurrent
 
-                If PP.RET_VTF.SumY > 0.0 And S = 0.0 Then
+                If L2 > 0.0 AndAlso L1 > 0.0 Then
+                    ' a split into two liquids of the same composition is a single liquid
+                    Dim apart As Double = 0.0
+                    For i As Integer = 0 To n
+                        apart += Math.Abs(Vx1(i) - Vx2(i))
+                    Next
+                    If apart < 0.02 Then
+                        L1 += L2
+                        L2 = 0.0
+                        Vx2 = PP.RET_NullVector
+                    End If
+                End If
+
+                If L2 = 0.0 AndAlso PP.ForcedSolids.Count = 0 AndAlso PP.RET_VTF.SumY > 0.0 Then
+
+                    ' One liquid only. Precipitating the solids changes the liquid, and with it how much of it
+                    ' vaporises: the solid-liquid-vapour flash alternates the two steps until both hold. A single
+                    ' pass of each left a wet cake under vacuum as a liquid and a solid, without any vapour.
+                    nl3.FlashSettings = FlashSettings
+                    result = nl3.Flash_PT(Vz, P, T, PP)
+                    L1 = result(0)
+                    V = result(1)
+                    Vx1 = result(2)
+                    Vy = result(3)
+                    S = result(7)
+                    Vs = result(8)
+
+                ElseIf L2 = 0.0 AndAlso PP.ForcedSolids.Count > 0 AndAlso S < 1.0 AndAlso PP.RET_VTF.SumY > 0.0 Then
+                    ' One liquid next to forced solids. What crystallizes from that liquid changes it, and with it how much
+                    ' of it vaporises, so the fluid part goes through the solid-liquid-vapour flash that alternates the two
+                    ' steps (as above), and the forced solids are added back. A single pass left the liquid above its
+                    ' boiling point: a sugar syrup boiling under vacuum came out with a water fugacity 1.23 times the pressure.
+                    Dim S0 As Double = S
+                    Dim Vs0 As Double() = Vs
+                    nl3.FlashSettings = FlashSettings
+                    result = nl3.Flash_PT(Vfluid, P, T, PP)
+                    L1 = result(0) * (1 - S0)
+                    V = result(1) * (1 - S0)
+                    Vx1 = result(2)
+                    Vy = result(3)
+                    Dim Sl As Double = result(7) * (1 - S0)
+                    If Sl > 0.0 Then
+                        Vs = Vs0.MultiplyConstY(S0).AddY(DirectCast(result(8), Double()).MultiplyConstY(Sl)).NormalizeY()
+                        S = S0 + Sl
+                    End If
+                ElseIf PP.RET_VTF.SumY > 0.0 Then
 
                     result = nl3.Flash_SL(Vx1, P, T, PP)
 
@@ -176,11 +237,18 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
 
                     'Return New Object() {L, 1 - L, 0.0#, Vx, Vs, L - L_old, ecount, d2 - d1}
 
-                    S = result(1) * L1
+                    If S = 0.0 Then
+                        S = result(1) * L1
+                        Vs = result(4)
+                    ElseIf result(1) > 0.0 Then
+                        'compounds that crystallize from the liquid join the forced solids
+                        Dim Sl As Double = result(1) * L1
+                        Vs = Vs.MultiplyConstY(S).AddY(DirectCast(result(4), Double()).MultiplyConstY(Sl)).NormalizeY()
+                        S += Sl
+                    End If
                     L1 = result(0) * L1
 
                     Vx1 = result(3)
-                    Vs = result(4)
 
                 End If
 
@@ -195,7 +263,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                         'Return New Object() {L, 1 - L, 0.0#, Vx, Vs, L - L_old, ecount, d2 - d1}
 
                         Vx2 = result(3)
-                        Vs = Vs.MultiplyConstY(S).AddY(DirectCast(result(4), Double()).MultiplyConstY(result(1))).NormalizeY()
+                        If result(1) > 0.0 Then Vs = Vs.MultiplyConstY(S).AddY(DirectCast(result(4), Double()).MultiplyConstY(result(1) * L2)).NormalizeY()
 
                         S = S + result(1) * L2
                         L2 = result(0) * L2

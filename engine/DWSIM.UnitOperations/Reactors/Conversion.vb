@@ -458,7 +458,7 @@ Namespace Reactors
                     BC = rxn.BaseReactant
 
                     If Not rxn.Components.ContainsKey(BC) Then
-                        Throw New Exception("No base reactant defined for reaction '" + rxn.Name + "'.")
+                        Throw New Exception("A base reactant isn't defined for reaction '" + rxn.Name + "'.")
                     End If
 
                     scBC = rxn.Components(BC).StoichCoeff
@@ -846,6 +846,7 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy.GetValueOrDefault
             S = tmp.CalculatedEntropy.GetValueOrDefault
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             Vs = tmp.GetSolidPhaseMoleFractions
 

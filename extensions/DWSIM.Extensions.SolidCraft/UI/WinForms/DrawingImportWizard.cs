@@ -87,14 +87,25 @@ namespace DWSIM.Extensions.SolidCraft
 
         #region drawing
 
-        private void txtFile_TextChanged(object sender, EventArgs e) => btnRead.Enabled = File.Exists(txtFile.Text.Trim()) && reading == null;
+        private void txtFile_TextChanged(object sender, EventArgs e)
+        {
+            var exist = DexpiImport.Exist(txtFile.Text);
+            btnRead.Enabled = exist && reading == null;
+            // DEXPI models are read by dwsim-dexpi: its note replaces the AI Assistant's
+            var dexpi = exist && DexpiImport.IsDexpi(txtFile.Text);
+            lblVision.Text = dexpi ? DexpiImport.ReaderNote : DrawingImportClient.VisionModelNote;
+            lnkAssistantSettings.Visible = !dexpi;
+            lblModel.Visible = !dexpi;
+        }
 
         private void btnBrowse_Click(object sender, EventArgs e)
         {
-            using (var d = new OpenFileDialog { Filter = DrawingImportSession.FileFilterText + "|" + string.Join(";", DrawingImportClient.Extensions.Select(x => "*" + x)) + "|All files|*.*" })
+            using (var d = new OpenFileDialog { Filter = DrawingImportSession.FileFilterText + "|" + string.Join(";", DrawingImportSession.FileExtensions.Select(x => "*" + x)) + "|All files|*.*", Multiselect = true })
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
-                txtFile.Text = d.FileName;
+                // several files are for DEXPI models only: the sheets of a P&ID and a process model of the same plant
+                var several = d.FileNames.Length > 1 && d.FileNames.All(DexpiImport.IsDexpi);
+                txtFile.Text = several ? string.Join("; ", d.FileNames) : d.FileName;
                 ShowPreview(d.FileName);
             }
         }
@@ -104,7 +115,7 @@ namespace DWSIM.Extensions.SolidCraft
             try
             {
                 var ext = Path.GetExtension(file).ToLowerInvariant();
-                if (ext == ".pdf" || ext == ".dxf" || ext == ".dwg") { picDrawing.Image = null; return; }
+                if (ext == ".pdf" || ext == ".dxf" || ext == ".dwg" || DexpiImport.IsDexpi(file)) { picDrawing.Image = null; return; }
                 using (var fs = File.OpenRead(file)) picDrawing.Image = Image.FromStream(fs);
             }
             catch (Exception) { picDrawing.Image = null; }
@@ -114,13 +125,22 @@ namespace DWSIM.Extensions.SolidCraft
         {
             session.File = txtFile.Text.Trim();
             session.Kind = cbKind.SelectedIndex == 1 ? "pfd" : cbKind.SelectedIndex == 2 ? "pid" : "auto";
+            if (DexpiImport.IsDexpi(session.File) && DexpiImport.FindConverter() == null)
+            {
+                lblReadStatus.Text = DexpiImport.MissingText;
+                if (MessageBox.Show(this, DexpiImport.MissingText + Environment.NewLine + Environment.NewLine + "Open the download page?", Text,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                    DexpiImport.OpenDownloadPage();
+                return;
+            }
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            work.Start("Checking the AI Assistant's model");
+            var dexpi = DexpiImport.IsDexpi(session.File);
+            work.Start(dexpi ? "Reading the DEXPI model" : "Checking the AI Assistant's model");
             try
             {
-                var model = await work.Model(token, "a drawing");
+                var model = dexpi ? (object)DexpiImport.Program : await work.Model(token, "a drawing");
                 if (model == null) { btnRead.Text = "Read with the local model"; return; }
                 btnRead.Text = "Read the drawing";
                 await Task.Run(() => session.Read(token, s => BeginInvoke((Action)(() => { if (!token.IsCancellationRequested) work.Step(s); }))));
@@ -151,7 +171,7 @@ namespace DWSIM.Extensions.SolidCraft
 
         void SetBusy(bool busy)
         {
-            btnRead.Enabled = !busy && File.Exists(txtFile.Text.Trim());
+            btnRead.Enabled = !busy && DexpiImport.Exist(txtFile.Text);
             btnCancelRead.Enabled = busy;
             btnOpenReading.Enabled = !busy;
             btnSaveReading.Enabled = !busy && session.Reading != null;
@@ -524,6 +544,9 @@ namespace DWSIM.Extensions.SolidCraft
 
         void FillChecks()
         {
+            chkUpdate.Visible = session.MatchingTags() > 0;
+            chkPipes.Visible = session.SizedLines() > 0 && !chkUpdate.Checked;
+            if (!chkUpdate.Visible && chkUpdate.Checked) chkUpdate.Checked = false;
             var issues = session.Check();
             Fill(dgvIssues, issues);
             btnBuild.Enabled = session.Built == null && !issues.Any(i => i.Level == ImportIssue.Levels.Error);
@@ -542,10 +565,18 @@ namespace DWSIM.Extensions.SolidCraft
             }
         }
 
+        private void chkUpdate_CheckedChanged(object sender, EventArgs e)
+        {
+            session.UpdateExisting = chkUpdate.Checked;
+            btnBuild.Text = chkUpdate.Checked ? "Update the flowsheet" : "Build the flowsheet";
+            if (session.Built == null) FillChecks();
+        }
+
         private void btnBuild_Click(object sender, EventArgs e)
         {
             session.Setup.SpecsFromTable = chkSpecs.Checked;
             session.Setup.UseDrawingUnits = chkUnits.Checked;
+            session.Setup.PipeSegments = chkPipes.Visible && chkPipes.Checked;
             btnBuild.Enabled = false;
             UseWaitCursor = true;
             Application.DoEvents();
@@ -612,6 +643,19 @@ namespace DWSIM.Extensions.SolidCraft
         internal static void Show(IFlowsheet fs)
         {
             using (var wizard = new DrawingImportWizard(fs)) wizard.ShowDialog(Form.ActiveForm);
+        }
+    }
+
+    /// <summary>Asks where the DEXPI process model goes, in the Windows interface, and writes it.</summary>
+    internal static class DexpiExportPrompt
+    {
+        internal static void Show(IFlowsheet fs)
+        {
+            using (var d = new SaveFileDialog { Title = "Export DEXPI Process Model", Filter = "DEXPI models (*.xml)|*.xml", FileName = DexpiExportExtender.SuggestedName(fs) })
+            {
+                if (d.ShowDialog(Form.ActiveForm) != DialogResult.OK) return;
+                DexpiExportExtender.Export(fs, d.FileName);
+            }
         }
     }
 }

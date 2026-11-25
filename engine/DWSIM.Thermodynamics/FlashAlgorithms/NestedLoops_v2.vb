@@ -1627,7 +1627,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     'an interval that closes on a jump of the enthalpy holds no root: the bubble and dew points
                     'were no pair of this feed
                     If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(H1) > 0.01 Then
-                        Throw New Exception("PH Flash [NL]: Invalid result: the enthalpy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                        Throw New Exception("PH Flash [NL]: Invalid result: the enthalpy isn't met at any vapour fraction between the bubble and dew points (P = " & P & " Pa).")
                     End If
                     IObj?.Paragraphs.Add(String.Format("Enthalpy Error (Spec - Calculated): {0}", H1))
                 Loop Until Abs(H1) < itol Or ecount > maxitEXT
@@ -1735,8 +1735,15 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 'partial vaporization.
                 Dim tmp As Object
                 Dim hres = PerformHeuristicsTest(Vz, T, P, PP)
+                Dim totalsolids = PP.ForcedSolids.Count
+                For Each cp In PP.DW_GetConstantProperties()
+                    totalsolids += Convert.ToInt32(cp.IsSolid)
+                Next
                 If hres.SolidPhase And CalledFromSLE Then
                     tmp = New NestedLoopsSLE().Flash_PV(Vz, P, V, 0.0, PP, ReuseKI, Ki)
+                ElseIf hres.SolidPhase And Not totalsolids > 0 Then
+                    'the flash the enthalpy loop converged with, so the solid phase is kept
+                    tmp = New NestedLoopsSLE().Flash_PV(Vz, P, V, T, PP, False, Nothing)
                 Else
                     tmp = Me.Flash_PV(Vz, P, V, 0.0#, PP, ReuseKI, Ki)
                 End If
@@ -2204,7 +2211,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     'an interval that closes on a jump of the entropy holds no root: the bubble and dew points
                     'were no pair of this feed
                     If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(S1) > 0.01 Then
-                        Throw New Exception("PS Flash [NL]: Invalid result: the entropy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                        Throw New Exception("PS Flash [NL]: Invalid result: the entropy isn't met at any vapour fraction between the bubble and dew points (P = " & P & " Pa).")
                     End If
                     IObj?.Paragraphs.Add(String.Format("Entropy Error (Spec - Calculated): {0}", S1))
                 Loop Until Abs(S1) < itol Or ecount > maxitEXT
@@ -2613,6 +2620,8 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     P += Vz(i) * PP.AUX_PVAPi(i, T)
                 Next
                 IObj?.Close()
+                ' pressure and K values from the model: see SingleCompoundSaturationP
+                If Vz.Length > 1 Then P = NestedLoops.SingleCompoundSaturationP(PP, Vz, T, V, P, Ki, Vx, Vy)
                 Return New Object() {L, V, Vx, Vy, P, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If
 
@@ -2807,7 +2816,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
             If SaturationPointRejected(Vz, T, P, V, Vx, Vy, PP) Then
                 IObj?.Close()
-                Throw New Exception("TV Flash [NL]: Invalid result: the feed has no incipient phase at P = " & P & " Pa (not a saturation point).")
+                Throw New Exception("TV Flash [NL]: Invalid result: the feed doesn't have an incipient phase at P = " & P & " Pa (not a saturation point).")
             End If
 
             WriteDebugInfo("TV Flash [NL]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms.")
@@ -3045,7 +3054,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             'fails outright, since the ideal-solution fallback below would put Raoult's law in its place. The
             'bubble and dew points of the azeotrope interpolation keep the earlier acceptance.
             If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso result.Count > 1 AndAlso SaturationPointRejected(Vz, result(4), P, V, result(2), result(3), PP) Then
-                Throw New Exception("PV Flash [NL]: Invalid result: the feed has no incipient phase at T = " & result(4) & " K (not a saturation point).")
+                Throw New Exception("PV Flash [NL]: Invalid result: the feed doesn't have an incipient phase at T = " & result(4) & " K (not a saturation point).")
             End If
 
             Dim idealcalc As Boolean = Me.FlashSettings(Interfaces.Enums.FlashSetting.PVFlash_TryIdealCalcOnFailure)
@@ -3540,6 +3549,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see NestedLoops.SingleCompoundSaturationT
+                    T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, nonvolatile)
                 End If
 
                 If S > 0 Then
@@ -4135,6 +4147,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see SingleCompoundSaturationT
+                    T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, Nothing)
                 End If
                 Return New Object() {L, V, Vx, Vy, T, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If
@@ -4395,6 +4410,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see SingleCompoundSaturationT
+                    T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, Nothing)
                 End If
                 Return New Object() {L, V, Vx, Vy, T, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If

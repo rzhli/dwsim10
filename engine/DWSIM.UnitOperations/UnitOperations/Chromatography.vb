@@ -87,7 +87,11 @@ Namespace UnitOperations
         Inherits UnitOperations.UnitOpBaseClass
 
         Implements IExternalUnitOperation
-        ''' <summary>Gets a value that marks this unit operation as a bioprocess unit. The object palettes read this flag by reflection to list it in the Biochemical group.</summary>
+
+        ''' <summary>The industries under which the object palette lists this unit operation.</summary>
+        Public ReadOnly Property PaletteIndustries As String() = {Global.DWSIM.SharedClasses.PaletteIndustry.Bioprocess, Global.DWSIM.SharedClasses.PaletteIndustry.PharmaFood}
+
+        ''' <summary>Gets a value that marks this unit operation as a bioprocess unit. When the unit operation doesn't declare its industries, the object palettes read this flag and list it under the Bioprocess industry.</summary>
         Public ReadOnly Property IsBio As Boolean = True
 
         ''' <summary>Gets or sets the simulation object class category (always <c>Separators</c>).</summary>
@@ -439,7 +443,7 @@ Namespace UnitOperations
                 Dim C0_gL = If(target_in > 0.0 AndAlso Q_vol > 0.0, target_in / Q_vol, 0.001) ' kg/s / (m3/s) = g/L
                 If target_in <= 0.0 Then
                     _thomasNominalC0 = True
-                    FlowSheet.ShowMessage(GraphicObject.Tag & ": no target compound in the feed, so the Thomas breakthrough curve uses a nominal feed concentration of 0.001 g/L.", IFlowsheet.MessageType.Warning)
+                    FlowSheet.ShowMessage(GraphicObject.Tag & ": the feed doesn't have the target compound, so the Thomas breakthrough curve uses a nominal feed concentration of 0.001 g/L.", IFlowsheet.MessageType.Warning)
                 End If
                 BuildThomasBreakthrough(C0_gL, Q_Ls)
             End If
@@ -600,7 +604,7 @@ Namespace UnitOperations
             s.AppendLine("Load volume per cycle:        " & (Result_LoadVolumeFraction * 100).ToString(numberformat, ci) & " % of CV")
             If Result_Saturated Then s.AppendLine("  Column is SATURATED - binding capacity exceeded.")
             If _thomasNominalC0 Then
-                s.AppendLine("  No target compound in the feed: the Thomas breakthrough curve uses a nominal feed concentration of 0.001 g/L.")
+                s.AppendLine("  The feed doesn't have the target compound: the Thomas breakthrough curve uses a nominal feed concentration of 0.001 g/L.")
             End If
             If Chemistry = ChromatographyChemistry.SizeExclusion AndAlso Result_LoadVolumeFraction > 0.05 Then
                 s.AppendLine("  Size exclusion load above 5 % of CV: resolution drops (typical 2 to 5 %).")

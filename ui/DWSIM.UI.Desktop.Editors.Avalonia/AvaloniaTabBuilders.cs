@@ -224,7 +224,7 @@ namespace DWSIM.UI.Desktop.Editors
             }
 
             if (shown == 0)
-                panel.CreateAndAddDescriptionRow("(no custom properties defined)");
+                panel.CreateAndAddDescriptionRow("(there aren't any custom properties defined)");
 
             return panel;
         }
@@ -266,7 +266,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             if (dynProps.Count == 0)
             {
-                panel.CreateAndAddDescriptionRow("(no dynamic properties yet)");
+                panel.CreateAndAddDescriptionRow("(there aren't any dynamic properties yet)");
                 panel.CreateAndAddButtonRow("Create / Refresh Dynamic Properties", null, (btn, e) =>
                 {
                     try { simobj.CreateDynamicProperties(); }
@@ -335,7 +335,7 @@ namespace DWSIM.UI.Desktop.Editors
                 report = "Could not generate report: " + ex.Message;
             }
 
-            panel.CreateAndAddMultilineMonoSpaceTextBoxRow(report ?? "(no report)", 400, true, null);
+            panel.CreateAndAddMultilineMonoSpaceTextBoxRow(report ?? "(there isn't a report)", 400, true, null);
 
             // Per-UO supplemental views
             if (simobj is Pipe pipe) AppendPipeProfileChart(panel, pipe);
@@ -589,7 +589,7 @@ namespace DWSIM.UI.Desktop.Editors
             if (gobj == null)
             {
                 var panel = new AvaloniaEditorPanel();
-                panel.CreateAndAddDescriptionRow("Object has no graphic representation.");
+                panel.CreateAndAddDescriptionRow("Object doesn't have a graphic representation.");
                 return panel;
             }
             var surface = simobj.GetFlowsheet()?.GetSurface() as DWSIM.Drawing.SkiaSharp.GraphicsSurface;

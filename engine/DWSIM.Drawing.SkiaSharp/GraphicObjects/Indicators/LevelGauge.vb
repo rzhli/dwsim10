@@ -97,20 +97,31 @@ Namespace GraphicObjects
             Dim maxvaltext = (owneri.MaximumValue * multiplier).ToString("N2")
             Dim valtext = (currentvalue * multiplier).ToString("N2")
 
-            Dim origin = X + w * 0.3
+            ' the artwork (the sight glass) at the left of the box, and the glass the level fills
+            Dim artBox As New SKRect(X, Y, X + Math.Min(Width, Height * LogicArt.Aspect("level_gauge")), Y + Height)
+            Dim hasArt = LogicArt.Draw(canvas, "level_gauge", DrawMode, artBox, True)
+            Dim glass = If(hasArt, LogicArt.ValueRegion("level_gauge", DrawMode, artBox), New SKRect(X + w * 0.3, Y, X + w * 0.3 + w / 2, Y + h))
+            Dim origin = glass.Left
+            Dim gw = glass.Width, gh = glass.Height, gy = glass.Top
 
             Using paint2 As New SKPaint With {.Color = SKColors.LightGray, .IsStroke = False, .IsAntialias = True}
-                canvas.DrawRect(origin, Y, w / 2, h, paint2)
+                If Not hasArt Then canvas.DrawRect(origin, gy, gw, gh, paint2)
             End Using
 
-            Dim currentlevel = (currentvalue - owneri.MinimumValue) / (owneri.MaximumValue - owneri.MinimumValue) * h
+            Dim currentlevel = (currentvalue - owneri.MinimumValue) / (owneri.MaximumValue - owneri.MinimumValue) * gh
 
-            Dim clx = origin + w / 2 + 6 * f
-            Dim cly = Y + (h - currentlevel)
+            Dim clx = If(hasArt, artBox.Right, origin + gw) + 6 * f
+            Dim cly = gy + (gh - currentlevel)
 
-            Using paint2 As New SKPaint With {.Color = SKColors.Blue, .IsStroke = False, .IsAntialias = True}
-                canvas.DrawRect(origin + 2 * f, cly + 2 * f, w / 2 - 4 * f, currentlevel - 4 * f, paint2)
-            End Using
+            If hasArt Then
+                Using paint2 As New SKPaint With {.Color = If(DrawMode = 1, SKColors.Gray, SKColors.DodgerBlue.WithAlpha(210)), .IsStroke = False, .IsAntialias = True}
+                    canvas.DrawRect(origin, cly, gw, Math.Max(0, Math.Min(gh, currentlevel)), paint2)
+                End Using
+            Else
+                Using paint2 As New SKPaint With {.Color = SKColors.Blue, .IsStroke = False, .IsAntialias = True}
+                    canvas.DrawRect(origin + 2 * f, cly + 2 * f, w / 2 - 4 * f, currentlevel - 4 * f, paint2)
+                End Using
+            End If
 
             canvas.Save()
 
@@ -118,7 +129,7 @@ Namespace GraphicObjects
 
             Using paint2 As New SKPaint With {.Color = SKColors.Black, .IsStroke = False, .IsAntialias = True}
                 Using triPath As New SKPath()
-                    Dim tx = CSng(origin + w / 2 + 6 * f)
+                    Dim tx = CSng(clx)
                     Dim ty = CSng(cly)
                     Dim ts = CSng(4 * f)
                     triPath.MoveTo(tx - ts, ty + ts)
@@ -148,9 +159,10 @@ Namespace GraphicObjects
                 Dim trect As New SKRect(0, 0, 2, 2)
                 paint.GetTextPath(valtext, 0, 0).GetBounds(trect)
                 Dim stry As Single = cly + trect.Height / 2
-                canvas.DrawText(minvaltext, origin + w / 2 + 10 * f, Y + h, paint)
-                canvas.DrawText(maxvaltext, origin + w / 2 + 10 * f, Y + trect.Height / 2, paint)
-                canvas.DrawText(valtext, origin + w / 2 + 10 * f, stry, paint)
+                ' the minimum and maximum labels give way to the value when they would overlap it
+                If gy + gh - stry > trect.Height * 1.2 Then canvas.DrawText(minvaltext, clx + 4 * f, gy + gh, paint)
+                If stry - (gy + trect.Height / 2) > trect.Height * 1.2 Then canvas.DrawText(maxvaltext, clx + 4 * f, gy + trect.Height / 2, paint)
+                canvas.DrawText(valtext, clx + 4 * f, stry, paint)
             End Using
 
             Owner.Calculate()
@@ -380,16 +392,16 @@ Namespace GraphicObjects
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim x As Double = StartPos.X - center.X
                 Dim y As Double = StartPos.Y - center.Y
-                StartPos.X = center.X + (x * Math.Cos(angle_rad) + y * Math.Sin(angle_rad))
-                StartPos.Y = center.Y - (x * -Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
+                StartPos.X = center.X + (x * Math.Cos(angle_rad) - y * Math.Sin(angle_rad))
+                StartPos.Y = center.Y + (x * Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
             End If
             If SimObject.GraphicObject.Rotation <> 0 Then
                 Dim angle_rad As Double = SimObject.GraphicObject.Rotation * Math.PI / 180
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim x As Double = EndPos.X - center.X
                 Dim y As Double = EndPos.Y - center.Y
-                EndPos.X = center.X + (x * Math.Cos(angle_rad) + y * Math.Sin(angle_rad))
-                EndPos.Y = center.Y - (x * -Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
+                EndPos.X = center.X + (x * Math.Cos(angle_rad) - y * Math.Sin(angle_rad))
+                EndPos.Y = center.Y + (x * Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
             End If
 
             'Check Flipping
@@ -398,29 +410,41 @@ Namespace GraphicObjects
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim y As Double = StartPos.Y - center.Y
                 StartPos.Y = center.Y - y
-                If StartDir = ConDir.Down Then StartDir = ConDir.Up
-                If StartDir = ConDir.Up Then StartDir = ConDir.Down
+                If StartDir = ConDir.Down Then
+                    StartDir = ConDir.Up
+                ElseIf StartDir = ConDir.Up Then
+                    StartDir = ConDir.Down
+                End If
             End If
             If Me.FlippedH Then
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim x As Double = StartPos.X - center.X
                 StartPos.X = center.X - x
-                If StartDir = ConDir.Left Then StartDir = ConDir.Right
-                If StartDir = ConDir.Right Then StartDir = ConDir.Left
+                If StartDir = ConDir.Left Then
+                    StartDir = ConDir.Right
+                ElseIf StartDir = ConDir.Right Then
+                    StartDir = ConDir.Left
+                End If
             End If
             If SimObject.GraphicObject.FlippedV Then
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim y As Double = EndPos.Y - center.Y
                 EndPos.Y = center.Y - y
-                If EndDir = ConDir.Down Then EndDir = ConDir.Up
-                If EndDir = ConDir.Up Then EndDir = ConDir.Down
+                If EndDir = ConDir.Down Then
+                    EndDir = ConDir.Up
+                ElseIf EndDir = ConDir.Up Then
+                    EndDir = ConDir.Down
+                End If
             End If
             If SimObject.GraphicObject.FlippedH Then
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim x As Double = EndPos.X - center.X
                 EndPos.X = center.X - x
-                If EndDir = ConDir.Left Then EndDir = ConDir.Right
-                If EndDir = ConDir.Right Then EndDir = ConDir.Left
+                If EndDir = ConDir.Left Then
+                    EndDir = ConDir.Right
+                ElseIf EndDir = ConDir.Right Then
+                    EndDir = ConDir.Left
+                End If
             End If
 
             'Construct path of stream

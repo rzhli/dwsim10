@@ -102,10 +102,10 @@ Namespace GraphicObjects.Shapes
                         'the lines run in the flowsheet's coordinates: undo the object's flip, rotation and zoom
                         UnTransformCanvas(canvas)
                         If Not Me.ConnectedToSv Is Nothing Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.m_svPT.X + Me.m_svPT.Width / 2, Me.Y + Me.Height / 2), Me.m_svPT.GetCenterPosition}, aPen)
+                            LogicalLinks.Draw(canvas, Me, Me.m_svPT, aPen)
                         End If
                         If Not Me.ConnectedToTv Is Nothing Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.m_tvPT.X + Me.m_tvPT.Width / 2, Me.Y + Me.Height / 2), Me.m_tvPT.GetCenterPosition}, aPen)
+                            LogicalLinks.Draw(canvas, Me, Me.m_tvPT, aPen)
                         End If
                     End Using
                     End Using
@@ -124,11 +124,7 @@ Namespace GraphicObjects.Shapes
                     End If
                     Using New SKAutoCanvasRestore(canvas)
                         StraightCanvas(canvas)
-                        LogicalOpSphereHelper.DrawSphere(canvas, X, Y, Width, Height,
-                                                        centerC, edgeC, outlineC, textC,
-                                                        "S", 0.55F,
-                                                        GlobalSettings.Settings.DrawingAntiAlias,
-                                                        BoldTypeFace)
+                        LogicArt.Draw(canvas, "spec", DrawMode, New SKRect(X, Y, X + Width, Y + Height), Active)
                     End Using
 
                 Case 1
@@ -147,20 +143,17 @@ Namespace GraphicObjects.Shapes
                         'the lines run in the flowsheet's coordinates: undo the object's flip, rotation and zoom
                         UnTransformCanvas(canvas)
                         If Not Me.ConnectedToSv Is Nothing Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.m_svPT.X + Me.m_svPT.Width / 2, Me.Y + Me.Height / 2), Me.m_svPT.GetCenterPosition}, aPen)
+                            LogicalLinks.Draw(canvas, Me, Me.m_svPT, aPen)
                         End If
                         If Not Me.ConnectedToTv Is Nothing Then
-                            canvas.DrawPoints(SKPointMode.Polygon, New SKPoint() {New SKPoint(Me.X + Me.Width / 2, Me.Y + Me.Height / 2), New SKPoint(Me.m_tvPT.X + Me.m_tvPT.Width / 2, Me.Y + Me.Height / 2), Me.m_tvPT.GetCenterPosition}, aPen)
+                            LogicalLinks.Draw(canvas, Me, Me.m_tvPT, aPen)
                         End If
                     End Using
                     End Using
 
                     Using New SKAutoCanvasRestore(canvas)
                         StraightCanvas(canvas)
-                        LogicalOpSphereHelper.DrawSphereMono(canvas, X, Y, Width, Height,
-                                                            "S", 0.55F,
-                                                            GlobalSettings.Settings.DrawingAntiAlias,
-                                                            BoldTypeFace)
+                        LogicArt.Draw(canvas, "spec", DrawMode, New SKRect(X, Y, X + Width, Y + Height), Active)
                     End Using
 
                 Case 3

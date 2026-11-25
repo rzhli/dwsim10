@@ -803,6 +803,8 @@ Namespace Enums.GraphicObjects
 
         RCT_Polymerization
 
+        GO_MarkdownText
+
     End Enum
 
     Public Enum ShapeIcon

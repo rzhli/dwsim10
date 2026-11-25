@@ -52,6 +52,12 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         Dim _bx, _dbx As Double()
         Dim _condtype As DistillationColumn.condtype
 
+        ' A partial condenser with a liquid distillate next to its vapor product. The liquid distillate is one more
+        ' unknown, after the stage variables, and the vapor product at its set rate (mol/s) is one more equation,
+        ' after the stage equations.
+        Private _pcd As Boolean = False
+        Private _pcVapor As Double = 0.0
+
         ''' <summary>The top stage is a condenser: a distillation column or a refluxed absorber. A reboiled absorber (a
         ''' distillation column without its condenser) has a plain top stage, whatever condenser type it keeps.</summary>
         Private Function HasCondenser() As Boolean
@@ -68,6 +74,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         End Function
 
         Dim llextr As Boolean = False
+
+        'the column, for its three-phase stages (apparent K-values of the total liquid)
+        Private _threePhaseCol As Column
+
+        Private Function StageK(i As Integer, x As Double(), y As Double(), T As Double, P As Double) As Double()
+            If _threePhaseCol IsNot Nothing Then Return _threePhaseCol.StageKvalues(_pp, i, x, y, T, P)
+            Return _pp.DW_CalcKvalue(x, y, T, P)
+        End Function
+
         Dim _Kval()() As Double
         Dim _maxtchange, _Tj_ant(), _maxT, _maxvc, _maxlc As Double
         Dim _scalef As Double
@@ -177,6 +192,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
         Private _jacCacheActive As Boolean = False   ' perturbation pass: reuse cache except _jacCacheStage
         Private _jacCacheFill As Boolean = False      ' base pass: compute all stages and store
         Private _jacCacheStage As Integer = -1
+        Private _jacBubYcache As Double() = Nothing   ' condenser equilibrium vapour of the base state (total condenser)
         Private _jacKcache()() As Double
         Private _jacHvCache() As Double
         Private _jacHlCache() As Double
@@ -371,10 +387,20 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 LSSj(0) = 0.0#
             ElseIf HasCondenser() And _condtype = condtype.Total_Condenser Then
                 LSSj(0) = vc(0).Sum
-                yc(0) = _pp.DW_CalcBubT(xc(0), P(0), Tj(0), Nothing, False)(3)
+                ' the bubble point of the condenser liquid depends only on stage 0: a Jacobian column that perturbs
+                ' another stage reuses the one of the base state
+                If _jacCacheActive AndAlso _jacCacheStage <> 0 AndAlso _jacBubYcache IsNot Nothing Then
+                    yc(0) = DirectCast(_jacBubYcache.Clone(), Double())
+                Else
+                    yc(0) = _pp.DW_CalcBubT(xc(0), P(0), Tj(0), Nothing, False)(3)
+                    If _jacCacheFill Then _jacBubYcache = DirectCast(yc(0).Clone(), Double())
+                End If
             ElseIf HasCondenser() AndAlso _condtype = condtype.Partial_Condenser AndAlso Not llextr AndAlso PartialCondenserDistillate.HasValue Then
                 'the liquid distillate of a partial condenser, as a caller that solves for it hands it over
                 LSSj(0) = PartialCondenserDistillate.Value
+            ElseIf _pcd AndAlso x.Length = (ns + 1) * (2 * nc + 1) + 1 Then
+                'the liquid distillate of a partial condenser, solved here with the stage variables
+                LSSj(0) = Math.Max(x(x.Length - 1) * _maxlc, 1.0E-20)
             Else
                 'For an extractor Vj(0) is the second liquid-phase product. It already
                 'carries the extract out; adding a liquid draw here counts that outlet twice.
@@ -432,9 +458,9 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                                                      End If
                                                                  Else
                                                                      If ipar = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                                                                         tmp0 = _pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar) + _subcoolingDeltaT, P(ipar))
+                                                                         tmp0 = StageK(ipar, xc(ipar), yc(ipar), Tj(ipar) + _subcoolingDeltaT, P(ipar))
                                                                      Else
-                                                                         tmp0 = _pp.DW_CalcKvalue(xc(ipar), yc(ipar), Tj(ipar), P(ipar))
+                                                                         tmp0 = StageK(ipar, xc(ipar), yc(ipar), Tj(ipar), P(ipar))
                                                                      End If
                                                                  End If
                                                              End If
@@ -748,7 +774,13 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                                 Else
                                     E(i, j) = lc(i)(j) - Lj(0) / LSSj(0) * vc(i)(j)
                                 End If
-                                M(i, j) = lc(i)(j) * (1 + Sl(i)) - vc(i + 1)(j) - fc(i)(j)
+                                ' The distillate is carried in vc(0): the balance reads reflux plus distillate, which is
+                                ' linear in the variables. Written as lc * (1 + D / L) it is the same at the solution (the
+                                ' equations above make the two streams one composition) but bilinear away from it, and with
+                                ' the weight these rows carry the line search then accepted only minute steps whenever the
+                                ' reflux had to move far from its start: a benzene and toluene column with a distillate rate
+                                ' and a boil-up ratio never left its first point.
+                                M(i, j) = lc(i)(j) + vc(i)(j) - vc(i + 1)(j) - fc(i)(j)
                             End If
                         Else
                             M(i, j) = lc(i)(j) * (1 + Sl(i)) + vc(i)(j) * (1 + Sv(i)) - vc(i + 1)(j) - fc(i)(j)
@@ -804,6 +836,11 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     errors(i * (2 * nc + 1) + j + 1 + nc) = E(i, j) * _eqWeights(2)
                 Next
             Next
+
+            'the vapor product of the partial condenser at its set rate, weighted as a material balance
+            If _pcd AndAlso x.Length = (ns + 1) * (2 * nc + 1) + 1 Then
+                errors(x.Length - 1) = (sumvkj(0) - _pcVapor) * 1000000.0 * _eqWeights(1)
+            End If
 
             IObj?.Paragraphs.Add(String.Format("M Equation Deviations: {0}", M.ToMathArrayString))
             IObj?.Paragraphs.Add(String.Format("E Equation Deviations: {0}", E.ToMathArrayString))
@@ -941,9 +978,9 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     End If
                 Else
                     If i = 0 And Math.Abs(_subcoolingDeltaT) > 0 Then
-                        tmp0 = _pp.DW_CalcKvalue(xc(i), yc(i), Tj(i) + _subcoolingDeltaT, P(i))
+                        tmp0 = StageK(i, xc(i), yc(i), Tj(i) + _subcoolingDeltaT, P(i))
                     Else
-                        tmp0 = _pp.DW_CalcKvalue(xc(i), yc(i), Tj(i), P(i))
+                        tmp0 = StageK(i, xc(i), yc(i), Tj(i), P(i))
                     End If
                 End If
             End If
@@ -1141,6 +1178,18 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         Next
                     End If
                 Next
+                ' each column below perturbs a variable of one stage: as in FunctionGradientCPU, only that stage's
+                ' properties are recomputed and the others come from the base state (the same numbers, without
+                ' re-evaluating every stage of the column for each of these columns)
+                Dim useCache As Boolean = (Not _gpuColumnEnabled) AndAlso (Not _useGpuPropertyCache)
+                If useCache Then
+                    AllocJacCache()
+                    _jacCacheActive = False
+                    _jacCacheStage = -1
+                    _jacCacheFill = True
+                    FunctionValue(x)
+                    _jacCacheFill = False
+                End If
                 Dim seen As New HashSet(Of Integer)()
                 For Each s As Integer In New Integer() {0, Math.Min(1, ns), Math.Max(0, ns - 1), ns}
                     If s < 0 OrElse s > ns Then Continue For
@@ -1155,6 +1204,10 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         Else
                             x1(c) = x(c) * (1 - epsilon) : x2(c) = x(c) * (1 + epsilon)
                         End If
+                        If useCache Then
+                            _jacCacheActive = True
+                            _jacCacheStage = s
+                        End If
                         Dim f1 = FunctionValue(x1)
                         Dim f2 = FunctionValue(x2)
                         Dim denom As Double = x2(c) - x1(c)
@@ -1164,6 +1217,18 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         Next
                     Next
                 Next
+                _jacCacheActive = False
+                If nv > (ns + 1) * block Then
+                    Dim c As Integer = nv - 1
+                    Dim x1 As Double() = DirectCast(x.Clone(), Double())
+                    Dim x2 As Double() = DirectCast(x.Clone(), Double())
+                    x1(c) = x(c) * (1 - epsilon) : x2(c) = x(c) * (1 + epsilon)
+                    Dim f1 = FunctionValue(x1)
+                    Dim f2 = FunctionValue(x2)
+                    For r As Integer = 0 To nv - 1
+                        g(r, c) = (f2(r) - f1(r)) / (x2(c) - x1(c))
+                    Next
+                End If
                 _jacCacheActive = False : _jacCacheFill = False
                 FunctionValue(x) ' restore base stash
             End If
@@ -1197,7 +1262,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 Return FunctionGradientAnalytical(epsilon, x)
             End If
 
-            If _gpuColumnEnabled Then
+            If _gpuColumnEnabled AndAlso Not _pcd Then
                 Try
                     Dim swGpu = System.Diagnostics.Stopwatch.StartNew()
                     Dim gResult = GpuJacobian.Invoke(Me, epsilon, x)
@@ -1411,9 +1476,10 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 'solve the column with the bubble point method (to convergence, with its fallbacks) to
                 'enhance the initial estimates. a warm-up cut to a few sweeps leaves some columns (the
                 'natural gas deethanizer) out of Newton's reach. if it doesn't suceeed, go on with the
-                'original estimates.
+                'original estimates. the specifications that method would have to search for are left
+                'to Newton: see WangHenkeMethod.WarmUp.
 
-                Dim result = New WangHenkeMethod().Solve(dc, nc, ns, maxits, tol, F, V, Q, L, VSS, LSS, Kval,
+                Dim result = New WangHenkeMethod() With {.WarmUp = True}.Solve(dc, nc, ns, maxits, tol, F, V, Q, L, VSS, LSS, Kval,
                                            x, y, z, fc, HF, T, P, condt, -1, eff,
                                            coltype, pp, specs, False, False)
                 T = result(0)
@@ -1508,6 +1574,8 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             IObj?.Paragraphs.Add("<h2>Calculated Parameters</h2>")
 
             llextr = LLEX 'liquid-liquid extractor
+
+            _threePhaseCol = If(dc IsNot Nothing AndAlso dc.HasThreePhaseStages(), dc, Nothing)
 
             Dim rebabs As Boolean = False, refabs As Boolean = False
             If TypeOf dc Is DistillationColumn Then
@@ -1651,7 +1719,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                 LSSj(i) = LSS(i)
             Next
 
-            If coltype = ColType.DistillationColumn And condt = condtype.Total_Condenser Then
+            If (coltype = ColType.DistillationColumn OrElse coltype = ColType.RefluxedAbsorber) And condt = condtype.Total_Condenser Then
                 vc(0) = lc(0).MultiplyConstY(LSS(0) / L(0))
             End If
 
@@ -1682,6 +1750,26 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                     xvar(i * (2 * nc + 1) + j + 1 + nc) = lc(i)(j) / _maxlc
                 Next
             Next
+
+            'A partial condenser takes its vapor product at the rate set on the column and leaves the rest of the
+            'overhead as a liquid distillate. The stage equations alone carry the vapor as the only product (with
+            'a product rate or a reflux ratio as the condenser specification they can't be evaluated), so the
+            'liquid distillate is solved with them.
+            _pcd = False
+            If Not _captureOnly AndAlso Not LLEX AndAlso coltype = ColType.DistillationColumn AndAlso
+               condt = condtype.Partial_Condenser AndAlso Not PartialCondenserDistillate.HasValue Then
+                _pcVapor = SystemsOfUnits.Converter.ConvertToSI(dc.VaporFlowRateUnit, dc.VaporFlowRate)
+                If _pcVapor > 0.0 AndAlso _pcVapor < F.Sum Then
+                    _pcd = True
+                    Dim d0 As Double = LSS(0)
+                    If Not (d0 > 0.0) OrElse Double.IsInfinity(d0) Then d0 = 0.1 * F.Sum
+                    ReDim Preserve xvar(xvar.Length)
+                    ReDim Preserve lb(xvar.Length - 1)
+                    ReDim Preserve ub(xvar.Length - 1)
+                    ReDim Preserve fxvar(xvar.Length - 1)
+                    xvar(xvar.Length - 1) = d0 / _maxlc
+                End If
+            End If
 
             For i = 0 To ub.Length - 1
                 lb(i) = 1.0E-20
@@ -1886,6 +1974,15 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
                         ' trace components whose corrections are many times their size, and clipping those one
                         ' by one leaves a direction along which nothing decreases
                         nsolv.ScaleWholeStep = True
+                        ' the material balances carry a weight of a million against the specifications and the
+                        ' equilibrium relations: measured as they come, the second-order term a step leaves in a
+                        ' balance that isn't linear in the variables (a side draw at a set rate, the liquid
+                        ' distillate of a partial condenser) outweighs everything the step gains, and the line
+                        ' search accepts only minute steps
+                        nsolv.ScaleLineSearchRows = True
+                        ' the MESH equations of a stage only involve that stage and its two neighbours: each Newton
+                        ' step is solved stage block by stage block (DWSIM_NS_DENSE=1 forces the dense solve)
+                        If Environment.GetEnvironmentVariable("DWSIM_NS_DENSE") <> "1" Then nsolv.BlockSize = 2 * _nc + 1
                         nsolv.MaxIterations = maxits
                         nsolv.Tolerance = tol.MinY_NonZero()
                         ' With an exact, cheap analytical Jacobian there is no reason to use the Broyden
@@ -2028,7 +2125,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
             For i = 1 To ns
                 sumLSS += LSSj(i)
             Next
-            If coltype = ColType.DistillationColumn Then
+            If HasCondenser() Then
                 If condt = Column.condtype.Full_Reflux Then
                     Vj(0) = F.Sum - Lj(ns) - sumLSS - sumVSS
                     LSSj(0) = 0.0#
@@ -2048,7 +2145,7 @@ Namespace UnitOperations.Auxiliary.SepOps.SolvingMethods
 
             For i = 0 To ns
                 Lj(i) = sumlkj(i)
-                If coltype = ColType.DistillationColumn And i = 0 Then
+                If HasCondenser() And i = 0 Then
                     If condt = condtype.Total_Condenser Then
                         LSSj(0) = Vj(0)
                         Vj(0) = 0.0

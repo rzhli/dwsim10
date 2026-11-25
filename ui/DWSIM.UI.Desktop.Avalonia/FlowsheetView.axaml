@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:DWSIM.UI.Desktop.Avalonia"
              xmlns:ctrls="clr-namespace:DWSIM.UI.Desktop.Avalonia.Controls"
@@ -85,7 +85,7 @@
         <MenuItem Header="Chart Object"          Name="MenuAddChart" />
         <Separator />
         <MenuItem Header="Text Block"            Name="MenuAddText" />
-        <MenuItem Header="HTML Text Block"       Name="MenuAddHTMLText" />
+        <MenuItem Header="Markdown Text Block"   Name="MenuAddMarkdownText" />
         <MenuItem Header="Rectangle"             Name="MenuAddRectangle" />
         <MenuItem Header="Button"                Name="MenuAddButton" />
         <MenuItem Header="Image..."              Name="MenuAddImage" />

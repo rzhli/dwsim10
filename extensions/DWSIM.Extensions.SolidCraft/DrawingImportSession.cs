@@ -38,6 +38,12 @@ namespace DWSIM.Extensions.SolidCraft
         public DrawingReading Reading;
         public ImportSetup Setup = new ImportSetup();
         public DrawingImportBuilder.Result Built;
+
+        /// <summary>
+        /// Bring the flowsheet's own items and streams up to date with the reading, found by their
+        /// tags, and add nothing: for a new revision of a drawing or model already imported.
+        /// </summary>
+        public bool UpdateExisting;
         public List<ImportIssue> Solve = new List<ImportIssue>();
 
         /// <summary>The equipment parameters the fit may move, found after a build where the Patreon edition's reconciliation is installed.</summary>
@@ -53,7 +59,7 @@ namespace DWSIM.Extensions.SolidCraft
 
         public static readonly string[] StepTexts =
         {
-            "Choose the PFD or P&ID: an image, a PDF or a DXF/DWG drawing. The AI Assistant reads it with the model set up in its settings.",
+            "Choose the PFD or P&ID: an image, a PDF, a DXF/DWG drawing or one or more DEXPI models. The AI Assistant reads a drawing with the model set up in its settings, and dwsim-dexpi reads a DEXPI model.",
             "The items read on the drawing. Correct the tags and what each one is; clear the ones not to build. The dots show where each item was found.",
             "The lines between the items, with the stream table's values. Correct where each line comes from and goes to; the sketch shows the connections.",
             "The kind of process, inferred from the drawing's text, and the compounds, property package and units of the flowsheet.",
@@ -75,6 +81,12 @@ namespace DWSIM.Extensions.SolidCraft
         /// </summary>
         public void Read(CancellationToken ct, Action<string> step)
         {
+            if (DexpiImport.IsDexpi(File))
+            {
+                // a DEXPI model is read as it is, by dwsim-dexpi: no assistant, nothing to infer
+                Reading = DrawingReading.FromJson(DexpiImport.Read(File, ct, step));
+                return;
+            }
             Reading = DrawingImportClient.Read(File, Kind, ct, step);
             step?.Invoke("AI Assistant: inferring the process from the drawing's text");
             try { DrawingImportClient.Infer(Reading, ct); }
@@ -98,8 +110,13 @@ namespace DWSIM.Extensions.SolidCraft
         public void Propose()
         {
             Tidied = Reading.Tidy();
+            // by a name the database knows, else by the CAS number an IUPAC name or a ChEBI identifier stands for
+            var renamed = Reading.ResolveCompounds(n => DrawingImportBuilder.CompoundName(Flowsheet, n) ??
+                (DexpiIdentifiers.CasOf(n) is string cas ? DrawingImportBuilder.CompoundName(Flowsheet, cas) : null));
+            if (renamed.Count > 0)
+                Tidied.Add(new ImportIssue(ImportIssue.Levels.Info, "", "compounds found by their CAS number or other name: " + string.Join(", ", renamed)));
             Setup = new ImportSetup();
-            var names = Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys)).Distinct(StringComparer.OrdinalIgnoreCase);
+            var names = Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys.Concat(l.MoleFractions.Keys))).Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (var n in names)
             {
                 var db = DrawingImportBuilder.CompoundName(Flowsheet, n);
@@ -111,7 +128,7 @@ namespace DWSIM.Extensions.SolidCraft
         }
 
         /// <summary>The names in the reading the database did not match.</summary>
-        public List<string> UnmatchedCompounds() => Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys))
+        public List<string> UnmatchedCompounds() => Reading.Process.Compounds.Concat(Reading.Lines.SelectMany(l => l.Compounds.Keys.Concat(l.MoleFractions.Keys)))
             .Distinct(StringComparer.OrdinalIgnoreCase).Where(n => DrawingImportBuilder.CompoundName(Flowsheet, n) == null).ToList();
 
         /// <summary>The first package of a kind of process that this DWSIM has.</summary>
@@ -172,7 +189,9 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var n in UnmatchedCompounds())
                 issues.Add(new ImportIssue(ImportIssue.Levels.Warning, n, "not found in the compound database; its flows are left out"));
             if (Flowsheet.SimulationObjects.Count > 0)
-                issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", "the flowsheet is not empty; the drawing is added to what is there"));
+                issues.Add(new ImportIssue(ImportIssue.Levels.Info, "", UpdateExisting
+                    ? "the items and streams of the flowsheet with the reading's tags are brought up to date; nothing new is created"
+                    : "the flowsheet is not empty; the drawing is added to what is there"));
             issues.AddRange(Tidied);
             return issues.OrderBy(i => i.Level).ToList();
         }
@@ -181,7 +200,7 @@ namespace DWSIM.Extensions.SolidCraft
         public void Build(bool solve, Action<string> step)
         {
             step?.Invoke("Building the flowsheet");
-            Built = DrawingImportBuilder.Build(Flowsheet, Reading, Setup);
+            Built = UpdateExisting ? DrawingImportBuilder.Update(Flowsheet, Reading, Setup) : DrawingImportBuilder.Build(Flowsheet, Reading, Setup);
             try { Flowsheet.UpdateInterface(); } catch (Exception) { }
             Solve = new List<ImportIssue>();
             if (!solve) return;
@@ -200,6 +219,8 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var e in errors.Take(10))
                 Solve.Add(new ImportIssue(ImportIssue.Levels.Error, "", e.GetBaseException().Message));
             Solve.AddRange(DrawingImportBuilder.Compare(Reading, Built));
+            Solve.AddRange(DrawingImportBuilder.DesignCheck(Flowsheet, Reading, Built));
+            Solve.AddRange(DrawingImportBuilder.SettleControllers(Flowsheet, Built));
             Fitted = null;
             FitParameters = DrawingImportFit.Available ? DrawingImportFit.Parameters(Reading, Built) : new List<DrawingImportFit.Parameter>();
             try { Flowsheet.UpdateInterface(); } catch (Exception) { }
@@ -240,12 +261,30 @@ namespace DWSIM.Extensions.SolidCraft
             var withData = Built.Streams.Count(kv => !kv.Key.Feed && kv.Key.HasData);
             var off = Solve.Count(i => i.Level == ImportIssue.Levels.Warning && i.Subject.Length > 0);
             var errors = Solve.Count(i => i.Level == ImportIssue.Levels.Error);
-            return Built.Items.Count + " items and " + Built.Streams.Count + " streams built" + (Built.Recycles > 0 ? ", " + Built.Recycles + " recycles" : "") + ". " +
+            return Built.Items.Count + " items and " + Built.Streams.Count + (Built.Updated ? " streams updated" : " streams built") +
+                (Built.Pipes > 0 ? ", " + Built.Pipes + " pipe segments" : "") + (Built.Recycles > 0 ? ", " + Built.Recycles + " recycles" : "") + ". " +
                 (withData > 0 ? (withData - off) + " of " + withData + " streams match the drawing's table" + (errors > 0 ? "; the solver reported errors" : "") + "." : "");
         }
 
+        /// <summary>How many of the reading's items the flowsheet already has, by tag: an update is offered when there are any.</summary>
+        public int MatchingTags()
+        {
+            if (Reading == null) return 0;
+            return Reading.ItemsByTag().Keys.Count(tag =>
+            {
+                var obj = Flowsheet.GetFlowsheetSimulationObject(tag);
+                return obj != null && obj.GraphicObject != null && obj.GraphicObject.ObjectType != DWSIM.Interfaces.Enums.GraphicObjects.ObjectType.MaterialStream;
+            });
+        }
+
+        /// <summary>How many of the reading's lines give their size in the line number: pipe segments are offered when there are any.</summary>
+        public int SizedLines() => Reading == null ? 0 : Reading.Lines.Count(l => l.Include && DrawingImportBuilder.LineSize(l.LineNumber) != null);
+
         public static bool IsReading(string file) => file.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 
-        public static string FileFilterText => "Drawings (*.png, *.jpg, *.pdf, *.dxf, *.dwg)";
+        public static string FileFilterText => "Drawings and DEXPI models (*.png, *.jpg, *.pdf, *.dxf, *.dwg, *.xml)";
+
+        /// <summary>The file types the import takes: the drawings the assistant reads and DEXPI models.</summary>
+        public static string[] FileExtensions => DrawingImportClient.Extensions.Concat(DexpiImport.Extensions).ToArray();
     }
 }

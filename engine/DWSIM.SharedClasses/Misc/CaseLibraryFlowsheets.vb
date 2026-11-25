@@ -77,7 +77,25 @@ Public Class CaseLibraryFlowsheets
         End Try
     End Sub
 
-    Private Shared Function DownloadString(url As String, Optional accept As String = Nothing) As String
+    ''' <summary>The bytes at url (the preview image of a case), with the same proxy and timeouts as the list.</summary>
+    Friend Shared Function DownloadBytes(url As String) As Byte()
+        Dim target As New Uri(url)
+        Dim request = DirectCast(WebRequest.Create(target), HttpWebRequest)
+        request.Method = "GET"
+        request.Timeout = 30000
+        request.ReadWriteTimeout = 30000
+        request.UserAgent = "DWSIM"
+        ApplySystemProxy(request, target)
+
+        Using response = DirectCast(request.GetResponse(), HttpWebResponse)
+            Using stream = response.GetResponseStream(), ms As New MemoryStream()
+                stream.CopyTo(ms)
+                Return ms.ToArray()
+            End Using
+        End Using
+    End Function
+
+    Friend Shared Function DownloadString(url As String, Optional accept As String = Nothing) As String
         Dim target As New Uri(url)
         Dim request = DirectCast(WebRequest.Create(target), HttpWebRequest)
         request.Method = "GET"
@@ -212,9 +230,9 @@ Public Class CaseLibraryFlowsheets
         End If
         Select Case we.Status
             Case WebExceptionStatus.NameResolutionFailure
-                Return "the address could not be found (no internet, or a proxy or firewall blocks it)"
+                Return "the address could not be found (the internet isn't available, or a proxy or firewall blocks it)"
             Case WebExceptionStatus.Timeout
-                Return "no answer in 30 s"
+                Return "the server didn't answer in 30 s"
             Case WebExceptionStatus.TrustFailure, WebExceptionStatus.SecureChannelFailure
                 Return "the secure connection failed (" & we.Message & "), often a proxy or antivirus that inspects HTTPS"
             Case Else

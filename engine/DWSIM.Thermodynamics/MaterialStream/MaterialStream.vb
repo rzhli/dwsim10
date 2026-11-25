@@ -73,6 +73,12 @@ Namespace Streams
         <NonSerialized> <Xml.Serialization.XmlIgnore> Public _pp As PropertyPackages.PropertyPackage
 
         ''' <summary>
+        ''' Flash algorithm that replaces the one of the property package while this stream is calculated, such as the
+        ''' vapor-liquid-liquid flash of a three-phase column stage. Nothing for the package's own. Not saved.
+        ''' </summary>
+        <NonSerialized> <Xml.Serialization.XmlIgnore> Public FlashOverride As PropertyPackages.Auxiliary.FlashAlgorithms.FlashAlgorithm
+
+        ''' <summary>
         ''' The unique ID of the associated property package.
         ''' </summary>
         Public _ppid As String = ""
@@ -511,10 +517,16 @@ Namespace Streams
         End Function
 
         Protected Overrides Function CurrentPropertyPackageID() As String
+            'the package the getter resolves, except its fall-back to the first package of the flowsheet:
+            'on load Calculated is read before the package ID, and the fall-back recorded the first
+            'package as the one the stream was solved with
             Try
-                Dim pp = PropertyPackage
-                If pp Is Nothing Then Return ""
-                Return pp.UniqueID
+                If _ppid Is Nothing Then _ppid = ""
+                If _pp IsNot Nothing And _ppwasset Then Return _pp.UniqueID
+                If FlowSheet Is Nothing Then Return ""
+                If _pp IsNot Nothing AndAlso FlowSheet.PropertyPackages.ContainsKey(_pp.UniqueID) Then Return _pp.UniqueID
+                If FlowSheet.PropertyPackages.ContainsKey(_ppid) Then Return _ppid
+                Return ""
             Catch ex As Exception
                 Return ""
             End Try
@@ -580,6 +592,20 @@ Namespace Streams
         End Function
 
         ''' <summary>
+        ''' The package set or read through the base class or <see cref="ISimulationObject"/> (the FluentAPI, scripts)
+        ''' is this stream's own package: before, it went to a separate field that the stream never used.
+        ''' </summary>
+        Protected Overrides Function GetPropertyPackageInterface() As IPropertyPackage
+            Return PropertyPackage
+        End Function
+
+        Protected Overrides Sub SetPropertyPackageInterface(value As IPropertyPackage)
+            Dim pp = TryCast(value, PropertyPackage)
+            If value IsNot Nothing AndAlso pp Is Nothing Then Throw New ArgumentException("A material stream needs a DWSIM property package.")
+            PropertyPackage = pp
+        End Sub
+
+        ''' <summary>
         ''' Gets or sets the associated Property Package for this stream.
         ''' </summary>
         ''' <value></value>
@@ -618,6 +644,10 @@ Namespace Streams
                     Else
                         If FlowSheet.PropertyPackages.ContainsKey(value.UniqueID) Then
                             _ppid = value.UniqueID
+                            'a package assigned directly (before the stream joined the flowsheet) comes first in the
+                            'getter, and kept the stream on it after this change
+                            _pp = Nothing
+                            _ppwasset = False
                         Else
                             _ppwasset = True
                             _pp = value

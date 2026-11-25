@@ -1757,12 +1757,14 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             Vs = tmp.GetSolidPhaseMoleFractions
             Vwx = tmp.GetLiquidPhase1MassFractions
             Vwy = tmp.GetVaporPhaseMassFractions
             Vws = tmp.GetSolidPhaseMassFractions
             wl = tmp.GetLiquidPhase1MassFraction
+            GetTotalLiquidMass(tmp, wl, Vwx)
             wv = tmp.GetVaporPhaseMassFraction
             ws = tmp.GetSolidPhaseMassFraction
             Ki = tmp.Kvalues.ToArray
@@ -2158,7 +2160,7 @@ Namespace Reactors
                 Dim lpstatus = MathEx.LinearProgramming.Simplex.Minimize(balance, totals, energies, resc)
 
                 If lpstatus <> MathEx.LinearProgramming.SimplexStatus.Optimal Then
-                    Throw New Exception("The element balance of this reactor has no non-negative solution (" &
+                    Throw New Exception("The element balance of this reactor doesn't have a non-negative solution (" &
                                         lpstatus.ToString() & "). Check the compounds and the inlet stream.")
                 End If
 
@@ -2670,12 +2672,14 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             Vs = tmp.GetSolidPhaseMoleFractions
             Vwx = tmp.GetLiquidPhase1MassFractions
             Vwy = tmp.GetVaporPhaseMassFractions
             Vws = tmp.GetSolidPhaseMassFractions
             wl = tmp.GetLiquidPhase1MassFraction
+            GetTotalLiquidMass(tmp, wl, Vwx)
             wv = tmp.GetVaporPhaseMassFraction
             ws = tmp.GetSolidPhaseMassFraction
             Ki = tmp.Kvalues.ToArray

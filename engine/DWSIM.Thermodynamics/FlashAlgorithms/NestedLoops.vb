@@ -1622,6 +1622,18 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             Dim fx_bracket_pos As Double = Double.NaN
             Dim fx_bracket_neg As Double = Double.NaN
 
+            'The enthalpy error by temperature, kept for the whole flash: the Newton steps, the bracket and its
+            'fallbacks come back to temperatures already evaluated (a step clamped to the maximum change lands on a
+            'bracket end it already knew, and the bracket solver starts from both ends).
+            Dim herrCache As New Dictionary(Of Double, Double)
+            Dim herrPT As Func(Of Double, Double) =
+                Function(tv)
+                    Dim hv As Double
+                    If herrCache.TryGetValue(tv, hv) Then Return hv
+                    hv = Herror("PT", tv, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                    herrCache(tv) = hv
+                    Return hv
+                End Function
             'A temperature interval does not bound enthalpy error near a vaporization front.
             'Use the configured absolute enthalpy tolerance for every bracketed exit.
             Dim bisectEnthalpy As Func(Of Double, Double, Double) =
@@ -1629,23 +1641,33 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Try
                         Dim lo = Math.Min(ta, tb)
                         Dim hi = Math.Max(ta, tb)
-                        Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
-                        Dim fhi As Double = Herror("PT", hi, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                        Dim flo As Double = herrPT(lo)
+                        Dim fhi As Double = herrPT(hi)
                         If Double.IsNaN(flo) OrElse Double.IsNaN(fhi) Then Return Double.NaN
                         If Math.Abs(flo) <= tolEXT Then Return lo
                         If Math.Abs(fhi) <= tolEXT Then Return hi
                         If Math.Sign(flo) = Math.Sign(fhi) Then Return Double.NaN
+                        'Illinois (regula falsi with the stale end halved): superlinear where H(T) is smooth, which
+                        'bisection is not; inside a two-phase region a juice gains 1500 kJ/kg per K, and bisection
+                        'needed some 25 halvings of the bracket to reach tolEXT
+                        Dim side As Integer = 0
                         For bcnt As Integer = 0 To 200
-                            Dim mid = lo + (hi - lo) / 2.0
-                            Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                            Dim mid = (lo * fhi - hi * flo) / (fhi - flo)
+                            If Not (mid > lo AndAlso mid < hi) Then mid = lo + (hi - lo) / 2.0
+                            Dim fmid As Double = herrPT(mid)
                             If Double.IsNaN(fmid) Then Return Double.NaN
                             If Math.Abs(fmid) <= tolEXT Then Return mid
                             If mid = lo OrElse mid = hi Then Return Double.NaN
                             If Math.Sign(fmid) = Math.Sign(flo) Then
                                 lo = mid
                                 flo = fmid
+                                If side = -1 Then fhi /= 2.0
+                                side = -1
                             Else
                                 hi = mid
+                                fhi = fmid
+                                If side = 1 Then flo /= 2.0
+                                side = 1
                             End If
                         Next
                         Return Double.NaN
@@ -1669,23 +1691,28 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
                 fx_ant = fx
 
-                Dim herrobj As Object
+                If Not herrCache.TryGetValue(x1, fx) Then
 
-                IObj2?.SetCurrent()
-                herrobj = Herror("PT", x1, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)
-                fx = herrobj(0)
+                    Dim herrobj As Object
 
-                ' Extract Ki from result for reuse in next iteration
-                Dim Vy_tmp = DirectCast(herrobj(4), Double())
-                Dim Vx1_tmp = DirectCast(herrobj(5), Double())
-                Ki_est = New Double(n) {}
-                For i = 0 To n
-                    If Vx1_tmp(i) > 1.0E-20 Then
-                        Ki_est(i) = Vy_tmp(i) / Vx1_tmp(i)
-                    Else
-                        Ki_est(i) = 1.0
-                    End If
-                Next
+                    IObj2?.SetCurrent()
+                    herrobj = Herror("PT", x1, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)
+                    fx = herrobj(0)
+                    herrCache(x1) = fx
+
+                    ' Extract Ki from result for reuse in next iteration
+                    Dim Vy_tmp = DirectCast(herrobj(4), Double())
+                    Dim Vx1_tmp = DirectCast(herrobj(5), Double())
+                    Ki_est = New Double(n) {}
+                    For i = 0 To n
+                        If Vx1_tmp(i) > 1.0E-20 Then
+                            Ki_est(i) = Vy_tmp(i) / Vx1_tmp(i)
+                        Else
+                            Ki_est(i) = 1.0
+                        End If
+                    Next
+
+                End If
 
                 IObj2?.Paragraphs.Add(String.Format("Current Enthalpy error: {0} kJ/kg", fx))
 
@@ -1722,8 +1749,10 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     signChanges += 1
                 End If
 
-                ' Oscillation fallback: solve the enthalpy residual on the bracket
-                If signChanges >= 3 Then
+                ' Bracket found (or the steps oscillate): solve the enthalpy residual on the bracket. H(T) is
+                ' monotonic, so a bracket holds the root; Newton steps clamped to the maximum temperature change
+                ' only bounced between its ends.
+                If signChanges >= 3 OrElse (Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg)) Then
 
                     If Not Double.IsNaN(T_bracket_pos) AndAlso Not Double.IsNaN(T_bracket_neg) Then
                         x1 = bisectEnthalpy(T_bracket_pos, T_bracket_neg)
@@ -1739,7 +1768,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                             Else
                                 x1 = bmin.BrentOpt2(Ta, Tb, 100, tolEXT, maxitEXT,
                                     Function(tval)
-                                        Return Herror("PT", tval, P, Vz, PP, Kbrent IsNot Nothing, Kbrent)(0)
+                                        Return herrPT(tval)
                                     End Function)
                             End If
                         End If
@@ -1762,8 +1791,8 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 ' real local slope, which is how the pre-net10 algorithm stayed stable here.
                 Dim eps_fd As Double = Math.Max(0.1, Math.Min(1.0, x1 * 0.002))
                 IObj2?.SetCurrent()
-                Dim fxp As Double = Herror("PT", x1 + eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
-                Dim fxm As Double = Herror("PT", x1 - eps_fd, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                Dim fxp As Double = herrPT(x1 + eps_fd)
+                Dim fxm As Double = herrPT(x1 - eps_fd)
                 dfdx = (fxp - fxm) / (2.0 * eps_fd)
 
                 ' Guard against near-zero derivative
@@ -1839,11 +1868,11 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     'not resolvable to tolEXT: keep the previous answer
                     Dim lo As Double = Math.Min(T_bracket_pos, T_bracket_neg)
                     Dim hi As Double = Math.Max(T_bracket_pos, T_bracket_neg)
-                    Dim flo As Double = Herror("PT", lo, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                    Dim flo As Double = herrPT(lo)
                     Dim bcnt As Integer = 0
                     Do
                         Dim mid As Double = (lo + hi) / 2.0
-                        Dim fmid As Double = Herror("PT", mid, P, Vz, PP, Ki_est IsNot Nothing, Ki_est)(0)
+                        Dim fmid As Double = herrPT(mid)
                         If Double.IsNaN(fmid) Then Exit Do
                         If Math.Abs(fmid) <= tolEXT OrElse (hi - lo) < 0.0005 Then
                             lo = mid : hi = mid : Exit Do
@@ -2080,7 +2109,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     'an interval that closes on a jump of the enthalpy holds no root: the bubble and dew points
                     'were no pair of this feed
                     If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(H1) > 0.01 Then
-                        Throw New Exception("PH Flash [NL]: Invalid result: the enthalpy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                        Throw New Exception("PH Flash [NL]: Invalid result: the enthalpy isn't met at any vapour fraction between the bubble and dew points (P = " & P & " Pa).")
                     End If
                     IObj?.Paragraphs.Add(String.Format("Enthalpy Error (Spec - Calculated): {0}", H1))
                 Loop Until Abs(H1) < itol Or ecount > maxitEXT
@@ -2188,8 +2217,15 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                 'partial vaporization.
                 Dim tmp As Object
                 Dim hres = PerformHeuristicsTest(Vz, T, P, PP)
+                Dim totalsolids = PP.ForcedSolids.Count
+                For Each cp In PP.DW_GetConstantProperties()
+                    totalsolids += Convert.ToInt32(cp.IsSolid)
+                Next
                 If hres.SolidPhase And CalledFromSLE Then
                     tmp = New NestedLoopsSLE().Flash_PV(Vz, P, V, 0.0, PP, ReuseKI, Ki)
+                ElseIf hres.SolidPhase And Not totalsolids > 0 Then
+                    'the flash the enthalpy loop converged with, so the solid phase is kept
+                    tmp = New NestedLoopsSLE().Flash_PV(Vz, P, V, T, PP, False, Nothing)
                 Else
                     tmp = Me.Flash_PV(Vz, P, V, 0.0#, PP, ReuseKI, Ki)
                 End If
@@ -2716,7 +2752,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     'an interval that closes on a jump of the entropy holds no root: the bubble and dew points
                     'were no pair of this feed
                     If bracketed AndAlso Vhi - Vlo < 0.000001 AndAlso Math.Abs(S1) > 0.01 Then
-                        Throw New Exception("PS Flash [NL]: Invalid result: the entropy is met at no vapour fraction between the bubble and dew points (P = " & P & " Pa).")
+                        Throw New Exception("PS Flash [NL]: Invalid result: the entropy isn't met at any vapour fraction between the bubble and dew points (P = " & P & " Pa).")
                     End If
                     IObj?.Paragraphs.Add(String.Format("Entropy Error (Spec - Calculated): {0}", S1))
                 Loop Until Abs(S1) < itol Or ecount > maxitEXT
@@ -3124,6 +3160,8 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     P += Vz(i) * PP.AUX_PVAPi(i, T)
                 Next
                 IObj?.Close()
+                ' pressure and K values from the model: see SingleCompoundSaturationP
+                If Vz.Length > 1 Then P = NestedLoops.SingleCompoundSaturationP(PP, Vz, T, V, P, Ki, Vx, Vy)
                 Return New Object() {L, V, Vx, Vy, P, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If
 
@@ -3345,7 +3383,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                         End Try
                     Next
                 End If
-                If unconfirmed OrElse (IsRestart AndAlso Double.IsNaN(P)) Then Throw New Exception("TV Flash [NL]: no bubble point found (the result at P = " & P & " Pa is not a saturation point).")
+                If unconfirmed OrElse (IsRestart AndAlso Double.IsNaN(P)) Then Throw New Exception("TV Flash [NL]: didn't find a bubble point (the result at P = " & P & " Pa is not a saturation point).")
 
             Else
 
@@ -3525,7 +3563,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             End If
 
             If PP.AUX_CheckTrivial(Ki, 0.01, Vz) Then Throw New Exception("TV Flash [NL]: Invalid result: converged to the trivial solution (P = " & P & " ).")
-            If SaturationPointRejected(Vz, T, P, V, Vx, Vy, PP) Then Throw New Exception("TV Flash [NL]: Invalid result: the feed has no incipient phase at P = " & P & " Pa (not a saturation point).")
+            If SaturationPointRejected(Vz, T, P, V, Vx, Vy, PP) Then Throw New Exception("TV Flash [NL]: Invalid result: the feed doesn't have an incipient phase at P = " & P & " Pa (not a saturation point).")
 
             WriteDebugInfo("TV Flash [NL]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms.")
 
@@ -3899,7 +3937,7 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
             'fails outright, since the ideal-solution fallback below would put Raoult's law in its place. The
             'bubble and dew points of the azeotrope interpolation keep the earlier acceptance.
             If Not AcceptStalledSaturationPoint AndAlso Not CalculatingAzeotrope AndAlso result.Count > 1 AndAlso SaturationPointRejected(Vz, result(4), P, V, result(2), result(3), PP) Then
-                Throw New Exception("PV Flash [NL]: Invalid result: the feed has no incipient phase at T = " & result(4) & " K (not a saturation point).")
+                Throw New Exception("PV Flash [NL]: Invalid result: the feed doesn't have an incipient phase at T = " & result(4) & " K (not a saturation point).")
             End If
 
             'Nor is a result between the bubble and dew points that is no two-phase state of the model.
@@ -4431,6 +4469,133 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
 
         End Function
 
+        ''' <summary>
+        ''' Saturation temperature of a mixture that passes the single-compound test, at the vapour
+        ''' fraction given. The mole fraction average of the saturation temperatures is only a first
+        ''' value, and the K values the routine holds at that point are those of its starting
+        ''' temperature or the estimates the caller handed in. This solves the same equation as the
+        ''' general path for T, with the K values of the model at T, so that the two paths meet at the
+        ''' threshold and the K values belong to the temperature returned. A column stage of nearly
+        ''' pure water otherwise came back at its boiling point with K = 0.78 for water, the value of
+        ''' the estimate, and the bubble point solver settled on a profile that did not close the mass
+        ''' balance.
+        ''' </summary>
+        Friend Shared Function SingleCompoundSaturationT(PP As PropertyPackages.PropertyPackage, Vz As Double(), P As Double, V As Double, T As Double,
+                                                         ByRef Ki As Double(), ByRef Vx As Double(), ByRef Vy As Double(),
+                                                         nonvolatile As Boolean()) As Double
+
+            Dim n As Integer = Vz.Length - 1
+            Dim Kl As Double() = Ki, xl As Double() = Vx, yl As Double() = Vy
+
+            Dim fsat As Func(Of Double, Double) =
+                Function(Tx As Double) As Double
+                    Dim Ksat As Double() = PP.DW_CalcKvalue(xl, yl, Tx, P)
+                    Dim fv As Double = 0.0
+                    For k As Integer = 0 To n
+                        If nonvolatile IsNot Nothing AndAlso nonvolatile(k) Then
+                            Kl(k) = 1.0E-20
+                        ElseIf Not Double.IsNaN(Ksat(k)) AndAlso Not Double.IsInfinity(Ksat(k)) AndAlso Ksat(k) > 0.0 Then
+                            Kl(k) = Ksat(k)
+                        End If
+                        If Vz(k) <> 0 Then
+                            yl(k) = Vz(k) * Kl(k) / ((Kl(k) - 1) * V + 1)
+                            If Double.IsInfinity(yl(k)) Then yl(k) = 0.0#
+                            xl(k) = yl(k) / Kl(k)
+                            fv += Vz(k) * (Kl(k) - 1) / ((Kl(k) - 1) * V + 1)
+                        Else
+                            yl(k) = 0
+                            xl(k) = 0
+                        End If
+                    Next
+                    xl = xl.NormalizeY()
+                    yl = yl.NormalizeY()
+                    Return fv
+                End Function
+
+            Dim Ta As Double = T, fa As Double = fsat(Ta)
+            Dim Tb As Double = T + 0.05, fb As Double = fsat(Tb)
+            For it As Integer = 1 To 30
+                If Double.IsNaN(fa) OrElse Double.IsNaN(fb) OrElse fb = fa Then Exit For
+                Dim Tn As Double = Tb - fb * (Tb - Ta) / (fb - fa)
+                If Double.IsNaN(Tn) OrElse Math.Abs(Tn - T) > 5.0 Then Exit For
+                Ta = Tb : fa = fb
+                Tb = Tn : fb = fsat(Tb)
+                If Math.Abs(fb) < 0.0000000001 Then Exit For
+            Next
+            If Not Double.IsNaN(fb) AndAlso Math.Abs(fb) < 0.000001 Then
+                T = Tb
+            Else
+                ' no root close to the first value: keep it, with the K values evaluated there
+                fsat(T)
+            End If
+
+            Ki = Kl : Vx = xl : Vy = yl
+
+            Return T
+
+        End Function
+
+        ''' <summary>
+        ''' Saturation pressure of a mixture that passes the single-compound test, at the vapour
+        ''' fraction given: the counterpart of SingleCompoundSaturationT for a temperature specification.
+        ''' The mole fraction average of the vapour pressures is the first value.
+        ''' </summary>
+        Friend Shared Function SingleCompoundSaturationP(PP As PropertyPackages.PropertyPackage, Vz As Double(), T As Double, V As Double, P As Double,
+                                                         ByRef Ki As Double(), ByRef Vx As Double(), ByRef Vy As Double()) As Double
+
+            Dim n As Integer = Vz.Length - 1
+            Dim Kl As Double() = Ki, xl As Double() = Vx, yl As Double() = Vy
+
+            If Double.IsNaN(P) OrElse P <= 0.0 Then Return P
+
+            Dim fsat As Func(Of Double, Double) =
+                Function(Px As Double) As Double
+                    Dim Ksat As Double() = PP.DW_CalcKvalue(xl, yl, T, Px)
+                    Dim fv As Double = 0.0
+                    For k As Integer = 0 To n
+                        If Not Double.IsNaN(Ksat(k)) AndAlso Not Double.IsInfinity(Ksat(k)) AndAlso Ksat(k) > 0.0 Then
+                            Kl(k) = Ksat(k)
+                        End If
+                        If Vz(k) <> 0 Then
+                            yl(k) = Vz(k) * Kl(k) / ((Kl(k) - 1) * V + 1)
+                            If Double.IsInfinity(yl(k)) Then yl(k) = 0.0#
+                            xl(k) = yl(k) / Kl(k)
+                            fv += Vz(k) * (Kl(k) - 1) / ((Kl(k) - 1) * V + 1)
+                        Else
+                            yl(k) = 0
+                            xl(k) = 0
+                        End If
+                    Next
+                    xl = xl.NormalizeY()
+                    yl = yl.NormalizeY()
+                    Return fv
+                End Function
+
+            Dim Pa As Double = P, fa As Double = fsat(Pa)
+            Dim Pb As Double = P * 1.0005, fb As Double = fsat(Pb)
+            For it As Integer = 1 To 30
+                If Double.IsNaN(fa) OrElse Double.IsNaN(fb) OrElse fb = fa Then Exit For
+                Dim Pn As Double = Pb - fb * (Pb - Pa) / (fb - fa)
+                If Double.IsNaN(Pn) OrElse Math.Abs(Pn - P) > 0.05 * P Then Exit For
+                Pa = Pb : fa = fb
+                Pb = Pn : fb = fsat(Pb)
+                If Math.Abs(fb) < 0.0000000001 Then Exit For
+            Next
+
+            Dim Pout As Double = P
+            If Not Double.IsNaN(fb) AndAlso Math.Abs(fb) < 0.000001 Then
+                Pout = Pb
+            Else
+                ' no root close to the first value: keep it, with the K values evaluated there
+                fsat(P)
+            End If
+
+            Ki = Kl : Vx = xl : Vy = yl
+
+            Return Pout
+
+        End Function
+
         Public Function Flash_PV_1(ByVal Vz2 As Double(), ByVal P As Double, ByVal V As Double, ByVal Tref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing, Optional OldTempEstimation As Boolean = False) As Object
 
             Dim IObj As Inspector.InspectorItem = Inspector.Host.GetNewInspectorItem()
@@ -4611,6 +4776,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see SingleCompoundSaturationT
+                    T = SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, nonvolatile)
                 End If
 
                 If S > 0 Then
@@ -5353,6 +5521,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see SingleCompoundSaturationT
+                    T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, Nothing)
                 End If
                 Return New Object() {L, V, Vx, Vy, T, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If
@@ -5613,6 +5784,9 @@ out:        WriteDebugInfo("PT Flash [NL]: Converged in " & ecount & " iteration
                     Vx = New Double() {1.0}
                     Vy = New Double() {1.0}
                     Ki = New Double() {1.0}
+                Else
+                    ' temperature and K values from the model: see SingleCompoundSaturationT
+                    T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, Nothing)
                 End If
                 Return New Object() {L, V, Vx, Vy, T, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If

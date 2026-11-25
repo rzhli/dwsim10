@@ -178,7 +178,7 @@ namespace DWSIM.UI.Desktop.Editors
 
             panel.CreateAndAddCheckBoxRow("Rate-based: stage efficiencies from mass transfer", column.RateBased,
                 (cb, e) => column.RateBased = cb.IsChecked.GetValueOrDefault());
-            panel.CreateAndAddDescriptionRow("The Murphree efficiency of every component on every stage comes from the AIChE or Chan-Fair transfer units on trays and from the HETP of each component on packed stages, using the tray geometry and packings of the column internals case saved in the column (standard sieve trays where there is none). The column solves, rates its stages and solves again until the efficiencies settle; the values are listed in the properties report.");
+            panel.CreateAndAddDescriptionRow("The Murphree efficiency of every component on every stage comes from the AIChE or Chan-Fair transfer units on trays and from the HETP of each component on packed stages, using the tray geometry and packings of the column internals case saved in the column (standard sieve trays where there isn't one). The column solves, rates its stages and solves again until the efficiencies settle; the values are listed in the properties report.");
             panel.CreateAndAddDropDownRow("Tray transfer units", new List<string> { "AIChE (1958)", "Chan and Fair (1984), sieve trays" }, column.RateBasedTrayMethod,
                 (dd, e) => { if (dd.SelectedIndex >= 0) column.RateBasedTrayMethod = dd.SelectedIndex; });
             panel.CreateAndAddTextBoxRow(nf, "Rate-based passes at most", column.RateBasedMaxPasses,
@@ -200,6 +200,10 @@ namespace DWSIM.UI.Desktop.Editors
                     column.ExternalLoopTolerance = v;
                     column.InternalLoopTolerance = v;
                 });
+
+            panel.CreateAndAddStringEditorRow("Three-Phase Stages (VLLE)", column.ThreePhaseStages ?? "",
+                (tb, e) => column.ThreePhaseStages = (tb.Text ?? "").Trim());
+            panel.CreateAndAddDescriptionRow("Stages whose liquid may split into two liquid phases: \"all\", or stage numbers and ranges such as \"4-12, 30\", counted from the top stage as 1 (the condenser, when the column has one). These stages test their liquid for stability and use the K-values of the total liquid. Leave it empty for vapor-liquid stages only.");
 
             AddPropertyPackageRow(column, panel);
 

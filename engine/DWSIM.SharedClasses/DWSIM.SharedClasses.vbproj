@@ -23,6 +23,8 @@
     <EmbeddedResource Include="Scripting\JuliaWorker.jl" LogicalName="DWSIM.SharedClasses.Scripting.JuliaWorker.jl" />
     <!-- what the patrons list falls back to when the licensing server cannot be reached -->
     <EmbeddedResource Include="Patrons\activepatrons.txt" />
+    <!-- the typical processes that the simulation wizard offers -->
+    <EmbeddedResource Include="ProcessCatalog\*.json" LogicalName="DWSIM.SharedClasses.ProcessCatalog.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

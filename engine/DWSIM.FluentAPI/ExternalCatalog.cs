@@ -38,7 +38,7 @@ namespace DWSIM.Automation.FluentAPI
             public const string ChromatographyColumn = "Chromatography Column";
             /// <summary>Crossflow ultrafiltration / diafiltration with optional Hermia fouling.</summary>
             public const string CrossflowUFDF = "Crossflow UF/DF";
-            /// <summary>Cooling / evaporative / antisolvent crystallizer with polynomial solubility.</summary>
+            /// <summary>Cooling / evaporative / antisolvent crystallizer; solubility from a polynomial or from the property package.</summary>
             public const string Crystallizer = "Crystallizer";
 
             /// <summary>Every bioprocess display name as a flat list.</summary>
@@ -116,6 +116,10 @@ namespace DWSIM.Automation.FluentAPI
             public const string VaporCompressionChiller = "Vapor Compression Chiller";
             /// <summary>Zeolite molecular-sieve adsorber (PSA or equilibrium).</summary>
             public const string ZeoliteAdsorber = "Zeolite Adsorber";
+            /// <summary>Vacuum contact dryer for wet cakes (agitated bed or trays).</summary>
+            public const string ContactDryer = "Contact Dryer";
+            /// <summary>Freeze dryer for solutions in vials (freezing, primary and secondary drying).</summary>
+            public const string Lyophilizer = "Lyophilizer";
             /// <summary>Copper-bed mercury removal (capacity-based or Wheeler-Jonas).</summary>
             public const string CopperBedHgAdsorber = "Copper Bed Hg Adsorber";
             /// <summary>Detailed air-cooler with fan curves and global weather hookup.</summary>
@@ -144,7 +148,7 @@ namespace DWSIM.Automation.FluentAPI
                 VaporCompressionChiller, ZeoliteAdsorber, CopperBedHgAdsorber,
                 AirCooler2, EnergyMixer, EnergySplitter, EnergyStreamSwitch,
                 MaterialStreamSwitch, MaterialStreamMapper, FallingFilmEvaporator,
-                ThermoPropertyEditor, DividedWallColumn
+                ThermoPropertyEditor, DividedWallColumn, Lyophilizer, ContactDryer
             };
         }
 

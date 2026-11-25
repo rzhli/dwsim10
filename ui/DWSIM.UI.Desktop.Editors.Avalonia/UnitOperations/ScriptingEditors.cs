@@ -178,7 +178,7 @@ namespace DWSIM.UI.Desktop.Editors
                     var name = spreadsheet.EmbeddedFileName;
                     if (string.IsNullOrEmpty(name) || !flowsheet.FileDatabaseProvider.CheckIfExists(name))
                     {
-                        flowsheet.ShowMessage("No embedded spreadsheet is selected.", IFlowsheet.MessageType.GeneralError);
+                        flowsheet.ShowMessage("An embedded spreadsheet isn't selected.", IFlowsheet.MessageType.GeneralError);
                         return;
                     }
                     path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
@@ -953,6 +953,21 @@ namespace DWSIM.UI.Desktop.Editors
                             uo.GetFlowsheet().ShowMessage(ex.Message, IFlowsheet.MessageType.GeneralError);
                         }
                     });
+
+                    // ChemSep keeps its results in the input file it persists, which the profile window reads
+                    if (uo.IsChemSepColumn)
+                    {
+                        panel.CreateAndAddButtonRow("Column Profiles", null, (btn, e) =>
+                        {
+                            try { ColumnProfilesViewer.Show(uo.GetChemSepProfilesColumn()); }
+                            catch (Exception ex)
+                            {
+                                uo.GetFlowsheet().ShowMessage(ex.Message, IFlowsheet.MessageType.GeneralError);
+                            }
+                        });
+                        panel.CreateAndAddDescriptionRow(
+                            "Temperature, pressure, flows and compositions of each stage of the ChemSep column, from its last solution.");
+                    }
                 });
         }
 

@@ -91,13 +91,25 @@ namespace DWSIM.Automation.FluentAPI
             return new FormattedTextBuilder(this, g);
         }
 
+        /// <summary>A text block written in Markdown (headings, bold, italic, lists, tables, code). The text wraps at
+        /// <paramref name="width"/> and the block's height follows the text. {n:V}, {n:U} and {n:N} show the value,
+        /// units and name of the n-th Watch panel item.</summary>
+        public MarkdownTextBuilder AddMarkdownText(string tag, string markdown, int x, int y, int width = 360)
+        {
+            var g = (MarkdownTextGraphic)AddAnnotation(ObjectType.GO_MarkdownText, tag, x, y);
+            g.Text = markdown;
+            g.Width = width;
+            return new MarkdownTextBuilder(this, g);
+        }
+
         /// <summary>The annotations of the flowsheet, by tag.</summary>
         public IReadOnlyList<IGraphicObject> Annotations
             => ((DWSIM.Drawing.SkiaSharp.GraphicsSurface)Inner.GetSurface()).DrawingObjects.Cast<IGraphicObject>()
                 .Where(o => o.ObjectType == ObjectType.GO_Chart || o.ObjectType == ObjectType.GO_Table ||
                             o.ObjectType == ObjectType.GO_MasterTable || o.ObjectType == ObjectType.GO_Text ||
                             o.ObjectType == ObjectType.GO_Image || o.ObjectType == ObjectType.GO_Rectangle ||
-                            o.ObjectType == ObjectType.GO_HTMLText || o.ObjectType == ObjectType.GO_SpreadsheetTable)
+                            o.ObjectType == ObjectType.GO_HTMLText || o.ObjectType == ObjectType.GO_MarkdownText ||
+                            o.ObjectType == ObjectType.GO_SpreadsheetTable)
                 .ToList();
     }
 
@@ -135,7 +147,7 @@ namespace DWSIM.Automation.FluentAPI
         {
             var known = Flowsheet.Inner.DynamicsManager.IntegratorList.Values.Select(i => i.Description).ToList();
             if (!known.Contains(integratorName))
-                throw new KeyNotFoundException("No integrator named '" + integratorName + "'. Defined: " + (known.Count == 0 ? "none" : string.Join(", ", known)) + ".");
+                throw new KeyNotFoundException("There isn't an integrator named '" + integratorName + "'. Defined: " + (known.Count == 0 ? "none" : string.Join(", ", known)) + ".");
             Object.OwnerID = "Dynamic Mode Integrators";
             Object.ModelName = integratorName;
             return this;
@@ -147,7 +159,7 @@ namespace DWSIM.Automation.FluentAPI
             var obj = Flowsheet.ResolveByTag(objectTag);
             var names = obj.GetChartModelNames() ?? new List<string>();
             if (!names.Contains(chartName))
-                throw new KeyNotFoundException("'" + objectTag + "' has no chart '" + chartName + "'. Available: " + (names.Count == 0 ? "none" : string.Join(", ", names)) + ".");
+                throw new KeyNotFoundException("'" + objectTag + "' doesn't have a chart '" + chartName + "'. Available: " + (names.Count == 0 ? "none" : string.Join(", ", names)) + ".");
             Object.OwnerID = obj.Name;
             Object.ModelName = chartName;
             return this;
@@ -176,7 +188,7 @@ namespace DWSIM.Automation.FluentAPI
             var ids = propertyIds == null || propertyIds.Length == 0 ? all.ToList() : propertyIds.ToList();
             var unknown = ids.Where(id => !all.Contains(id)).ToList();
             if (unknown.Count > 0)
-                throw new KeyNotFoundException("'" + objectTag + "' has no property " + string.Join(", ", unknown.Select(u => "'" + u + "'")) + ".");
+                throw new KeyNotFoundException("'" + objectTag + "' doesn't have the property " + string.Join(", ", unknown.Select(u => "'" + u + "'")) + ".");
             Object.VisibleProperties[obj.Name] = ids;
             return this;
         }
@@ -243,6 +255,27 @@ namespace DWSIM.Automation.FluentAPI
         public FormattedTextBuilder WithFontStyle(FontStyle style) { Object.FontStyle = style; return this; }
         /// <summary>Clockwise rotation about the center, in degrees.</summary>
         public FormattedTextBuilder Rotate(int degrees) => RotateBy(degrees);
+    }
+
+    public sealed class MarkdownTextBuilder : AnnotationBuilder<MarkdownTextGraphic, MarkdownTextBuilder>
+    {
+        internal MarkdownTextBuilder(Flowsheet flowsheet, MarkdownTextGraphic graphic) : base(flowsheet, graphic) { }
+        public MarkdownTextBuilder WithMarkdown(string markdown) { Object.Text = markdown; return this; }
+        /// <summary>The size of the body text, in points; the headings scale from it.</summary>
+        public MarkdownTextBuilder WithFontSize(double size) { Object.Size = size; return this; }
+        /// <summary>The text color as "#RRGGBB". On a dark background a dark text is drawn light.</summary>
+        public MarkdownTextBuilder WithColor(string color) { Object.Color = Flowsheet.ParseColor(color); return this; }
+        /// <summary>The width the text wraps at.</summary>
+        public MarkdownTextBuilder WithWidth(int width) { Object.Width = Math.Max(40, width); return this; }
+        /// <summary>A background fill, as "#RRGGBB".</summary>
+        public MarkdownTextBuilder WithFill(string color) { Object.Fill = true; Object.FillColor = Flowsheet.ParseColor(color); return this; }
+        /// <summary>A border around the block, optionally in a color ("#RRGGBB").</summary>
+        public MarkdownTextBuilder WithBorder(string color = null)
+        {
+            Object.Border = true;
+            if (!string.IsNullOrEmpty(color)) Object.BorderColor = Flowsheet.ParseColor(color);
+            return this;
+        }
     }
 
     public sealed class RectangleBuilder : AnnotationBuilder<RectangleGraphic, RectangleBuilder>

@@ -1184,10 +1184,15 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                                 If c.IsAttached Then
                                     If c.AttachedConnector.AttachedFrom.ObjectType <> ObjectType.OT_Recycle And
                                         c.AttachedConnector.AttachedFrom.ObjectType <> ObjectType.OT_EnergyRecycle Then
-                                        lists(listidx).Add(c.AttachedConnector.AttachedFrom.Name)
-                                        totalobjs += 1
-                                        If totalobjs > 10000 Then
-                                            Throw New Exception("Infinite loop detected while obtaining flowsheet object calculation order. Please insert recycle blocks where needed.")
+                                        'an object reached through several paths goes into each level once: the order keeps only its deepest
+                                        'occurrence, and one entry per path made the count grow with the number of paths (an evaporator
+                                        'train doubles them at each effect) until a flowsheet without loops passed the limit
+                                        If Not lists(listidx).Contains(c.AttachedConnector.AttachedFrom.Name) Then
+                                            lists(listidx).Add(c.AttachedConnector.AttachedFrom.Name)
+                                            totalobjs += 1
+                                            If totalobjs > 10000 Then
+                                                Throw New Exception("Infinite loop detected while obtaining flowsheet object calculation order. Please insert recycle blocks where needed.")
+                                            End If
                                         End If
                                     End If
                                 End If
@@ -2204,7 +2209,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                     'the step vanished before the targets were met: the manipulated variables no longer move the
                     'controlled ones, so the targets cannot be reached from here
                     Dim tags = String.Join(", ", fbag.SimulationObjects.Values.Where(Function(a) TypeOf a Is IAdjust AndAlso DirectCast(a, IAdjust).SimultaneousAdjust AndAlso a.GraphicObject.Active).Select(Function(a) a.GraphicObject.Tag))
-                    Throw New Exception(String.Format("The simultaneous adjust solver stopped without meeting the targets of {0} (sum of squared errors {1:G4}). The manipulated variables no longer change the controlled ones: check that each target can be reached within the range of its manipulated variable.", tags, il_err))
+                    Throw New Exception(String.Format("The simultaneous adjust solver stopped without meeting the targets of {0} (sum of squared errors {1:G4}). The manipulated variables don't change the controlled ones anymore: check that each target can be reached within the range of its manipulated variable.", tags, il_err))
                 End If
 
             End If
@@ -2316,7 +2321,7 @@ Public Delegate Sub CustomEvent2(ByVal objinfo As CalculationArgs)
                 'the step vanished before the targets were met: the manipulated variables no longer move the
                 'controlled ones, so the targets cannot be reached from here
                 Dim tags = String.Join(", ", fbag.SimulationObjects.Values.Where(Function(a) TypeOf a Is IAdjust AndAlso DirectCast(a, IAdjust).SimultaneousAdjust AndAlso a.GraphicObject.Active).Select(Function(a) a.GraphicObject.Tag))
-                Throw New Exception(String.Format("The simultaneous adjust solver stopped without meeting the targets of {0} (sum of squared errors {1:G4}). The manipulated variables no longer change the controlled ones: check that each target can be reached within the range of its manipulated variable.", tags, il_err))
+                Throw New Exception(String.Format("The simultaneous adjust solver stopped without meeting the targets of {0} (sum of squared errors {1:G4}). The manipulated variables don't change the controlled ones anymore: check that each target can be reached within the range of its manipulated variable.", tags, il_err))
             End If
 
         End If

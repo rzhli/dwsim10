@@ -51,6 +51,9 @@ namespace DWSIM.Extensions.SolidCraft
         ComboBox kind;
         Button read, cancelRead, saveReading;
         TextBlock readStatus;
+        // the AI Assistant's note for a drawing, the reader's for DEXPI models
+        Control visionNote;
+        TextBlock dexpiNote;
         WorkIndicator work;
         Image preview;
 
@@ -66,7 +69,7 @@ namespace DWSIM.Extensions.SolidCraft
 
         // build page
         StackPanel issues, results;
-        CheckBox specs, useUnits, solve;
+        CheckBox specs, useUnits, solve, update, pipes;
         Button build, fit;
         TextBlock summary;
         WrapPanel fitRow;
@@ -112,7 +115,12 @@ namespace DWSIM.Extensions.SolidCraft
         Control DrawingPage()
         {
             file = new TextBox();
-            file.TextChanged += (_, _) => read.IsEnabled = File.Exists((file.Text ?? "").Trim()) && reading == null;
+            file.TextChanged += (_, _) =>
+            {
+                var exist = DexpiImport.Exist(file.Text);
+                read.IsEnabled = exist && reading == null;
+                ShowReaderNote(exist && DexpiImport.IsDexpi(file.Text));
+            };
             var browse = new Button { Content = "Browse...", Margin = new Thickness(6, 0, 0, 0) };
             browse.Click += async (_, _) => await BrowseDrawing();
             kind = new ComboBox { ItemsSource = new[] { "Detect", "Process flow diagram (PFD)", "Piping and instrumentation diagram (P&ID)" }, SelectedIndex = 0, MinWidth = 320 };
@@ -132,10 +140,20 @@ namespace DWSIM.Extensions.SolidCraft
             void Put(Control c, int row, int col, int span = 1) { Grid.SetRow(c, row); Grid.SetColumn(c, col); Grid.SetColumnSpan(c, span); g.Children.Add(c); }
             Put(Label("Drawing"), 0, 0); Put(file, 0, 1); Put(browse, 0, 2);
             Put(Label("Type"), 1, 0); Put(kind, 1, 1);
-            Put(new StackPanel { Spacing = 8, Children = { VisionNote(), WizardFrame.ActionRow(read, cancelRead, open, saveReading, work.Bar) } }, 2, 0, 3);
+            visionNote = VisionNote();
+            dexpiNote = new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.75, IsVisible = false };
+            Put(new StackPanel { Spacing = 8, Children = { visionNote, dexpiNote, WizardFrame.ActionRow(read, cancelRead, open, saveReading, work.Bar) } }, 2, 0, 3);
             Put(readStatus, 3, 0, 3);
             Put(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Background = Brushes.White, Child = preview }, 4, 0, 3);
             return g;
+        }
+
+        /// <summary>DEXPI models are read by dwsim-dexpi: its note replaces the AI Assistant's.</summary>
+        void ShowReaderNote(bool dexpi)
+        {
+            visionNote.IsVisible = !dexpi;
+            dexpiNote.IsVisible = dexpi;
+            if (dexpi) dexpiNote.Text = DexpiImport.ReaderNote;
         }
 
         /// <summary>The note that the reading needs a vision model, with a button to the AI Assistant's settings.</summary>
@@ -157,15 +175,18 @@ namespace DWSIM.Extensions.SolidCraft
             var picked = await Storage.OpenFilePickerAsync(new FilePickerOpenOptions
             {
                 Title = "The PFD or P&ID",
-                FileTypeFilter = new[] { new FilePickerFileType(DrawingImportSession.FileFilterText) { Patterns = DrawingImportClient.Extensions.Select(x => "*" + x).ToArray() }, FilePickerFileTypes.All }
+                AllowMultiple = true,
+                FileTypeFilter = new[] { new FilePickerFileType(DrawingImportSession.FileFilterText) { Patterns = DrawingImportSession.FileExtensions.Select(x => "*" + x).ToArray() }, FilePickerFileTypes.All }
             });
-            var path = picked.FirstOrDefault()?.TryGetLocalPath();
+            var paths = picked.Select(f => f.TryGetLocalPath()).Where(f => f != null).ToList();
+            var path = paths.FirstOrDefault();
             if (path == null) return;
-            file.Text = path;
+            // several files are for DEXPI models only: the sheets of a P&ID and a process model of the same plant
+            file.Text = paths.Count > 1 && paths.All(DexpiImport.IsDexpi) ? string.Join("; ", paths) : path;
             try
             {
                 var ext = Path.GetExtension(path).ToLowerInvariant();
-                preview.Source = ext == ".pdf" || ext == ".dxf" || ext == ".dwg" ? null : new Bitmap(path);
+                preview.Source = ext == ".pdf" || ext == ".dxf" || ext == ".dwg" || DexpiImport.IsDexpi(path) ? null : new Bitmap(path);
             }
             catch (Exception) { preview.Source = null; }
         }
@@ -174,13 +195,20 @@ namespace DWSIM.Extensions.SolidCraft
         {
             session.File = (file.Text ?? "").Trim();
             session.Kind = kind.SelectedIndex == 1 ? "pfd" : kind.SelectedIndex == 2 ? "pid" : "auto";
+            if (DexpiImport.IsDexpi(session.File) && DexpiImport.FindConverter() == null)
+            {
+                readStatus.Text = DexpiImport.MissingText + " The download page was opened in the browser.";
+                DexpiImport.OpenDownloadPage();
+                return;
+            }
             reading = new CancellationTokenSource();
             var token = reading.Token;
             SetBusy(true);
-            work.Start("Checking the AI Assistant's model");
+            var dexpi = DexpiImport.IsDexpi(session.File);
+            work.Start(dexpi ? "Reading the DEXPI model" : "Checking the AI Assistant's model");
             try
             {
-                var model = await work.Model(token, "a drawing");
+                var model = dexpi ? (object)DexpiImport.Program : await work.Model(token, "a drawing");
                 if (model == null) { read.Content = "Read with the local model"; return; }
                 read.Content = "Read the drawing";
                 await Task.Run(() => session.Read(token, s => Dispatcher.UIThread.Post(() => { if (!token.IsCancellationRequested) work.Step(s); })));
@@ -219,7 +247,7 @@ namespace DWSIM.Extensions.SolidCraft
 
         void SetBusy(bool busy)
         {
-            read.IsEnabled = !busy && File.Exists((file.Text ?? "").Trim());
+            read.IsEnabled = !busy && DexpiImport.Exist(file.Text);
             cancelRead.IsEnabled = busy;
             saveReading.IsEnabled = !busy && session.Reading != null;
             frame.NextAllowed = !busy && session.Reading != null;
@@ -556,6 +584,14 @@ namespace DWSIM.Extensions.SolidCraft
             specs = new CheckBox { Content = "Set the items up from the stream table", IsChecked = true };
             useUnits = new CheckBox { Content = "Use the drawing's units", IsChecked = session.Flowsheet.SimulationObjects.Count == 0 };
             solve = new CheckBox { Content = "Solve and compare with the table", IsChecked = true };
+            pipes = new CheckBox { Content = "Pipe segments for the sized lines", IsChecked = false, IsVisible = false };
+            update = new CheckBox { Content = "Update the items with the same tags, add nothing", IsChecked = false, IsVisible = false };
+            update.IsCheckedChanged += (_, _) =>
+            {
+                session.UpdateExisting = update.IsChecked == true;
+                build.Content = session.UpdateExisting ? "Update the flowsheet" : "Build the flowsheet";
+                if (session.Built == null) FillChecks();
+            };
             build = new Button { Content = "Build the flowsheet" };
             build.Click += async (_, _) => await BuildFlowsheet();
             summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
@@ -570,7 +606,7 @@ namespace DWSIM.Extensions.SolidCraft
             fitRow.IsVisible = false;
             var g = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto,Auto,*"), RowSpacing = 6 };
             var top = new ScrollViewer { Content = issues };
-            var options = WizardFrame.ActionRow(specs, useUnits, solve, build);
+            var options = WizardFrame.ActionRow(specs, useUnits, solve, pipes, update, build);
             var bottom = new ScrollViewer { Content = results };
             Grid.SetRow(options, 1); Grid.SetRow(summary, 2); Grid.SetRow(fitRow, 3); Grid.SetRow(bottom, 4);
             g.Children.Add(new Border { BorderBrush = Brushes.Gray, BorderThickness = new Thickness(1), Padding = new Thickness(6), Child = top });
@@ -599,6 +635,9 @@ namespace DWSIM.Extensions.SolidCraft
 
         void FillChecks()
         {
+            update.IsVisible = session.MatchingTags() > 0;
+            pipes.IsVisible = session.SizedLines() > 0 && update.IsChecked != true;
+            if (!update.IsVisible && session.UpdateExisting) update.IsChecked = false;
             var list = session.Check();
             Show(issues, list);
             var errors = list.Any(i => i.Level == ImportIssue.Levels.Error);
@@ -611,6 +650,7 @@ namespace DWSIM.Extensions.SolidCraft
         {
             session.Setup.SpecsFromTable = specs.IsChecked == true;
             session.Setup.UseDrawingUnits = useUnits.IsChecked == true;
+            session.Setup.PipeSegments = pipes.IsVisible && pipes.IsChecked == true;
             build.IsEnabled = false;
             summary.Text = "Building the flowsheet...";
             await Task.Delay(50);
@@ -780,6 +820,33 @@ namespace DWSIM.Extensions.SolidCraft
             {
                 Console.WriteLine("Drawing import: " + ex);
                 try { fs.ShowMessage("Import Flowsheet from Drawing could not open: " + ex.GetBaseException().Message, IFlowsheet.MessageType.GeneralError); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Asks where the DEXPI process model goes, in the cross-platform interface, and writes it.</summary>
+    internal static class DexpiExportPrompt
+    {
+        internal static async void Show(IFlowsheet fs)
+        {
+            try
+            {
+                var desktop = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+                var owner = desktop?.Windows.FirstOrDefault(w => w.IsActive) ?? desktop?.MainWindow;
+                if (owner == null) return;
+                var picked = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Export DEXPI Process Model",
+                    SuggestedFileName = DexpiExportExtender.SuggestedName(fs),
+                    DefaultExtension = "xml",
+                    FileTypeChoices = new[] { new FilePickerFileType("DEXPI models") { Patterns = new[] { "*.xml" } } }
+                });
+                var path = picked?.TryGetLocalPath();
+                if (path != null) DexpiExportExtender.Export(fs, path);
+            }
+            catch (Exception ex)
+            {
+                try { fs.ShowMessage("DEXPI export could not open: " + ex.GetBaseException().Message, IFlowsheet.MessageType.GeneralError); } catch { }
             }
         }
     }

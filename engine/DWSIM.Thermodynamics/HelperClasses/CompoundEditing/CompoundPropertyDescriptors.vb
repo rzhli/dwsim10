@@ -53,6 +53,29 @@ Namespace CompoundEditing
         Private Shared ReadOnly InterfaceType As Type = GetType(ICompoundConstantProperties)
 
         Private ReadOnly _info As PropertyInfo
+        Private ReadOnly _getter As Func(Of ICompoundConstantProperties, Object)
+        Private ReadOnly _setter As Action(Of ICompoundConstantProperties, Object)
+
+        ''' <summary>True for a field that is not a property of ICompoundConstantProperties: it is kept in the
+        ''' compound's ExtraProperties and read and written through its own functions.</summary>
+        Public ReadOnly Property IsVirtual As Boolean
+            Get
+                Return _getter IsNot Nothing
+            End Get
+        End Property
+
+        ''' <summary>A text field kept outside the properties of ICompoundConstantProperties.</summary>
+        Friend Sub New(key As String, displayName As String, group As CompoundPropertyGroup, help As String,
+                       getter As Func(Of ICompoundConstantProperties, Object), setter As Action(Of ICompoundConstantProperties, Object))
+            _getter = getter
+            _setter = setter
+            Me.Key = key
+            Me.DisplayName = displayName
+            Me.Group = group
+            Me.Kind = CompoundPropertyKind.Text
+            Me.StoredUnit = ""
+            Me.Help = If(help, "")
+        End Sub
 
         ''' <summary>Name of the property on ICompoundConstantProperties (also the JSON key).</summary>
         Public ReadOnly Property Key As String
@@ -72,7 +95,7 @@ Namespace CompoundEditing
                        storedUnit As String, unitSelector As Func(Of IUnitsOfMeasure, String),
                        isReadOnly As Boolean, isAdvanced As Boolean, help As String)
             _info = InterfaceType.GetProperty(key)
-            If _info Is Nothing Then Throw New ArgumentException("ICompoundConstantProperties has no property named " & key)
+            If _info Is Nothing Then Throw New ArgumentException("ICompoundConstantProperties doesn't have a property named " & key)
             Me.Key = key
             Me.DisplayName = displayName
             Me.Group = group
@@ -91,6 +114,7 @@ Namespace CompoundEditing
         End Property
 
         Public Function GetValue(cp As ICompoundConstantProperties) As Object
+            If _getter IsNot Nothing Then Return _getter(cp)
             Return _info.GetValue(cp)
         End Function
 
@@ -99,6 +123,10 @@ Namespace CompoundEditing
         ''' current culture second, so both decimal separators are accepted.
         ''' </summary>
         Public Sub SetValue(cp As ICompoundConstantProperties, value As Object)
+            If _setter IsNot Nothing Then
+                _setter(cp, value)
+                Return
+            End If
             ' a polymer's molar mass is its chain length: the per-kmol heat capacities scale with it
             If Key = "Molar_Weight" AndAlso Polymers.PolymerCharacterization.IsPolymerPseudoCompound(cp) Then
                 Dim mw = ParseDouble(value)
@@ -369,6 +397,10 @@ Namespace CompoundEditing
         ''' <summary>Interface members deliberately outside the editor (metadata, deprecated duplicates).</summary>
         Public ReadOnly ExcludedKeys As New List(Of String)
 
+        ''' <summary>Fields kept in the compound's ExtraProperties. They are shown with their group by the editors
+        ''' and stay out of <see cref="Scalars"/>, which mirrors the properties of ICompoundConstantProperties.</summary>
+        Public ReadOnly Virtuals As New List(Of CompoundPropertyDescriptor)
+
         Private ReadOnly _byKey As New Dictionary(Of String, CompoundPropertyDescriptor)
         Private ReadOnly _blockByKey As New Dictionary(Of String, TemperatureDependentBlock)
 
@@ -377,6 +409,13 @@ Namespace CompoundEditing
                       Optional isReadOnly As Boolean = False, Optional isAdvanced As Boolean = False)
             Dim d1 As New CompoundPropertyDescriptor(key, displayName, group, kind, storedUnit, unitSelector, isReadOnly, isAdvanced, help)
             Scalars.Add(d1)
+            _byKey(key) = d1
+        End Sub
+
+        Private Sub V(key As String, displayName As String, group As CompoundPropertyGroup, help As String,
+                      getter As Func(Of ICompoundConstantProperties, Object), setter As Action(Of ICompoundConstantProperties, Object))
+            Dim d1 As New CompoundPropertyDescriptor(key, displayName, group, help, getter, setter)
+            Virtuals.Add(d1)
             _byKey(key) = d1
         End Sub
 
@@ -463,13 +502,13 @@ Namespace CompoundEditing
               "Boiling temperature at 1 atm. Used by thermal-conductivity and other estimation methods and as a sanity anchor for the vapor-pressure curve. It must be below the critical temperature.",
               "K", Function(su) su.temperature)
             D("Z_Rackett", "Rackett parameter (ZRA)", CompoundPropertyGroup.Constants, CompoundPropertyKind.Double,
-              "The Rackett compressibility used to estimate saturated liquid density when no liquid-density equation is set. Leave it at zero to let DWSIM derive it from the acentric factor (ZRA = 0.29056 - 0.08775 w).")
+              "The Rackett compressibility used to estimate saturated liquid density when a liquid-density equation isn't set. Leave it at zero to let DWSIM derive it from the acentric factor (ZRA = 0.29056 - 0.08775 w).")
             D("Dipole_Moment", "Dipole moment", CompoundPropertyGroup.Constants, CompoundPropertyKind.Double,
               "Electric dipole moment in C.m. Read by a few transport-property correlations; zero is fine for most purposes.", "C.m")
 
             ' ---------------------------------------------------------------- formation
             D("IG_Enthalpy_of_Formation_25C", "Ideal gas enthalpy of formation (25 C)", CompoundPropertyGroup.Formation, CompoundPropertyKind.Double,
-              "Enthalpy of forming the compound from its elements at 25 C in the ideal gas state, per kg. It sets the enthalpy reference of the compound, so reaction heat effects and heating values come out right only when every reacting compound has it. With it at zero a reactor reports no heat of reaction.",
+              "Enthalpy of forming the compound from its elements at 25 C in the ideal gas state, per kg. It sets the enthalpy reference of the compound, so reaction heat effects and heating values come out right only when every reacting compound has it. With it at zero a reactor doesn't report any heat of reaction.",
               "kJ/kg", Function(su) su.enthalpy)
             D("IG_Gibbs_Energy_of_Formation_25C", "Ideal gas Gibbs energy of formation (25 C)", CompoundPropertyGroup.Formation, CompoundPropertyKind.Double,
               "Gibbs energy of formation at 25 C, per kg. Used by Gibbs-minimization reactors and to compute equilibrium constants from thermodynamics. Not needed for kinetic or conversion reactors.",
@@ -489,12 +528,22 @@ Namespace CompoundEditing
               "K", Function(su) su.temperature)
             D("EnthalpyOfFusionAtTf", "Enthalpy of fusion", CompoundPropertyGroup.Solid, CompoundPropertyKind.Double,
               "Heat absorbed on melting at the melting point, in kJ/mol (note: per mol, not per kg). Needed for solid-liquid equilibrium and for the enthalpy of a solid phase.", "kJ/mol")
+            D("HeatCapacityDifferenceAtTf", "Heat capacity change on fusion", CompoundPropertyGroup.Solid, CompoundPropertyKind.Double,
+              "Liquid minus solid heat capacity at the melting point, in J/(mol.K). Corrects the solubility of a solid far below its melting point, where the enthalpy of fusion alone underestimates it. Zero means unknown and leaves the correction out.", "J/(mol.K)")
             D("SolidTs", "Solid density reference temperature", CompoundPropertyGroup.Solid, CompoundPropertyKind.Double,
-              "Temperature at which the single-point solid density below was measured. Used only when no solid-density equation is set.",
+              "Temperature at which the single-point solid density below was measured. Used only when a solid-density equation isn't set.",
               "K", Function(su) su.temperature)
             D("SolidDensityAtTs", "Single-point solid density", CompoundPropertyGroup.Solid, CompoundPropertyKind.Double,
               "Density of the solid at the reference temperature above. DWSIM uses it when the solid-density equation is empty; if both are missing, the solid gets a very large placeholder density and any solid volume is meaningless.",
               "kg/m3", Function(su) su.density)
+            V(PropertyPackages.Auxiliary.SolidForms.FormsKey, "Solid forms (polymorphs)", CompoundPropertyGroup.Solid,
+              "The crystalline forms of the compound, each one written as name; melting point (K); enthalpy of fusion (kJ/mol); heat capacity change on fusion (J/(mol.K)); density (kg/m3), with the last two optional and the forms separated by | (for instance: Form I; 442.2; 27.1 | Form II; 430; 26.9). The list by itself does not change any calculation: the solubility tool and the Crystallizer can pick a form from it, and the field below copies one into the melting point and the enthalpy of fusion above.",
+              Function(cp) PropertyPackages.Auxiliary.SolidForms.ToText(PropertyPackages.Auxiliary.SolidForms.GetForms(cp)),
+              Sub(cp, v) PropertyPackages.Auxiliary.SolidForms.SetForms(cp, PropertyPackages.Auxiliary.SolidForms.FromText(If(v, "").ToString())))
+            V(PropertyPackages.Auxiliary.SolidForms.ActiveFormKey, "Solid form in use", CompoundPropertyGroup.Solid,
+              "Name of the solid form whose data are in the melting point, enthalpy of fusion and heat capacity change above. Type the name of one of the forms of the list to copy its data there, which makes every solid-liquid calculation of the simulation use that form. Empty means the values above were entered by hand.",
+              Function(cp) PropertyPackages.Auxiliary.SolidForms.GetActiveFormName(cp),
+              Sub(cp, v) PropertyPackages.Auxiliary.SolidForms.SetActiveFormName(cp, If(v, "").ToString()))
 
             ' ---------------------------------------------------------------- model parameters
             D("PR_Volume_Translation_Coefficient", "PR volume translation", CompoundPropertyGroup.ModelParameters, CompoundPropertyKind.Double,
@@ -542,7 +591,7 @@ Namespace CompoundEditing
 
             ' ---------------------------------------------------------------- electrolyte
             D("IsIon", "Is an ion", CompoundPropertyGroup.Electrolyte, CompoundPropertyKind.Boolean,
-              "Marks a charged species. Ions have no vapor pressure and are only handled by electrolyte property packages.", isAdvanced:=True)
+              "Marks a charged species. Ions don't have a vapor pressure and are only handled by electrolyte property packages.", isAdvanced:=True)
             D("IsSalt", "Is a salt", CompoundPropertyGroup.Electrolyte, CompoundPropertyKind.Boolean,
               "Marks a salt that dissociates into the ions named below.", isAdvanced:=True)
             D("IsHydratedSalt", "Is a hydrated salt", CompoundPropertyGroup.Electrolyte, CompoundPropertyKind.Boolean,
@@ -665,7 +714,7 @@ Namespace CompoundEditing
             Dim always As Func(Of ICompoundConstantProperties, Boolean) = Function(cp) True
 
             Blocks.Add(New TemperatureDependentBlock("VaporPressure", "Vapor pressure",
-                "Saturation pressure of the pure compound as a function of temperature: the property that decides how volatile the compound is in every flash. T is in K and the equation must return Pa. When no equation is set, DWSIM estimates it with the Lee-Kesler correlation from Tc, Pc and the acentric factor, which is fine for a non-volatile pseudo-compound but rough for anything that actually boils in the process.",
+                "Saturation pressure of the pure compound as a function of temperature: the property that decides how volatile the compound is in every flash. T is in K and the equation must return Pa. When an equation isn't set, DWSIM estimates it with the Lee-Kesler correlation from Tc, Pc and the acentric factor, which is fine for a non-volatile pseudo-compound but rough for anything that actually boils in the process.",
                 "VaporPressureEquation", {"Vapor_Pressure_Constant_A", "Vapor_Pressure_Constant_B", "Vapor_Pressure_Constant_C", "Vapor_Pressure_Constant_D", "Vapor_Pressure_Constant_E"},
                 "Vapor_Pressure_TMIN", "Vapor_Pressure_TMAX", "Vapor_Pressure_Regression_Fit", "Vapor_Pressure_Tabular_Data",
                 "Pa", Function(su) su.pressure,
@@ -968,7 +1017,7 @@ Namespace CompoundEditing
                     End If
                     If d1 IsNot Nothing Then Exit For
                 Next
-                If d1 Is Nothing Then Throw New KeyNotFoundException("No compound property descriptor for '" & key & "'.")
+                If d1 Is Nothing Then Throw New KeyNotFoundException("There isn't a compound property descriptor for '" & key & "'.")
                 _blockOwned(key) = d1
             End SyncLock
             Return d1
@@ -987,7 +1036,7 @@ Namespace CompoundEditing
         End Function
 
         Public Function ScalarsInGroup(group As CompoundPropertyGroup) As List(Of CompoundPropertyDescriptor)
-            Return Scalars.Where(Function(d1) d1.Group = group).ToList()
+            Return Scalars.Where(Function(d1) d1.Group = group).Concat(Virtuals.Where(Function(d1) d1.Group = group)).ToList()
         End Function
 
         ''' <summary>Scalars, block-owned keys and excluded keys: must equal the interface's property list.</summary>

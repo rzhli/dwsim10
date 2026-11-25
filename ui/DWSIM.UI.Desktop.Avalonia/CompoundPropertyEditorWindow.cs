@@ -14,6 +14,7 @@ using DWSIM.Interfaces;
 using DWSIM.SharedClasses.SystemsOfUnits;
 using DWSIM.Thermodynamics.BaseClasses;
 using DWSIM.Thermodynamics.CompoundEditing;
+using DWSIM.Thermodynamics.PropertyPackages.Auxiliary;
 using DWSIM.UI.Shared.Avalonia;
 
 namespace DWSIM.UI.Desktop.Avalonia;
@@ -253,7 +254,7 @@ public sealed class CompoundPropertyEditorWindow : Window
         if (_blocks.SelectedIndex < 0) _blocks.SelectedIndex = 0; else RefreshExplainer();
         SetStatus(_readOnly
             ? "This compound is not in the simulation, so it is shown read-only. Add it to the simulation to edit it."
-            : "Original (no changes yet). Values are applied to the simulation only when you press OK.");
+            : "Original (you haven't made changes yet). Values are applied to the simulation only when you press OK.");
     }
 
     private void MarkDirty()
@@ -353,6 +354,30 @@ public sealed class CompoundPropertyEditorWindow : Window
                             d.SetValue(_clone!, text);
                             MarkDirty();
                         });
+                }
+                else if (d.IsVirtual)
+                {
+                    // read when the text is complete: a partial entry is reported in the status line and left out
+                    var committed = Convert.ToString(d.GetValue(_clone!)) ?? "";
+                    row = panel.CreateAndAddStringEditorRow(label, committed,
+                        (tb, _) =>
+                        {
+                            var text = tb.Text ?? "";
+                            if (text == committed) return;
+                            try
+                            {
+                                d.SetValue(_clone!, text);
+                                committed = text;
+                                AfterEdit();
+                                if (d.Key == SolidForms.ActiveFormKey)
+                                {
+                                    var forms = SolidForms.GetForms(_clone!);
+                                    SetStatus(forms.Count > 0 ? SolidForms.Describe(forms) : "Modified (not applied yet).");
+                                    Dispatcher.UIThread.Post(RebuildPanel, DispatcherPriority.Background);
+                                }
+                            }
+                            catch (Exception ex) { SetStatus(ex.Message); }
+                        }, 260);
                 }
                 else
                 {
@@ -648,7 +673,7 @@ public sealed class CompoundPropertyEditorWindow : Window
         if (_clone == null) return;
         var issues = CompoundValidator.Validate(_clone).OrderByDescending(i => i.Severity).ToList();
         var nWarn = issues.Count(i => i.Severity == CompoundIssueSeverity.Warning);
-        _warningsHeader.Text = issues.Count == 0 ? "No warnings." : $"{nWarn} warning(s), {issues.Count - nWarn} note(s).";
+        _warningsHeader.Text = issues.Count == 0 ? "There aren't any warnings." : $"{nWarn} warning(s), {issues.Count - nWarn} note(s).";
         foreach (var i in issues)
         {
             var tb = new TextBlock

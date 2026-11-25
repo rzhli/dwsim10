@@ -37,37 +37,48 @@ Namespace GraphicObjects
 
             Dim canvas As SKCanvas = DirectCast(g, SKCanvas)
 
-            Dim w = Width
-            Dim h = Height
+            ' the artwork (case and blank dial) and the dial it leaves for the scale, the needle and the value
+            Dim box As New SKRect(X, Y, X + Width, Y + Height)
+            Dim hasArt = LogicArt.Draw(canvas, "analog_gauge", DrawMode, box, True)
+            Dim dial = If(hasArt, LogicArt.ValueRegion("analog_gauge", DrawMode, box), box)
+            Dim side = Math.Min(dial.Width, dial.Height)
+            Dim X0 = dial.MidX - side / 2, Y0 = dial.MidY - side / 2
+            ' the dial of the artwork is white, also on a dark canvas
+            Dim fore = If(hasArt, New SKColor(40, 50, 60), GetForeColor())
 
-            Dim center = New SKPoint(X + w / 2, Y + h / 2)
+            Dim w = side
+            Dim h = side
+
+            Dim center = New SKPoint(X0 + w / 2, Y0 + h / 2)
 
             Dim radius = w / 2
 
-            Dim f = Width / 100.0
+            Dim f = w / 100.0
 
-            'draw circle
-            Using paint As New SKPaint With {.Color = GetForeColor(), .IsStroke = True, .StrokeWidth = 5 * f, .IsAntialias = True}
-                canvas.DrawCircle(center.X, center.Y, radius, paint)
-            End Using
+            If Not hasArt Then
+                'draw circle
+                Using paint As New SKPaint With {.Color = fore, .IsStroke = True, .StrokeWidth = 5 * f, .IsAntialias = True}
+                    canvas.DrawCircle(center.X, center.Y, radius, paint)
+                End Using
+            End If
 
-            Using paint As New SKPaint With {.Color = SKColors.Green.WithAlpha(100), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
+            Using paint As New SKPaint With {.Color = If(DrawMode = 1, SKColors.Gray.WithAlpha(50), SKColors.Green.WithAlpha(100)), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
                 Using p As New SKPath()
-                    p.AddArc(New SKRect(X + 10.0 * f, Y + 10.0 * f, X + w - 10.0 * f, Y + h - 10.0 * f), -225, 90)
+                    p.AddArc(New SKRect(X0 + 10.0 * f, Y0 + 10.0 * f, X0 + w - 10.0 * f, Y0 + h - 10.0 * f), -225, 90)
                     canvas.DrawPath(p, paint)
                 End Using
             End Using
 
-            Using paint As New SKPaint With {.Color = SKColors.Yellow.WithAlpha(100), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
+            Using paint As New SKPaint With {.Color = If(DrawMode = 1, SKColors.Gray.WithAlpha(90), SKColors.Yellow.WithAlpha(100)), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
                 Using p As New SKPath()
-                    p.AddArc(New SKRect(X + 10.0 * f, Y + 10.0 * f, X + w - 10.0 * f, Y + h - 10.0 * f), -135, 90)
+                    p.AddArc(New SKRect(X0 + 10.0 * f, Y0 + 10.0 * f, X0 + w - 10.0 * f, Y0 + h - 10.0 * f), -135, 90)
                     canvas.DrawPath(p, paint)
                 End Using
             End Using
 
-            Using paint As New SKPaint With {.Color = SKColors.Red.WithAlpha(100), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
+            Using paint As New SKPaint With {.Color = If(DrawMode = 1, SKColors.Gray.WithAlpha(140), SKColors.Red.WithAlpha(100)), .IsStroke = True, .StrokeWidth = 20 * f, .IsAntialias = True}
                 Using p As New SKPath()
-                    p.AddArc(New SKRect(X + 10.0 * f, Y + 10.0 * f, X + w - 10.0 * f, Y + h - 10.0 * f), -45, 90)
+                    p.AddArc(New SKRect(X0 + 10.0 * f, Y0 + 10.0 * f, X0 + w - 10.0 * f, Y0 + h - 10.0 * f), -45, 90)
                     canvas.DrawPath(p, paint)
                 End Using
             End Using
@@ -86,7 +97,7 @@ Namespace GraphicObjects
             Dim maxtick = 135.0
             Dim nstep = 10
 
-            Using paint As New SKPaint With {.Color = GetForeColor(), .IsStroke = True, .StrokeWidth = 2 * f, .IsAntialias = True}
+            Using paint As New SKPaint With {.Color = fore, .IsStroke = True, .StrokeWidth = 2 * f, .IsAntialias = True}
                 For i As Integer = mintick To maxtick Step nstep
                     Dim angle = (i - 90) * Math.PI / 180
                     Dim p1 = New SKPoint(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle))
@@ -113,14 +124,10 @@ Namespace GraphicObjects
                         .IsStroke = True
                         .IsAntialias = GlobalSettings.Settings.DrawingAntiAlias
                     End With
-                    SetupPositioning(ConDir.Down, ConDir.Down)
-                    Using path As New SKPath()
-                        Dim points() As SKPoint = PointList.Select(Function(x) New SKPoint(x.X, x.Y)).ToArray
-                        path.MoveTo(points(0).X, points(0).Y)
-                        For i As Integer = 1 To points.Length - 1
-                            path.LineTo(points(i).X, points(i).Y)
-                        Next
-                        canvas.DrawPath(path, aPen)
+                    'the line runs in the flowsheet's coordinates: undo the object's flip, rotation and zoom
+                    Using New SKAutoCanvasRestore(canvas)
+                        UnTransformCanvas(canvas)
+                        LogicalLinks.Draw(canvas, Me, SelectedObject.GraphicObject, aPen)
                     End Using
                 End Using
             End If
@@ -137,13 +144,13 @@ Namespace GraphicObjects
 
             needle.Transform(SKMatrix.MakeRotationDegrees(currenttick, center.X, center.Y))
 
-            Using paint As New SKPaint With {.Color = GetForeColor(), .IsStroke = False, .IsAntialias = True}
+            Using paint As New SKPaint With {.Color = fore, .IsStroke = False, .IsAntialias = True}
                 canvas.DrawPath(needle, paint)
             End Using
 
             Dim valtext = currentvalue.ToString("N0")
 
-            Using paint As New SKPaint With {.TextSize = 15.0 * f, .Color = GetForeColor(), .IsAntialias = True}
+            Using paint As New SKPaint With {.TextSize = 15.0 * f, .Color = fore, .IsAntialias = True}
                 Select Case GlobalSettings.Settings.RunningPlatform
                     Case GlobalSettings.Settings.Platform.Windows
                         paint.Typeface = SKTypeface.FromFamilyName("Consolas", SKTypefaceStyle.Bold)
@@ -157,7 +164,7 @@ Namespace GraphicObjects
                 Dim tsize As New SKSize(trect.Right - trect.Left, trect.Top - trect.Bottom)
                 Dim strx As Single = (w - paint.MeasureText(valtext)) / 2
                 Dim stry As Single = h - tsize.Height - 25.0 * f
-                canvas.DrawText(valtext, X + strx, Y + stry, paint)
+                canvas.DrawText(valtext, X0 + strx, Y0 + stry, paint)
             End Using
 
             Owner.Calculate()
@@ -206,9 +213,9 @@ Namespace GraphicObjects
                                 bpaint.Color = SKColors.Black
                             End If
                         End If
-                        canvas.DrawOval(X, Y + delta - trll.Height / 2, r1, r1, bpaint)
+                        canvas.DrawOval(X, Y0 + delta - trll.Height / 2, r1, r1, bpaint)
                     End Using
-                    canvas.DrawText(tll, X - trll.Width / 2, Y + delta, paint)
+                    canvas.DrawText(tll, X - trll.Width / 2, Y0 + delta, paint)
                 End Using
 
                 Using paint As New SKPaint With {.TextSize = 10 * f, .Color = SKColors.White, .IsAntialias = True}
@@ -230,9 +237,9 @@ Namespace GraphicObjects
                                 bpaint.Color = SKColors.Black
                             End If
                         End If
-                        canvas.DrawOval(X + 0.33 * w, Y + delta - trl.Height / 2, r1, r1, bpaint)
+                        canvas.DrawOval(X0 + 0.33 * w, Y0 + delta - trl.Height / 2, r1, r1, bpaint)
                     End Using
-                    canvas.DrawText(tl, X + 0.33 * w - trl.Width / 2, Y + delta, paint)
+                    canvas.DrawText(tl, X0 + 0.33 * w - trl.Width / 2, Y0 + delta, paint)
                 End Using
 
                 Using paint As New SKPaint With {.TextSize = 10 * f, .Color = SKColors.White, .IsAntialias = True}
@@ -254,9 +261,9 @@ Namespace GraphicObjects
                                 bpaint.Color = SKColors.Black
                             End If
                         End If
-                        canvas.DrawOval(X + 0.66 * w, Y + delta - trh.Height / 2, r1, r1, bpaint)
+                        canvas.DrawOval(X0 + 0.66 * w, Y0 + delta - trh.Height / 2, r1, r1, bpaint)
                     End Using
-                    canvas.DrawText(th, X + 0.66 * w - trh.Width / 2, Y + delta, paint)
+                    canvas.DrawText(th, X0 + 0.66 * w - trh.Width / 2, Y0 + delta, paint)
                 End Using
 
                 Using paint As New SKPaint With {.TextSize = 10 * f, .Color = SKColors.White, .IsAntialias = True}
@@ -278,9 +285,9 @@ Namespace GraphicObjects
                                 bpaint.Color = SKColors.Black
                             End If
                         End If
-                        canvas.DrawOval(X + w, Y + delta - trhh.Height / 2, r1, r1, bpaint)
+                        canvas.DrawOval(X0 + w, Y0 + delta - trhh.Height / 2, r1, r1, bpaint)
                     End Using
-                    canvas.DrawText(thh, X + w - trhh.Width / 2, Y + delta, paint)
+                    canvas.DrawText(thh, X0 + w - trhh.Width / 2, Y0 + delta, paint)
                 End Using
 
             End If
@@ -393,16 +400,16 @@ Namespace GraphicObjects
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim x As Double = StartPos.X - center.X
                 Dim y As Double = StartPos.Y - center.Y
-                StartPos.X = center.X + (x * Math.Cos(angle_rad) + y * Math.Sin(angle_rad))
-                StartPos.Y = center.Y - (x * -Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
+                StartPos.X = center.X + (x * Math.Cos(angle_rad) - y * Math.Sin(angle_rad))
+                StartPos.Y = center.Y + (x * Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
             End If
             If SimObject.GraphicObject.Rotation <> 0 Then
                 Dim angle_rad As Double = SimObject.GraphicObject.Rotation * Math.PI / 180
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim x As Double = EndPos.X - center.X
                 Dim y As Double = EndPos.Y - center.Y
-                EndPos.X = center.X + (x * Math.Cos(angle_rad) + y * Math.Sin(angle_rad))
-                EndPos.Y = center.Y - (x * -Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
+                EndPos.X = center.X + (x * Math.Cos(angle_rad) - y * Math.Sin(angle_rad))
+                EndPos.Y = center.Y + (x * Math.Sin(angle_rad) + y * Math.Cos(angle_rad))
             End If
 
             'Check Flipping
@@ -411,29 +418,41 @@ Namespace GraphicObjects
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim y As Double = StartPos.Y - center.Y
                 StartPos.Y = center.Y - y
-                If StartDir = ConDir.Down Then StartDir = ConDir.Up
-                If StartDir = ConDir.Up Then StartDir = ConDir.Down
+                If StartDir = ConDir.Down Then
+                    StartDir = ConDir.Up
+                ElseIf StartDir = ConDir.Up Then
+                    StartDir = ConDir.Down
+                End If
             End If
             If Me.FlippedH Then
                 Dim center As New Point(Me.X + Me.Width / 2, Me.Y + Me.Height / 2)
                 Dim x As Double = StartPos.X - center.X
                 StartPos.X = center.X - x
-                If StartDir = ConDir.Left Then StartDir = ConDir.Right
-                If StartDir = ConDir.Right Then StartDir = ConDir.Left
+                If StartDir = ConDir.Left Then
+                    StartDir = ConDir.Right
+                ElseIf StartDir = ConDir.Right Then
+                    StartDir = ConDir.Left
+                End If
             End If
             If SimObject.GraphicObject.FlippedV Then
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim y As Double = EndPos.Y - center.Y
                 EndPos.Y = center.Y - y
-                If EndDir = ConDir.Down Then EndDir = ConDir.Up
-                If EndDir = ConDir.Up Then EndDir = ConDir.Down
+                If EndDir = ConDir.Down Then
+                    EndDir = ConDir.Up
+                ElseIf EndDir = ConDir.Up Then
+                    EndDir = ConDir.Down
+                End If
             End If
             If SimObject.GraphicObject.FlippedH Then
                 Dim center As New Point(SimObject.GraphicObject.X + SimObject.GraphicObject.Width / 2, SimObject.GraphicObject.Y + SimObject.GraphicObject.Height / 2)
                 Dim x As Double = EndPos.X - center.X
                 EndPos.X = center.X - x
-                If EndDir = ConDir.Left Then EndDir = ConDir.Right
-                If EndDir = ConDir.Right Then EndDir = ConDir.Left
+                If EndDir = ConDir.Left Then
+                    EndDir = ConDir.Right
+                ElseIf EndDir = ConDir.Right Then
+                    EndDir = ConDir.Left
+                End If
             End If
 
             'Construct path of stream

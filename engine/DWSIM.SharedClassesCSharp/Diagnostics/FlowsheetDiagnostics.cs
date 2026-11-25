@@ -58,6 +58,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             CheckSpecifications(flowsheet, findings);
             CheckLogicalObjects(flowsheet, findings);
             CheckStaleResults(flowsheet, findings);
+            CheckPropertyPackageConsistency(flowsheet, findings);
 
             return Order(findings);
         }
@@ -95,7 +96,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (flowsheet.SimulationObjects.Count == 0)
             {
                 findings.Add(new Finding(FlowsheetCodes.EmptyFlowsheet, DiagnosticSeverity.Blocker, "",
-                    "The flowsheet has no objects.",
+                    "The flowsheet doesn't have any objects.",
                     "Add streams and unit operations before solving."));
                 return;
             }
@@ -103,14 +104,14 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (flowsheet.SelectedCompounds.Count == 0)
             {
                 findings.Add(new Finding(FlowsheetCodes.NoCompounds, DiagnosticSeverity.Blocker, "",
-                    "The flowsheet has no compounds, so no stream can carry anything.",
+                    "The flowsheet doesn't have any compounds, so the streams can't carry anything.",
                     "Add compounds before setting any composition."));
             }
 
             if (flowsheet.PropertyPackages.Count == 0)
             {
                 findings.Add(new Finding(FlowsheetCodes.NoPropertyPackage, DiagnosticSeverity.Blocker, "",
-                    "The flowsheet has no property package, so nothing can be flashed.",
+                    "The flowsheet doesn't have a property package, so streams can't be flashed.",
                     "Add one, chosen for the compounds and the pressure range in play."));
             }
 
@@ -159,6 +160,92 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             }
         }
 
+        /// <summary>Units whose material streams all belong to one fluid, flashed with the unit's package.</summary>
+        private static readonly HashSet<ObjectType> SingleFluidTypes = new HashSet<ObjectType>
+        {
+            ObjectType.NodeIn, ObjectType.NodeOut, ObjectType.Mixer, ObjectType.Splitter,
+            ObjectType.Pump, ObjectType.Compressor, ObjectType.Expander, ObjectType.CompressorExpander,
+            ObjectType.Heater, ObjectType.Cooler, ObjectType.HeaterCooler, ObjectType.AirCooler2,
+            ObjectType.Valve, ObjectType.Pipe, ObjectType.OrificePlate,
+            ObjectType.Tank, ObjectType.Vessel, ObjectType.TPVessel,
+            ObjectType.ComponentSeparator, ObjectType.SolidSeparator, ObjectType.Filter,
+            ObjectType.RCT_Conversion, ObjectType.RCT_Equilibrium, ObjectType.RCT_Gibbs, ObjectType.RCT_GibbsReaktoro,
+            ObjectType.RCT_CSTR, ObjectType.RCT_PFR, ObjectType.RCT_Polymerization,
+            ObjectType.ShortcutColumn, ObjectType.DistillationColumn, ObjectType.AbsorptionColumn,
+            ObjectType.RefluxedAbsorber, ObjectType.ReboiledAbsorber
+        };
+
+        /// <summary>
+        /// One fluid carried through a unit on more than one property package.
+        /// </summary>
+        /// <remarks>
+        /// Enthalpy is relative to a reference state, and every package has its own. A unit hands
+        /// its outlet an enthalpy, and the outlet reads it on its own package, so where the package
+        /// changes energy appears or vanishes: a fan with no power cools the air, a water stream
+        /// takes up heat the hot side never gave. A heat exchanger carries two
+        /// fluids and flashes each side with its inlet's package, so only the inlet and the outlet
+        /// of one side are compared there. Units not listed (sub-flowsheets, CAPE-OPEN, scripts,
+        /// extensions) can hold several fluids and are left alone.
+        /// </remarks>
+        private static void CheckPropertyPackageConsistency(IFlowsheet flowsheet, List<Finding> findings)
+        {
+            foreach (var obj in flowsheet.SimulationObjects.Values)
+            {
+                var graphic = obj.GraphicObject;
+                if (graphic == null || !graphic.Active) continue;
+
+                var type = graphic.ObjectType;
+                var tag = TagOf(obj);
+
+                if (type == ObjectType.HeatExchanger)
+                {
+                    // Port i in feeds port i out.
+                    var inlets = AttachedStreams(flowsheet, graphic.InputConnectors, ConType.ConIn).Take(2).ToList();
+                    var outlets = AttachedStreams(flowsheet, graphic.OutputConnectors, ConType.ConOut).Take(2).ToList();
+                    for (int i = 0; i < Math.Min(inlets.Count, outlets.Count); i++)
+                    {
+                        var members = new List<ISimulationObject> { (ISimulationObject)inlets[i], (ISimulationObject)outlets[i] };
+                        ReportMixedPackages(members, tag, "the inlet and the outlet of one side", findings);
+                    }
+                    continue;
+                }
+
+                if (!SingleFluidTypes.Contains(type)) continue;
+
+                var around = new List<ISimulationObject> { obj };
+                around.AddRange(AttachedStreams(flowsheet, graphic.InputConnectors, ConType.ConIn).Cast<ISimulationObject>());
+                around.AddRange(AttachedStreams(flowsheet, graphic.OutputConnectors, ConType.ConOut).Cast<ISimulationObject>());
+                ReportMixedPackages(around, tag, "this unit and its streams", findings);
+            }
+        }
+
+        private static void ReportMixedPackages(List<ISimulationObject> members, string tag, string scope, List<Finding> findings)
+        {
+            var packages = new List<KeyValuePair<string, IPropertyPackage>>();
+            foreach (var member in members)
+            {
+                var package = PackageOf(member);
+                if (package != null) packages.Add(new KeyValuePair<string, IPropertyPackage>(TagOf(member), package));
+            }
+            if (packages.Select(p => p.Value.UniqueID).Distinct().Count() < 2) return;
+
+            var detail = string.Join(", ", packages.Select(p => p.Key + " on " + p.Value.Tag));
+            findings.Add(new Finding(FlowsheetCodes.PropertyPackagesMixed, DiagnosticSeverity.Warning, tag,
+                "The property package changes between " + scope + " (" + detail + "). Each package measures enthalpy " +
+                "from its own reference, so energy appears or disappears where it changes.",
+                "Assign one property package to every stream of this fluid and to the unit, then solve again."));
+        }
+
+        private static IPropertyPackage PackageOf(ISimulationObject obj)
+        {
+            // A material stream resolves its package by ID behind a property that shadows the base
+            // one, so the base property may be empty; ask the stream for its own.
+            var stream = obj as IMaterialStream;
+            if (stream != null) return stream.GetPropertyPackageObject() as IPropertyPackage;
+            try { return obj.PropertyPackage; }
+            catch (Exception) { return null; }
+        }
+
         private static void CheckConnectivity(IFlowsheet flowsheet, List<Finding> findings)
         {
             foreach (var obj in flowsheet.SimulationObjects.Values)
@@ -180,7 +267,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                     if (!attachedIn && !attachedOut)
                     {
                         findings.Add(new Finding(FlowsheetCodes.StreamDangling, DiagnosticSeverity.Blocker, tag,
-                            "This stream is connected to nothing at either end.",
+                            "This stream isn't connected to anything at either end.",
                             "Connect it to a unit operation, or remove it."));
                     }
                     continue;
@@ -194,19 +281,19 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                 if (materialIn == 0 && materialOut == 0)
                 {
                     findings.Add(new Finding(FlowsheetCodes.UnitUnconnected, DiagnosticSeverity.Blocker, tag,
-                        "This unit operation has nothing connected to it.",
+                        "This unit operation doesn't have anything connected to it.",
                         "Connect a feed and a product, or remove it."));
                 }
                 else if (materialIn == 0)
                 {
                     findings.Add(new Finding(FlowsheetCodes.UnitNoFeed, DiagnosticSeverity.Blocker, tag,
-                        "This unit operation has no feed, so it has nothing to process.",
+                        "This unit operation doesn't have a feed, so it doesn't have anything to process.",
                         "Connect a material stream to one of its inlet ports."));
                 }
                 else if (materialOut == 0)
                 {
                     findings.Add(new Finding(FlowsheetCodes.UnitNoProduct, DiagnosticSeverity.Blocker, tag,
-                        "This unit operation has no product, so its result has nowhere to go.",
+                        "This unit operation doesn't have a product, so its result can't go anywhere.",
                         "Connect a material stream to one of its outlet ports."));
                 }
             }
@@ -262,14 +349,14 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (needsPressure && (pressure <= 0.0 || double.IsNaN(pressure)))
             {
                 findings.Add(new Finding(FlowsheetCodes.FeedNoPressure, DiagnosticSeverity.Blocker, tag,
-                    "This feed has no pressure, so it cannot be flashed.",
+                    "This feed doesn't have a pressure, so it cannot be flashed.",
                     "Set its pressure."));
             }
 
             if (needsTemperature && (temperature <= 0.0 || double.IsNaN(temperature)))
             {
                 findings.Add(new Finding(FlowsheetCodes.FeedNoTemperature, DiagnosticSeverity.Blocker, tag,
-                    "This feed has no temperature, so it cannot be flashed.",
+                    "This feed doesn't have a temperature, so it cannot be flashed.",
                     "Set its temperature, or specify a vapour fraction instead."));
             }
 
@@ -289,7 +376,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (massFlow <= 0.0 && molarFlow <= 0.0)
             {
                 findings.Add(new Finding(FlowsheetCodes.FeedNoFlow, DiagnosticSeverity.Warning, tag,
-                    "This feed carries no flow, so everything downstream of it will be empty.",
+                    "This feed doesn't carry any flow, so everything downstream of it will be empty.",
                     "Set a mass or a molar flow."));
             }
         }
@@ -309,7 +396,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (total <= 0.0)
             {
                 findings.Add(new Finding(FlowsheetCodes.FeedNoComposition, DiagnosticSeverity.Blocker, tag,
-                    "Every compound in this feed is at zero, so it carries nothing.",
+                    "Every compound in this feed is at zero, so it doesn't carry anything.",
                     "Set its composition."));
             }
             else if (Math.Abs(total - 1.0) > 1e-4)
@@ -356,7 +443,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
 
                 var mode = string.IsNullOrEmpty(dof.Mode) ? "" : " in mode " + dof.Mode;
                 findings.Add(new Finding(FlowsheetCodes.SpecMissing, DiagnosticSeverity.Warning, tag,
-                    "This " + dof.ObjectType + mode + " has no value for: " + string.Join(", ", missing) + ".",
+                    "This " + dof.ObjectType + mode + " doesn't have a value for: " + string.Join(", ", missing) + ".",
                     "Open its editor and fill those in, or switch to a calculation mode whose specifications you have."));
             }
         }
@@ -397,7 +484,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
 
                 findings.Add(new Finding(FlowsheetCodes.EfficiencyOutOfRange, DiagnosticSeverity.Warning, tag,
                     "The efficiency of this " + type + " is " + shown + " %, outside 0 to 100 %.",
-                    "Efficiencies are entered in percent, above 0 and at most 100. Zero divides the duty by nothing."));
+                    "Efficiencies are entered in percent, above 0 and at most 100. Zero would divide the duty by zero."));
             }
         }
 
@@ -453,7 +540,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (active > 0) return;
 
             findings.Add(new Finding(FlowsheetCodes.ReactorNoReactions, DiagnosticSeverity.Blocker, tag,
-                "This reactor has no active reaction to compute, so it can only pass its feed through.",
+                "This reactor doesn't have an active reaction to compute, so it can only pass its feed through.",
                 "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor."));
         }
 
@@ -508,7 +595,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
             if (ObjectInfoIsSet(Prop(obj, sourceProperty)) && ObjectInfoIsSet(Prop(obj, targetProperty))) return;
 
             findings.Add(new Finding(FlowsheetCodes.LogicalTargetMissing, DiagnosticSeverity.Warning, tag,
-                "This " + what + " does not name both the object it reads and the one it writes, so it does nothing.",
+                "This " + what + " does not name both the object it reads and the one it writes, so it doesn't do anything.",
                 "Set its source and target objects and properties."));
         }
 
@@ -531,7 +618,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                 if (message.IndexOf("Infinite loop", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     findings.Add(new Finding(FlowsheetCodes.InfiniteLoop, DiagnosticSeverity.Blocker, "",
-                        "The solver found a cycle it cannot order, which means a loop with no recycle to tear it.",
+                        "The solver found a cycle it cannot order, which means a loop without a recycle to tear it.",
                         "Put a Recycle block on one stream of the loop."));
                     continue;
                 }
@@ -627,7 +714,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                 findings.Add(new Finding(FlowsheetCodes.UnitHadNoEffect, DiagnosticSeverity.Warning,
                     TagOf(obj),
                     "This " + graphic.ObjectType + " left its outlet at the same temperature and pressure " +
-                    "as its inlet, so it did nothing.",
+                    "as its inlet, so it didn't do anything.",
                     "Its calculation mode probably does not read the specification you set: a cooler " +
                     "given an outlet temperature still needs CalcMode = OutletTemperature. Check the " +
                     "mode, then the value."));
@@ -806,7 +893,7 @@ namespace DWSIM.Automation.FluentAPI.Diagnostics
                     " K against cold inlet " + coldIn.ToString("G5", CultureInfo.InvariantCulture) + " K, cold outlet " +
                     coldOut.ToString("G5", CultureInfo.InvariantCulture) + " K against hot inlet " +
                     hotIn.ToString("G5", CultureInfo.InvariantCulture) + " K.",
-                    "No exchanger can cool the hot side below the cold inlet, or heat the cold side above the hot inlet. " +
+                    "An exchanger can't cool the hot side below the cold inlet, or heat the cold side above the hot inlet. " +
                     "Relax the specified outlet temperature or the duty, or check the flow rates."));
             }
         }

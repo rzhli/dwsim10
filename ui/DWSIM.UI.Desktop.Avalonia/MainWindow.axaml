@@ -60,7 +60,8 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="380" MinWidth="260" MaxWidth="680" />
         <ColumnDefinition Width="5" />
-        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="3*" />
+        <ColumnDefinition Width="2*" />
       </Grid.ColumnDefinitions>
 
       <!-- Left: "Get Started", the same sections the Windows welcome screen stacks -->
@@ -82,6 +83,8 @@
               <Button Name="LnkNewFromDrawing" Classes="link" Content="Create New from PFD or P&amp;ID"
                       ToolTip.Tip="A new, empty flowsheet built from a process flow diagram or a P&amp;ID read by the AI Assistant." />
               <Button Name="LnkLoadFile"     Classes="link" Content="Load File" />
+              <Button Name="LnkImportSimulation" Classes="link" Content="Import from Other Simulators"
+                      ToolTip.Tip="A DWSIM flowsheet built from a simulation file of another process simulator." />
             </StackPanel>
 
             <!-- Compound creation / data regression -->
@@ -140,7 +143,7 @@
                     HorizontalAlignment="Stretch" />
 
       <!-- Right: recent files, samples and the FOSSEE flowsheets -->
-      <TabControl Grid.Column="2" TabStripPlacement="Top" Margin="0">
+      <TabControl Name="WelcomeTabs" Grid.Column="2" TabStripPlacement="Top" Margin="0">
 
         <TabItem Header="Recent Files">
           <DockPanel Margin="16">
@@ -202,6 +205,38 @@
         </TabItem>
 
       </TabControl>
+
+      <!-- Details of the simulation selected in the lists, read from the file without loading it -->
+      <Border Grid.Column="3" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource SplitterBrush}">
+        <DockPanel>
+        <!-- opens the item shown, the same as a double-click in the list -->
+        <Button Name="DetailsOpen" DockPanel.Dock="Bottom" Classes="detailsOpen" Content="Open"
+                Margin="20,8,20,18" IsVisible="False" />
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="14" Margin="20,52,20,20">
+            <Border Name="DetailsPreviewCard" Classes="detailsCard" Padding="10" IsVisible="False">
+              <Image Name="DetailsPreview" Stretch="Uniform" StretchDirection="DownOnly" MaxHeight="300"
+                     HorizontalAlignment="Center" Cursor="Hand"
+                     ToolTip.Tip="Click to see the picture in a larger window" />
+            </Border>
+            <StackPanel Spacing="4">
+              <TextBlock Name="DetailsTitle" Text="Simulation Details" TextWrapping="Wrap"
+                         FontSize="20" FontWeight="SemiBold" />
+              <TextBlock Name="DetailsSubtitle" TextWrapping="Wrap" Opacity="0.65" IsVisible="False" />
+            </StackPanel>
+            <Border Name="DetailsWarning" Classes="detailsWarning" IsVisible="False">
+              <TextBlock Name="DetailsWarningText" />
+            </Border>
+            <SelectableTextBlock Name="DetailsComments" TextWrapping="Wrap" IsVisible="False"
+                                 FontSize="{DynamicResource FontSizeNormal}" LineHeight="18" />
+            <StackPanel Name="DetailsSections" Spacing="16" />
+            <StackPanel Name="DetailsFooter" Spacing="2" Opacity="0.55" IsVisible="False" />
+            <TextBlock Name="DetailsNote" TextWrapping="Wrap" Opacity="0.6"
+                       Text="Select a simulation in the list to see its details." />
+          </StackPanel>
+        </ScrollViewer>
+        </DockPanel>
+      </Border>
 
     </Grid>
 

@@ -1183,7 +1183,7 @@ Namespace Reactors
             For Each rxid As String In Me.Reactions
                 rx = FlowSheet.Reactions(rxid)
                 If Not rx.Components.ContainsKey(rx.BaseReactant) Then
-                    Throw New Exception("No base reactant defined for reaction '" + rx.Name + "'.")
+                    Throw New Exception("A base reactant isn't defined for reaction '" + rx.Name + "'.")
                 End If
                 j = 0
                 For Each comp As ReactionStoichBase In rx.Components.Values
@@ -1715,6 +1715,7 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             'an absent phase leaves its outlet empty, with the overall composition of the product
             If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()
@@ -2075,7 +2076,7 @@ Namespace Reactors
             For Each rxid As String In Me.Reactions
                 rx = FlowSheet.Reactions(rxid)
                 If Not rx.Components.ContainsKey(rx.BaseReactant) Then
-                    Throw New Exception("No base reactant defined for reaction '" + rx.Name + "'.")
+                    Throw New Exception("A base reactant isn't defined for reaction '" + rx.Name + "'.")
                 End If
                 j = 0
                 For Each comp As ReactionStoichBase In rx.Components.Values
@@ -2528,6 +2529,7 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             'an absent phase leaves its outlet empty, with the overall composition of the product
             If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()
@@ -2854,7 +2856,7 @@ Namespace Reactors
             For Each rxid As String In Me.Reactions
                 rx = FlowSheet.Reactions(rxid)
                 If Not rx.Components.ContainsKey(rx.BaseReactant) Then
-                    Throw New Exception("No base reactant defined for reaction '" + rx.Name + "'.")
+                    Throw New Exception("A base reactant isn't defined for reaction '" + rx.Name + "'.")
                 End If
                 j = 0
                 For Each comp As ReactionStoichBase In rx.Components.Values
@@ -3309,6 +3311,7 @@ Namespace Reactors
             H = tmp.CalculatedEnthalpy
             S = tmp.CalculatedEntropy
             Vx = tmp.GetLiquidPhase1MoleFractions
+            GetTotalLiquid(tmp, xl, Vx)
             Vy = tmp.GetVaporPhaseMoleFractions
             'an absent phase leaves its outlet empty, with the overall composition of the product
             If xl = 0.0# OrElse Vx.Sum() <= 0.0# Then Vx = ims.GetOverallComposition()

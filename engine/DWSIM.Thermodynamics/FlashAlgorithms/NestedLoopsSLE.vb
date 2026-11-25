@@ -132,7 +132,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 ids.Add(CompoundProperties(i).Name)
                 Vp(i) = PP.AUX_PVAPi(i, T)
                 If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                    Ki(i) = Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
+                    Ki(i) = Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion) + PP.AUX_SolidFusionCpTerm(CompoundProperties(i), T))
                     If Ki(i) = 0.0# Then Ki(i) = 1.0E+20
                 Else
                     Ki(i) = 1.0E+20
@@ -195,7 +195,7 @@ Namespace PropertyPackages.Auxiliary.FlashAlgorithms
                 For i = 0 To n
                     If Not CompoundProperties(i).IsSalt Then activcoeff(i) = activcoeff(i) * P / Vp(i)
                     If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                        Ki(i) = (1 / activcoeff(i)) * Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
+                        Ki(i) = (1 / activcoeff(i)) * Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion) + PP.AUX_SolidFusionCpTerm(CompoundProperties(i), T))
                         If Ki(i) = 0.0# Then Ki(i) = 1.0E+20
                     Else
                         Ki(i) = 1.0E+20
@@ -359,14 +359,14 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
             Dim cat = FindIon(PP, salt.PositiveIon)
             Dim an = FindIon(PP, salt.NegativeIon)
             If cat Is Nothing Or an Is Nothing Then
-                IObj?.Paragraphs.Add(String.Format("{0}: no solubility product available - the ion compounds ({1}, {2}) were not found, falling back on the melting-point relation.", salt.Name, salt.PositiveIon, salt.NegativeIon))
+                IObj?.Paragraphs.Add(String.Format("{0}: a solubility product isn't available - the ion compounds ({1}, {2}) were not found, falling back on the melting-point relation.", salt.Name, salt.PositiveIon, salt.NegativeIon))
                 Return Double.NaN
             End If
 
             ' A zero formation energy means the database carries no value, not that the species is a
             ' reference state: the one species for which zero is the convention is the proton.
             If Not HasFormationData(salt) OrElse Not HasFormationData(cat) OrElse Not HasFormationData(an) Then
-                IObj?.Paragraphs.Add(String.Format("{0}: no solubility product available - formation properties are missing for one of the three species, falling back on the melting-point relation.", salt.Name))
+                IObj?.Paragraphs.Add(String.Format("{0}: a solubility product isn't available - formation properties are missing for one of the three species, falling back on the melting-point relation.", salt.Name))
                 Return Double.NaN
             End If
 
@@ -490,7 +490,7 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
 
             Dim Vx(n), Vs(n), MaxAct(n), MaxX(n), MaxLiquPhase(n), Tf(n), Hf(n), Tc(n), ActCoeff(n), VnL(n), VnS(n), Vp(n) As Double
             Dim L, L_old, SF, SLP As Double
-            Dim cpl(n), cps(n), dCp(n) As Double
+            Dim dCp(n) As Double
             Dim Vn(n) As String
             Dim constprop As Interfaces.ICompoundConstantProperties
 
@@ -557,12 +557,8 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
             Vn = PP.RET_VNAMES()
             For i = 0 To n
                 constprop = PP.CurrentMaterialStream.Phases(0).Compounds(Vn(i)).ConstantProperties
-                IObj?.SetCurrent
-                cpl(i) = PP.AUX_LIQ_Cpi(constprop, Tf(i))
-                IObj?.SetCurrent
-                cps(i) = PP.AUX_SolidHeatCapacity(constprop, Tf(i))
-                'ignoring heat capacity difference due to issues with DWSIM characterization
-                dCp(i) = 0.0# '(cpl(i) - cps(i)) * constprop.Molar_Weight
+                'liquid minus solid heat capacity at the melting point, J/[mol.K], given with the compound (zero when unknown)
+                dCp(i) = constprop.HeatCapacityDifferenceAtTf
             Next
 
             'Calculate max activities for solubility of solids
@@ -573,7 +569,26 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                 Vp(i) = PP.AUX_PVAPi(i, T)
             Next
 
+            'reference: each compound as a pure liquid at T and P with the same model, so that the activity
+            'coefficient of a compound tends to one as it becomes pure (the vapor pressure correlation and the
+            'equation of state disagree by 15 % for water at -10 C, which moved its freezing point by 16 K)
+            Dim PhiPure(n) As Double
+            For i = 0 To n
+                PhiPure(i) = Vp(i) / P
+                If Vz(i) > 0.0 And Not TypeOf PP Is IdealElectrolytePropertyPackage Then
+                    Dim pure = PP.RET_NullVector()
+                    pure(i) = 1.0
+                    IObj?.SetCurrent
+                    Dim phi = PP.DW_CalcFugCoeff(pure, T, P, State.Liquid)(i)
+                    If phi > 0.0 And Not Double.IsInfinity(phi) And Not Double.IsNaN(phi) Then PhiPure(i) = phi
+                End If
+            Next
+
             IObj?.Paragraphs.Add(String.Format("<h2>Calculations</h2>"))
+
+            'ln of the saturation fractions of the last two passes, for the acceleration of the loop below
+            Dim lnMaxX1 As Double() = Nothing, lnMaxX2 As Double() = Nothing
+            Dim MaxXprev As Double() = Nothing
 
             ecount = 0
 
@@ -588,9 +603,20 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                 If TypeOf PP Is IdealElectrolytePropertyPackage Then
                     ActCoeff = PP.RET_UnitaryVector()
                 Else
-                    ActCoeff = PP.DW_CalcFugCoeff(Vx, T, P, State.Liquid).MultiplyConstY(P).DivideY(Vp)
+                    ActCoeff = PP.DW_CalcFugCoeff(Vx, T, P, State.Liquid).DivideY(PhiPure)
                 End If
                 MaxX = MaxAct.DivideY(ActCoeff)
+
+                ' A compound without a vapor pressure (a biomass pseudo-compound, a sugar from a database that
+                ' doesn't carry the correlation) has a zero fugacity coefficient as a pure liquid and in the
+                ' mixture alike, so its activity coefficient comes out as 0 / 0. It can't be judged by the
+                ' melting relation: it stays in the liquid. Left as it was, the undefined value went into the
+                ' sum that decides whether any liquid is left, and the whole mixture, water included, was
+                ' returned as a solid as soon as another compound passed its saturation.
+                For i = 0 To n
+                    If Double.IsNaN(MaxX(i)) OrElse Double.IsInfinity(MaxX(i)) Then MaxX(i) = 1.0
+                Next
+
                 For i = 0 To n
                     'check if ion
                     constprop = PP.CurrentMaterialStream.Phases(0).Compounds(Vn(i)).ConstantProperties
@@ -604,6 +630,10 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                     End If
                     'Supercritical gases are put to liquid phase
                     If T > Tc(i) Then MaxX(i) = 1.0
+                    'A compound above its melting point can't form its pure solid, however high its activity coefficient: it
+                    'stays in the liquid. Judged with the activity coefficient of the feed composition, ethanol at 1 % in
+                    'paracetamol looked saturated, and the whole mixture, ethanol included, was returned as a solid.
+                    If MaxAct(i) >= 1.0 AndAlso Not constprop.IsSalt Then MaxX(i) = Math.Max(MaxX(i), 1.0)
                     'If compound is in forced solids list, put it in solid phase
                     If PP.ForcedSolids.Contains(Vn(i)) Then MaxX(i) = 0.0
                 Next
@@ -611,10 +641,65 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                 IObj?.Paragraphs.Add(String.Format("Activity coefficients: {0}", ActCoeff.ToMathArrayString))
                 IObj?.Paragraphs.Add(String.Format("Maximum solubilities (mole fractions): {0}", MaxX.ToMathArrayString))
 
+                'The substitution x = a(sat) / gamma(x) contracts by the factor -d ln(gamma)/d ln(x), which approaches one
+                'where the model is close to a liquid-liquid split. Once two successive steps of ln x of the saturated
+                'compounds point the same way with a steady ratio, the remaining geometric series is added at once.
+                'When gamma grows quickly with x (sucrose in water: d ln(gamma)/d ln(x) above one) the steps alternate in
+                'sign and grow, and the substitution diverges; the same extrapolation with the negative ratio
+                '(Aitken) lands between the last two steps, close to the fixed point.
+                Dim lnMaxX0(n) As Double
+                For i = 0 To n
+                    lnMaxX0(i) = If(MaxX(i) > 0.0 AndAlso Vz(i) > MaxX(i), Log(MaxX(i)), Double.NaN)
+                Next
+                Dim slAccelerated As Boolean = False
+                If lnMaxX1 IsNot Nothing AndAlso lnMaxX2 IsNot Nothing Then
+                    Dim s0 = 0.0, s1 = 0.0, dot = 0.0
+                    Dim sameSet As Boolean = True
+                    For i = 0 To n
+                        Dim nans = If(Double.IsNaN(lnMaxX0(i)), 1, 0) + If(Double.IsNaN(lnMaxX1(i)), 1, 0) + If(Double.IsNaN(lnMaxX2(i)), 1, 0)
+                        If nans = 3 Then Continue For
+                        If nans > 0 Then
+                            sameSet = False
+                            Exit For
+                        End If
+                        s0 += (lnMaxX0(i) - lnMaxX1(i)) ^ 2
+                        s1 += (lnMaxX1(i) - lnMaxX2(i)) ^ 2
+                        dot += (lnMaxX0(i) - lnMaxX1(i)) * (lnMaxX1(i) - lnMaxX2(i))
+                    Next
+                    If sameSet AndAlso s1 > 0.0 AndAlso s0 > 0.0000000000000001 AndAlso dot > 0.0 Then
+                        Dim ratio = Sqrt(s0 / s1)
+                        If ratio > 0.5 AndAlso ratio < 0.999 Then
+                            Dim fac = Math.Min(ratio / (1.0 - ratio), 50.0)
+                            For i = 0 To n
+                                If Not Double.IsNaN(lnMaxX0(i)) Then MaxX(i) = Exp(lnMaxX0(i) + fac * (lnMaxX0(i) - lnMaxX1(i)))
+                            Next
+                            slAccelerated = True
+                        End If
+                    End If
+                    If sameSet AndAlso s1 > 0.0 AndAlso s0 > 0.0000000000000001 AndAlso dot < 0.0 Then
+                        Dim ratio = Sqrt(s0 / s1)
+                        If ratio > 0.3 Then
+                            Dim fac = -ratio / (1.0 + ratio)
+                            For i = 0 To n
+                                If Not Double.IsNaN(lnMaxX0(i)) Then MaxX(i) = Exp(lnMaxX0(i) + fac * (lnMaxX0(i) - lnMaxX1(i)))
+                            Next
+                            slAccelerated = True
+                        End If
+                    End If
+                End If
+                If slAccelerated Then
+                    lnMaxX1 = Nothing
+                    lnMaxX2 = Nothing
+                Else
+                    lnMaxX2 = lnMaxX1
+                    lnMaxX1 = lnMaxX0
+                End If
+
                 MaxLiquPhase = Vz.DivideY(MaxX)
                 SF = 0
                 For i = 0 To n
-                    If MaxLiquPhase(i) > 0.0001 Then
+                    'a trace of a compound that can't form a solid still needs a liquid to hold it
+                    If MaxLiquPhase(i) > 0.0001 OrElse (Vz(i) > 0.0 AndAlso MaxX(i) >= 1.0) Then
                         SF += MaxX(i)
                     End If
                 Next
@@ -645,6 +730,31 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                 SF = Vx.SumY 'Sum mole fractions of components fixed by max solubility
                 If 1 - SLP < 0.00000001 Then SLP = 1
                 L = SLP / (1 - SF)
+                'After the first pass the feed is known to be above saturation in the compounds fixed there. A later step
+                'that puts all of them back below the feed comes from a substitution that alternates and overshoots, not
+                'from a solid that dissolved: pull the step back toward the last saturated fractions until it is two-phase.
+                Dim damp As Integer = 0
+                Do While L >= 1 AndAlso ecount > 1 AndAlso MaxXprev IsNot Nothing AndAlso damp < 40
+                    damp += 1
+                    For i = 0 To n
+                        If Vz(i) > MaxXprev(i) AndAlso MaxX(i) > 0.0 AndAlso MaxXprev(i) > 0.0 Then MaxX(i) = Sqrt(MaxX(i) * MaxXprev(i))
+                    Next
+                    lnMaxX1 = Nothing
+                    lnMaxX2 = Nothing
+                    Vx = PP.RET_NullVector
+                    VnL = PP.RET_NullVector
+                    For i = 0 To n
+                        If Vz(i) > MaxX(i) Then
+                            Vx(i) = MaxX(i)
+                        Else
+                            VnL(i) = Vz(i)
+                        End If
+                    Next
+                    SLP = VnL.SumY
+                    SF = Vx.SumY
+                    If 1 - SLP < 0.00000001 Then SLP = 1
+                    L = SLP / (1 - SF)
+                Loop
 
                 If L >= 1 Then
                     'all components are below max solubility, only liquid left
@@ -679,6 +789,7 @@ out:        Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, 
                 IObj?.Paragraphs.Add(String.Format("Current estimates for liquid phase mole fraction: {0}", L))
                 IObj?.Paragraphs.Add(String.Format("Current estimates for solid phase mole fraction: {0}", 1 - L))
 
+                MaxXprev = MaxX.Clone()
                 If ecount > maxit_e Then Throw New Exception("SL Flash: max iterations reached")
 
             Loop Until Abs(L - L_old) < MaxError
@@ -798,6 +909,9 @@ out:        d2 = Date.Now
             IObj?.Paragraphs.Add(String.Format("Initial estimate for V: {0}", V))
             IObj?.Paragraphs.Add(String.Format("Initial estimate for L: {0}", L))
             IObj?.Paragraphs.Add(String.Format("Initial estimate for S: {0}", S))
+
+            'vapor amounts of the last two passes, for the acceleration of the outer loop
+            Dim vap1 As Double() = Nothing, vap2 As Double() = Nothing
 
             'do flash calculation iterations
             Do
@@ -953,8 +1067,11 @@ out:        d2 = Date.Now
                 Vy = Vy.NormalizeY
 
                 Dim convergiu As Integer = 0
-                Dim F, dF, e1, e2, e3 As Double
+                Dim e1, e2, e3 As Double
                 ecount = 0
+
+                'ln K of the last two passes, for the acceleration of the substitution below
+                Dim lnK1 As Double() = Nothing, lnK2 As Double() = Nothing
 
                 Do
 
@@ -973,6 +1090,92 @@ out:        d2 = Date.Now
 
                     IObj3?.Paragraphs.Add(String.Format("K values where updated. Current values: {0}", Ki.ToMathArrayString))
 
+                    'Rachford-Rice error of the current vapor fraction with these K-values: zero at equilibrium
+                    Dim Ftrue = 0.0
+                    For i = 0 To n
+                        If Vz(i) > 0 Then Ftrue += Vz(i) * (Ki(i) - 1) / (1 + V * (Ki(i) - 1))
+                    Next
+
+                    'The K-values are found by substitution: K from the phase compositions, the compositions from K. Each pass
+                    'changes ln K by a factor of the previous change, set by how fast the activity of the volatile compounds
+                    'follows the liquid composition. In a concentrated solution of a nonvolatile solute (a sugar syrup) the
+                    'water activity falls quickly as the water leaves: the factor approaches minus one, and the passes
+                    'alternate around the answer for hundreds of iterations, or move away from it. Once two successive steps
+                    'of ln K point the same way, or opposite ways, with a steady ratio, the rest of the series is added at once.
+                    Dim lnK0(n) As Double
+                    For i = 0 To n
+                        lnK0(i) = If(Vz(i) > 0.0 AndAlso Ki(i) > 0.0, Log(Ki(i)), 0.0)
+                    Next
+                    Dim kAccelerated As Boolean = False
+                    If lnK1 IsNot Nothing AndAlso lnK2 IsNot Nothing Then
+                        Dim s0 = 0.0, s1 = 0.0, dot = 0.0
+                        For i = 0 To n
+                            s0 += (lnK0(i) - lnK1(i)) ^ 2
+                            s1 += (lnK1(i) - lnK2(i)) ^ 2
+                            dot += (lnK0(i) - lnK1(i)) * (lnK1(i) - lnK2(i))
+                        Next
+                        If s1 > 0.0 AndAlso s0 > 1.0E-20 Then
+                            Dim ratio = Sqrt(s0 / s1)
+                            Dim cosine = dot / Sqrt(s0 * s1)
+                            Dim fac = 0.0
+                            If cosine > 0.9 AndAlso ratio > 0.5 AndAlso ratio < 0.999 Then fac = Math.Min(ratio / (1.0 - ratio), 50.0)
+                            If cosine < -0.9 AndAlso ratio > 0.3 Then fac = -ratio / (1.0 + ratio)
+                            If fac <> 0.0 Then
+                                For i = 0 To n
+                                    If Vz(i) > 0.0 AndAlso Ki(i) > 0.0 Then Ki(i) = Exp(lnK0(i) + fac * (lnK0(i) - lnK1(i)))
+                                Next
+                                kAccelerated = True
+                            End If
+                        End If
+                    End If
+                    If kAccelerated Then
+                        lnK1 = Nothing
+                        lnK2 = Nothing
+                    Else
+                        lnK2 = lnK1
+                        lnK1 = lnK0
+                    End If
+
+                    'the vapor fraction that solves the Rachford-Rice equation for these K-values; the function at both ends
+                    'of the interval tells whether the root is inside it
+                    Vant = V
+                    Dim F0 = 0.0, F1 = 0.0
+                    For i = 0 To n
+                        If Vz(i) > 0 Then
+                            F0 += Vz(i) * (Ki(i) - 1)
+                            F1 += Vz(i) * (Ki(i) - 1) / Ki(i)
+                        End If
+                    Next
+                    If F0 <= 0.0 Then
+                        V = 0.0
+                    ElseIf F1 >= 0.0 Then
+                        V = 1.0
+                    Else
+                        'the function falls with V: positive at zero, negative at one
+                        Dim Va = 0.0, Vb = 1.0
+                        If V <= 0.0 OrElse V >= 1.0 Then V = 0.5
+                        For it As Integer = 1 To 100
+                            Dim Fv = 0.0, dFv = 0.0
+                            For i = 0 To n
+                                If Vz(i) > 0 Then
+                                    Fv += Vz(i) * (Ki(i) - 1) / (1 + V * (Ki(i) - 1))
+                                    dFv -= Vz(i) * (Ki(i) - 1) ^ 2 / (1 + V * (Ki(i) - 1)) ^ 2
+                                End If
+                            Next
+                            If Fv > 0.0 Then Va = V Else Vb = V
+                            If Math.Abs(Fv) < 1.0E-15 Then Exit For
+                            Dim Vn = V - Fv / dFv
+                            If Double.IsNaN(Vn) OrElse Vn <= Va OrElse Vn >= Vb Then Vn = (Va + Vb) / 2
+                            If Math.Abs(Vn - V) < 1.0E-15 Then
+                                V = Vn
+                                Exit For
+                            End If
+                            V = Vn
+                        Next
+                    End If
+
+                    IObj3?.Paragraphs.Add(String.Format("Updated Vapor Fraction (<math_inline>\beta</math_inline>) value: {0}", V))
+
                     Vy_ant = Vy.Clone
                     Vx_ant = Vx.Clone
 
@@ -990,61 +1193,21 @@ out:        d2 = Date.Now
 
                     e1 = Vx.SubtractY(Vx_ant).AbsSumY
                     e2 = Vy.SubtractY(Vy_ant).AbsSumY
-
-                    e3 = (V - Vant)
+                    e3 = V - Vant
 
                     IObj3?.Paragraphs.Add(String.Format("Current Vapor Fraction (<math_inline>\beta</math_inline>) error: {0}", e3))
 
-                    If Double.IsNaN(e1 + e2) Then
+                    If Double.IsNaN(e1 + e2) Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashError"))
+                    If Double.IsNaN(V) Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashTPVapFracError"))
 
-                        Throw New Exception(Calculator.GetLocalString("PropPack_FlashError"))
-
-                    ElseIf Math.Abs(e3) < 0.0000000001 And ecount > 0 Then
-
-                        convergiu = 1
-
-                        Exit Do
-
-                    Else
-
-                        Vant = V
-
-                        F = 0.0#
-                        dF = 0.0#
-                        i = 0
-                        Do
-                            If Vz(i) > 0 Then
-                                F = F + Vz(i) * (Ki(i) - 1) / (1 + V * (Ki(i) - 1))
-                                dF = dF - Vz(i) * (Ki(i) - 1) ^ 2 / (1 + V * (Ki(i) - 1)) ^ 2
-                            End If
-                            i = i + 1
-                        Loop Until i = n + 1
-
-                        IObj3?.Paragraphs.Add(String.Format("Current value of the Rachford-Rice error function: {0}", F))
-
-                        If Abs(F) < etol / 100 Then Exit Do
-
-                        Dim dfac = (ecount + 1) * 0.1
-                        If dfac > 1.0 Then dfac = 1.0
-                        If -F / dF * dfac + Vant > 1.0 Or -F / dF * dfac + Vant < 0.0 Then
-                            dfac /= 50
-                        End If
-
-                        V = -F / dF * dfac + Vant
-
-                    IObj3?.Paragraphs.Add(String.Format("Updated Vapor Fraction (<math_inline>\beta</math_inline>) value: {0}", V))
-
-                    End If
-
-                    If V < 0.0# Then V = 0.0#
-                    If V > 1.0# Then V = 1.0#
+                    'converged when the vapor fraction stops moving with K-values from the current compositions
+                    If ecount > 0 AndAlso Not kAccelerated AndAlso Math.Abs(e3) < 0.0000000001 Then convergiu = 1
 
                     L = 1 - V
 
                     ecount += 1
 
-                    If Double.IsNaN(V) Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashTPVapFracError"))
-                    If ecount > maxit_e Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt2"))
+                    If ecount > maxit_e AndAlso convergiu = 0 Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt2"))
 
                     WriteDebugInfo("PT Flash [NL-SLE]: Iteration #" & ecount & ", VF = " & V)
 
@@ -1061,6 +1224,46 @@ out:            'calculate global phase fractions
                 If gcount > maxit_e Then Throw New Exception(Calculator.GetLocalString("PropPack_FlashMaxIt2"))
 
 out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) < 0.0000005) And (Math.Abs(GS_old - S) < 0.0000005) Then GlobalConv = True
+
+                'With solid, liquid and vapor present the passes above can contract by only a few percent each (the vapor
+                'that leaves concentrates the liquid, which precipitates more solid). Once two successive steps of the vapor
+                'amounts point the same way with a steady ratio, the remaining geometric series is added at once.
+                If Not GlobalConv AndAlso L > 0.0 AndAlso V > 0.0 AndAlso S > 0.0 Then
+                    Dim vap0 = Vy.MultiplyConstY(V)
+                    Dim accelerated As Boolean = False
+                    If vap1 IsNot Nothing AndAlso vap2 IsNot Nothing Then
+                        Dim dv0 = vap0.SubtractY(vap1), dv1 = vap1.SubtractY(vap2)
+                        Dim nv0 = Math.Sqrt(dv0.MultiplyY(dv0).Sum), nv1 = Math.Sqrt(dv1.MultiplyY(dv1).Sum)
+                        If nv1 > 0.0 AndAlso nv0 > 0.000001 AndAlso dv0.MultiplyY(dv1).Sum > 0.0 AndAlso nv0 / nv1 > 0.5 AndAlso nv0 / nv1 < 0.999 Then
+                            Dim ratio = nv0 / nv1
+                            Dim vnew = vap0.AddY(dv0.MultiplyConstY(Math.Min(ratio / (1.0 - ratio), 50.0)))
+                            For i = 0 To n
+                                If vnew(i) < 0.0 Then vnew(i) = 0.0
+                                If vnew(i) > Vz0(i) Then vnew(i) = Vz0(i)
+                            Next
+                            Dim Vtot = vnew.Sum
+                            If Vtot > 0.0 AndAlso Vtot < 1.0 Then
+                                'the condensed part goes back to the solid-liquid flash as a single liquid
+                                V = Vtot
+                                Vy = vnew.NormalizeY
+                                Vx = Vz0.SubtractY(vnew).NormalizeY
+                                L = 1.0 - V
+                                S = 0.0
+                                accelerated = True
+                            End If
+                        End If
+                    End If
+                    If accelerated Then
+                        vap1 = Nothing
+                        vap2 = Nothing
+                    Else
+                        vap2 = vap1
+                        vap1 = vap0
+                    End If
+                Else
+                    vap1 = Nothing
+                    vap2 = Nothing
+                End If
 
                 IObj2?.Paragraphs.Add(String.Format("Current estimates for liquid phase composition: {0}", Vx.ToMathArrayString))
                 IObj2?.Paragraphs.Add(String.Format("Current estimates for solid phase composition: {0}", Vs.ToMathArrayString))
@@ -1092,7 +1295,7 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
 
             WriteDebugInfo("PT Flash [NL-SLE]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds)
 
-            Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, S, Vs}
+            Return New Object() {L, V, Vx, Vy, ecount, 0.0#, PP.RET_NullVector, S, Vs, Ki}
 
         End Function
 
@@ -1314,6 +1517,8 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
                 For i = 0 To n
                     T += Vz(i) * PP.AUX_TSATi(P, i)
                 Next
+                ' temperature and K values from the model: see NestedLoops.SingleCompoundSaturationT
+                If Vz.Length > 1 Then T = NestedLoops.SingleCompoundSaturationT(PP, Vz, P, V, T, Ki, Vx, Vy, Nothing)
                 Return New Object() {L, V, Vx, Vy, T, 0, Ki, 0.0#, PP.RET_NullVector, 0.0#, PP.RET_NullVector}
             End If
 
@@ -1619,233 +1824,57 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
 
         Public Function Flash_PSF_SS(ByVal Vz As Double(), ByVal P As Double, ByVal V As Double, ByVal Tref As Double, ByVal PP As PropertyPackages.PropertyPackage, Optional ByVal ReuseKI As Boolean = False, Optional ByVal PrevKi As Double() = Nothing) As Object
 
+            'V is the solid mole fraction. The temperature is found by bisection on the PT flash, as in the eutectic
+            'mode, so the phases returned close the material balance at any solid fraction.
+
             Dim i, n, ecount As Integer
             Dim d1, d2 As Date, dt As TimeSpan
-            Dim soma_x, soma_s As Double
-            Dim L, S, Lf, Sf, T, Tf As Double
-            Dim ids As New List(Of String)
+            Dim T, T0, T1, Sf As Double
+            Dim result As Object
 
             d1 = Date.Now
 
-            etol = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_External_Loop_Tolerance).ToDoubleFromInvariant
-            maxit_e = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_External_Iterations)
             itol = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Internal_Loop_Tolerance).ToDoubleFromInvariant
-            maxit_i = Me.FlashSettings(Interfaces.Enums.FlashSetting.PTFlash_Maximum_Number_Of_Internal_Iterations)
 
             n = Vz.Length - 1
 
-            PP = PP
-            L = V
-            Lf = L
-            S = 1 - L
-            Lf = 1 - Sf
-            Tf = T
-
-            Dim Vn(n) As String, Vx(n), Vs(n), Vx_ant(1), Vs_ant(1), Vp(n), Vp2(n), Ki(n), Ki_ant(n), fi(n), activcoeff(n), activcoeff2(n) As Double
-            Dim Vt(n), VTF(n), Tmin, Tmax, dFdT As Double
-
-            Vn = PP.RET_VNAMES()
-            VTF = PP.RET_VTF()
-            fi = Vz.Clone
-
-            If Tref = 0.0# Then
-
-                i = 0
-                Tref = 0
-                Do
-                    If L = 0 Then
-                        Tref = MathEx.Common.Min(VTF)
-                    Else
-                        Tref += Vz(i) * VTF(i)
-                    End If
-                    Tmin += 0.1 * Vz(i) * VTF(i)
-                    Tmax += 2.0 * Vz(i) * VTF(i)
-                    i += 1
-                Loop Until i = n + 1
-
-            Else
-
-                Tmin = Tref - 50
-                Tmax = Tref + 50
-
+            If PP.AUX_IS_SINGLECOMP(Vz) Then
+                T = 0
+                For i = 0 To n
+                    T += Vz(i) * Me.CompoundProperties(i).TemperatureOfFusion
+                Next
+                result = Me.Flash_PT_SS(Vz, P, T, PP)
+                Return New Object() {result(0), result(1), result(2), result(3), T, 0, result(9), 0.0#, PP.RET_NullVector, result(7), result(8)}
             End If
 
-            T = Tref
-
-            'Calculate Ki`s
-
-            i = 0
-            Do
-                ids.Add(CompoundProperties(i).Name)
-                Vp(i) = PP.AUX_PVAPi(i, T)
-                If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                    Ki(i) = Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
-                Else
-                    Ki(i) = 1.0E+20
+            'bracket from the melting points of the compounds that have one
+            Dim VTF As Double() = PP.RET_VTF()
+            T0 = Double.MaxValue
+            T1 = 0.0
+            For i = 0 To n
+                If VTF(i) > 0.0 Then
+                    If VTF(i) < T0 Then T0 = VTF(i)
+                    If VTF(i) > T1 Then T1 = VTF(i)
                 End If
-                i += 1
-            Loop Until i = n + 1
-
-            i = 0
-            Do
-                If Vz(i) <> 0.0# Then
-                    Vx(i) = Vz(i) * Ki(i) / ((Ki(i) - 1) * L + 1)
-                    If Ki(i) <> 0 Then Vs(i) = Vx(i) / Ki(i) Else Vs(i) = Vz(i)
-                    If Vs(i) < 0 Then Vs(i) = 0
-                    If Vx(i) < 0 Then Vx(i) = 0
-                Else
-                    Vs(i) = 0
-                    Vx(i) = 0
-                End If
-                i += 1
-            Loop Until i = n + 1
-
-            i = 0
-            soma_x = 0.0#
-            soma_s = 0.0#
-            Do
-                soma_x = soma_x + Vx(i)
-                soma_s = soma_s + Vs(i)
-                i = i + 1
-            Loop Until i = n + 1
-            i = 0
-            Do
-                Vx(i) = Vx(i) / soma_x
-                Vs(i) = Vs(i) / soma_s
-                i = i + 1
-            Loop Until i = n + 1
-
-            Dim marcador3, marcador2, marcador As Integer
-            'judge the inner loop on the first compound present: one at z = 0 stays at zero and passes the test at once
-            Dim ic As Integer = Math.Max(Array.FindIndex(Vz, Function(zi) zi <> 0.0), 0)
-            Dim stmp4_ant, stmp4, Tant, fval As Double
-            Dim chk As Boolean = False
+            Next
+            If T1 = 0.0 Then Throw New Exception("PSF Flash [NL-SLE]: the compounds do not have melting point data.")
+            T0 = T0 * 0.6
+            T1 = T1 + 10
 
             ecount = 0
             Do
-
-                marcador3 = 0
-
-                Dim cont_int = 0
-                Do
-
-                    Ki_ant = Ki.Clone
-
-                    activcoeff = PP.DW_CalcFugCoeff(Vx, T, P, State.Liquid)
-
-                    For i = 0 To n
-                        Vp(i) = PP.AUX_PVAPi(i, T)
-                        activcoeff(i) = activcoeff(i) * P / Vp(i)
-                        If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                            Ki(i) = (1 / activcoeff(i)) * Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
-                        Else
-                            Ki(i) = 1.0E+20
-                        End If
-                    Next
-
-                    marcador = 0
-                    If stmp4_ant <> 0 Then
-                        marcador = 1
-                    End If
-                    stmp4_ant = stmp4
-
-                    If L = 0 Then
-                        i = 0
-                        stmp4 = 0
-                        Do
-                            stmp4 = stmp4 + Ki(i) * Vs(i)
-                            i = i + 1
-                        Loop Until i = n + 1
-                    Else
-                        i = 0
-                        stmp4 = 0
-                        Do
-                            stmp4 = stmp4 + Vx(i) / Ki(i)
-                            i = i + 1
-                        Loop Until i = n + 1
-                    End If
-
-                    If L = 0 Then
-                        i = 0
-                        Do
-                            Vx_ant(i) = Vx(i)
-                            Vx(i) = Ki(i) * Vs(i) / stmp4
-                            i = i + 1
-                        Loop Until i = n + 1
-                    Else
-                        i = 0
-                        Do
-                            Vs_ant(i) = Vs(i)
-                            Vs(i) = (Vx(i) / Ki(i)) / stmp4
-                            i = i + 1
-                        Loop Until i = n + 1
-                    End If
-
-                    marcador2 = 0
-                    If marcador = 1 Then
-                        If L = 0 Then
-                            If Math.Abs(Vx(ic) - Vx_ant(ic)) < itol Then
-                                marcador2 = 1
-                            End If
-                        Else
-                            If Math.Abs(Vs(ic) - Vs_ant(ic)) < itol Then
-                                marcador2 = 1
-                            End If
-                        End If
-                    End If
-
-                    cont_int = cont_int + 1
-
-                Loop Until marcador2 = 1 Or Double.IsNaN(stmp4) Or cont_int > maxit_i
-
-                Dim K1(n), K2(n), dKdT(n) As Double
-
-                activcoeff = PP.DW_CalcFugCoeff(Vx, T, P, State.Liquid)
-                activcoeff2 = PP.DW_CalcFugCoeff(Vx, T + 0.01, P, State.Liquid)
-
-                For i = 0 To n
-                    If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                        Vp(i) = PP.AUX_PVAPi(i, T)
-                        activcoeff(i) = activcoeff(i) * P / Vp(i)
-                        K1(i) = (1 / activcoeff(i)) * Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
-                        Vp2(i) = PP.AUX_PVAPi(i, T + 0.01)
-                        activcoeff2(i) = activcoeff2(i) * P / Vp2(i)
-                        K2(i) = (1 / activcoeff2(i)) * Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * (T + 0.01)) * (1 - (T + 0.01) / CompoundProperties(i).TemperatureOfFusion))
-                    Else
-                        K1(i) = 1.0E+20
-                        K2(i) = 1.0E+20
-                    End If
-                Next
-
-                For i = 0 To n
-                    dKdT(i) = (K2(i) - K1(i)) / 0.01
-                Next
-
-                fval = stmp4 - 1
-
+                T = (T0 + T1) / 2
+                Sf = Flash_PT_SS(Vz, P, T, PP)(7)
+                If SolidFractionAboveTarget(Sf, V) Then
+                    T0 = T
+                Else
+                    T1 = T
+                End If
                 ecount += 1
-
-                i = 0
-                dFdT = 0
-                Do
-                    If L = 0.0# Then
-                        dFdT = dFdT + Vs(i) * dKdT(i)
-                    Else
-                        dFdT = dFdT - Vx(i) / (Ki(i) ^ 2) * dKdT(i)
-                    End If
-                    i = i + 1
-                Loop Until i = n + 1
-
-                Tant = T
-                T = T - fval / dFdT
-                'If T < Tmin Then T = Tmin
-                'If T > Tmax Then T = Tmax
-
-                WriteDebugInfo("PV Flash [NL-SLE]: Iteration #" & ecount & ", T = " & T & ", LF = " & L)
-
                 If Not PP.CurrentMaterialStream.Flowsheet Is Nothing Then PP.CurrentMaterialStream.Flowsheet.CheckStatus()
+            Loop Until (T1 - T0) <= itol
 
-            Loop Until Math.Abs(T - Tant) < 0.01 Or Double.IsNaN(T) = True Or ecount > maxit_e Or Double.IsNaN(T) Or Double.IsInfinity(T)
+            result = Me.Flash_PT_SS(Vz, P, T, PP)
 
             d2 = Date.Now
 
@@ -1853,8 +1882,22 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
 
             WriteDebugInfo("PSF Flash [NL-SLE]: Converged in " & ecount & " iterations. Time taken: " & dt.TotalMilliseconds & " ms.")
 
-            Return New Object() {L, V, Vx, PP.RET_NullVector, T, ecount, Ki, 0.0#, PP.RET_NullVector, S, Vs}
+            Return New Object() {result(0), result(1), result(2), result(3), T, ecount, result(9), 0.0#, PP.RET_NullVector, result(7), result(8)}
 
+        End Function
+
+        ''' <summary>
+        ''' Bisection test of the solid fraction flash: true when the temperature has to go up.
+        ''' </summary>
+        ''' <remarks>
+        ''' A fully solid specification asks for the highest temperature at which the mixture is still all solid. The
+        ''' solid fraction never exceeds one, so the plain comparison would send the search to the lower bound.
+        ''' </remarks>
+        Private Shared Function SolidFractionAboveTarget(Sf As Double, V As Double) As Boolean
+
+            If V >= 1.0 Then Return Sf >= 1.0 - 0.000000001
+
+            Return Sf > V
 
         End Function
 
@@ -1919,7 +1962,7 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
                 ids.Add(CompoundProperties(i).Name)
                 Vp(i) = PP.AUX_PVAPi(i, T)
                 If CompoundProperties(i).TemperatureOfFusion <> 0.0# Then
-                    Ki(i) = Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion))
+                    Ki(i) = Exp(-CompoundProperties(i).EnthalpyOfFusionAtTf / (0.00831447 * T) * (1 - T / CompoundProperties(i).TemperatureOfFusion) + PP.AUX_SolidFusionCpTerm(CompoundProperties(i), T))
                 Else
                     Ki(i) = 1.0E+20
                 End If
@@ -1975,7 +2018,7 @@ out2:           If (Math.Abs(GL_old - L) < 0.0000005) And (Math.Abs(GV_old - V) 
                 T = (T0 + T1) / 2
                 Sf = Flash_PT(Vz, P, T, PP)(7)
 
-                If Sf > V Then
+                If SolidFractionAboveTarget(Sf, V) Then
                     T0 = T
                     SF0 = Sf
                 Else

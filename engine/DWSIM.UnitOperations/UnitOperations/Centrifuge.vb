@@ -52,7 +52,7 @@ Namespace UnitOperations
         Inherits UnitOperations.UnitOpBaseClass
 
         Implements IExternalUnitOperation
-        ''' <summary>Gets a value that marks this unit operation as a bioprocess unit. The object palettes read this flag by reflection to list it in the Biochemical group.</summary>
+        ''' <summary>Gets a value that marks this unit operation as a bioprocess unit. When the unit operation doesn't declare its industries, the object palettes read this flag and list it under the Bioprocess industry.</summary>
         Public ReadOnly Property IsBio As Boolean = True
 
         ''' <summary>Gets or sets the simulation object class category (always <c>Separators</c>).</summary>
@@ -369,7 +369,7 @@ Namespace UnitOperations
             Dim Q = liquid.volumetric_flow.GetValueOrDefault
             If Not Q > 0.0 AndAlso rhoL > 0.0 Then Q = liquid.massflow.GetValueOrDefault / rhoL
             If Not (rhoL > 0.0 AndAlso muL > 0.0 AndAlso Q > 0.0) Then
-                Throw New Exception("Centrifuge (Sigma theory): the feed has no liquid phase to take the throughput, density and viscosity from.")
+                Throw New Exception("Centrifuge (Sigma theory): the feed doesn't have a liquid phase to take the throughput, density and viscosity from.")
             End If
 
             Dim sigma = SigmaAtBowlSpeed()

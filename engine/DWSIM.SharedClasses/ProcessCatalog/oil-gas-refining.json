@@ -1,0 +1,1148 @@
+{
+  "industry": "Oil, Gas and Refining",
+  "processes": [
+    {
+      "id": "propane-refrigeration",
+      "name": "Propane refrigeration cycle",
+      "description": "A single-stage propane loop: the compressor raises the vapor to the condensing pressure, the condenser takes it to liquid, the valve lets it down, and the evaporator takes the process heat at about -20 C.",
+      "processType": "RefrigerationCycle",
+      "compounds": [
+        "Propane"
+      ],
+      "keyCompounds": [
+        "Propane"
+      ],
+      "propertyPackage": {
+        "name": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "S-1",
+            "type": "MaterialStream",
+            "temperature": 253.15,
+            "pressure": 200000,
+            "massFlow": 1,
+            "composition": {
+              "Propane": 1
+            }
+          },
+          {
+            "tag": "K-100",
+            "type": "Compressor",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "POut": 1600000,
+              "AdiabaticEfficiency": 75
+            }
+          },
+          {
+            "tag": "W-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-2",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-100",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 313.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-3",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "VLV-100",
+            "type": "Valve",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "OutletPressure": 200000
+            }
+          },
+          {
+            "tag": "S-4",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-101",
+            "type": "Heater",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 253.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-101",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-5",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "REC-1",
+            "type": "OT_Recycle"
+          }
+        ],
+        "connections": [
+          {
+            "from": "S-1",
+            "to": "K-100"
+          },
+          {
+            "from": "W-100",
+            "to": "K-100"
+          },
+          {
+            "from": "K-100",
+            "to": "S-2"
+          },
+          {
+            "from": "S-2",
+            "to": "E-100"
+          },
+          {
+            "from": "E-100",
+            "to": "S-3"
+          },
+          {
+            "from": "E-100",
+            "to": "Q-100"
+          },
+          {
+            "from": "S-3",
+            "to": "VLV-100"
+          },
+          {
+            "from": "VLV-100",
+            "to": "S-4"
+          },
+          {
+            "from": "S-4",
+            "to": "E-101"
+          },
+          {
+            "from": "Q-101",
+            "to": "E-101"
+          },
+          {
+            "from": "E-101",
+            "to": "S-5"
+          },
+          {
+            "from": "S-5",
+            "to": "REC-1"
+          },
+          {
+            "from": "REC-1",
+            "to": "S-1"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Refrigeration cycle (tutorial)",
+          "sample": "Tutorial 08 - Refrigeration Cycle.dwxmz"
+        },
+        {
+          "title": "Propane refrigeration cycle",
+          "case": "heat-integration-utilities/propane-refrigeration-cycle"
+        }
+      ]
+    },
+    {
+      "id": "teg-dehydration",
+      "name": "Natural gas dehydration with TEG",
+      "description": "Water-saturated natural gas contacted with lean triethylene glycol in an absorber, which takes the water out of the gas so that it meets the pipeline dew point. The rich glycol leaves at the bottom for regeneration.",
+      "processType": "ChemicalSeparation",
+      "compounds": [
+        "Methane",
+        "Ethane",
+        "Propane",
+        "Carbon dioxide",
+        "Nitrogen",
+        "Water",
+        "Triethylene glycol"
+      ],
+      "keyCompounds": [
+        "Water",
+        "Triethylene glycol"
+      ],
+      "products": [
+        "Methane"
+      ],
+      "propertyPackage": {
+        "name": "Glycol (NRTL)",
+        "fallback": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "WET GAS",
+            "type": "MaterialStream",
+            "temperature": 303.15,
+            "pressure": 7000000,
+            "massFlow": 20,
+            "composition": {
+              "Methane": 0.88,
+              "Ethane": 0.06,
+              "Propane": 0.02,
+              "Carbon dioxide": 0.02,
+              "Nitrogen": 0.0185,
+              "Water": 0.0015
+            }
+          },
+          {
+            "tag": "LEAN TEG",
+            "type": "MaterialStream",
+            "temperature": 308.15,
+            "pressure": 7000000,
+            "massFlow": 0.4,
+            "composition": {
+              "Triethylene glycol": 0.99,
+              "Water": 0.01
+            },
+            "compositionBasis": "mass"
+          },
+          {
+            "tag": "T-100",
+            "type": "AbsorptionColumn",
+            "calls": [
+              {
+                "method": "SetNumberOfStages",
+                "args": [
+                  6
+                ]
+              },
+              {
+                "method": "SetTopStagePressure",
+                "args": [
+                  6950000
+                ]
+              },
+              {
+                "method": "SetBottomStagePressure",
+                "args": [
+                  7000000
+                ]
+              },
+              {
+                "method": "ConnectFeed",
+                "args": [
+                  "@LEAN TEG",
+                  0
+                ]
+              },
+              {
+                "method": "ConnectFeed",
+                "args": [
+                  "@WET GAS",
+                  5
+                ]
+              },
+              {
+                "method": "ConnectTopProduct",
+                "args": [
+                  "@DRY GAS"
+                ]
+              },
+              {
+                "method": "ConnectBottoms",
+                "args": [
+                  "@RICH TEG"
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "DRY GAS",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "RICH TEG",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": []
+      },
+      "examples": [
+        {
+          "title": "Natural gas dew point control",
+          "case": "gas-processing/natural-gas-dew-point-control"
+        },
+        {
+          "title": "Natural gas water saturator",
+          "sample": "Natural Gas Water Saturator.dwxmz"
+        }
+      ]
+    },
+    {
+      "id": "ngl-fractionation",
+      "name": "NGL fractionation",
+      "description": "A natural gas liquids stream split in a deethanizer, which takes the ethane overhead, and a depropanizer, which makes propane at the top and a butanes and gasoline cut at the bottom.",
+      "processType": "PhysicalSeparation",
+      "compounds": [
+        "Ethane",
+        "Propane",
+        "Isobutane",
+        "N-butane",
+        "N-pentane"
+      ],
+      "keyCompounds": [
+        "Ethane",
+        "Propane"
+      ],
+      "products": [
+        "Ethane",
+        "Propane"
+      ],
+      "propertyPackage": {
+        "name": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "NGL",
+            "type": "MaterialStream",
+            "temperature": 310.15,
+            "pressure": 2900000,
+            "massFlow": 10,
+            "composition": {
+              "Ethane": 0.15,
+              "Propane": 0.35,
+              "Isobutane": 0.12,
+              "N-butane": 0.18,
+              "N-pentane": 0.2
+            }
+          },
+          {
+            "tag": "T-100",
+            "type": "DistillationColumn",
+            "calls": [
+              {
+                "method": "SetNumberOfStages",
+                "args": [
+                  20
+                ]
+              },
+              {
+                "method": "SetTopStagePressure",
+                "args": [
+                  2750000
+                ]
+              },
+              {
+                "method": "SetBottomStagePressure",
+                "args": [
+                  2800000
+                ]
+              },
+              {
+                "method": "ConnectFeed",
+                "args": [
+                  "@NGL",
+                  9
+                ]
+              },
+              {
+                "method": "ConnectDistillate",
+                "args": [
+                  "@ETHANE"
+                ]
+              },
+              {
+                "method": "ConnectBottoms",
+                "args": [
+                  "@C3+"
+                ]
+              },
+              {
+                "method": "ConnectCondenserDuty",
+                "args": [
+                  "@Q-100"
+                ]
+              },
+              {
+                "method": "ConnectReboilerDuty",
+                "args": [
+                  "@Q-101"
+                ]
+              },
+              {
+                "method": "SetCondenserSpec",
+                "args": [
+                  "Reflux_Ratio",
+                  3,
+                  ""
+                ]
+              },
+              {
+                "method": "SetReboilerSpec",
+                "args": [
+                  "Product_Molar_Flow_Rate",
+                  164.4,
+                  "mol/s"
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "ETHANE",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "C3+",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "Q-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "Q-101",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "VLV-100",
+            "type": "Valve",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "OutletPressure": 1800000
+            }
+          },
+          {
+            "tag": "S-1",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "T-200",
+            "type": "DistillationColumn",
+            "calls": [
+              {
+                "method": "SetNumberOfStages",
+                "args": [
+                  25
+                ]
+              },
+              {
+                "method": "SetTopStagePressure",
+                "args": [
+                  1700000
+                ]
+              },
+              {
+                "method": "SetBottomStagePressure",
+                "args": [
+                  1750000
+                ]
+              },
+              {
+                "method": "ConnectFeed",
+                "args": [
+                  "@S-1",
+                  12
+                ]
+              },
+              {
+                "method": "ConnectDistillate",
+                "args": [
+                  "@PROPANE"
+                ]
+              },
+              {
+                "method": "ConnectBottoms",
+                "args": [
+                  "@C4+"
+                ]
+              },
+              {
+                "method": "ConnectCondenserDuty",
+                "args": [
+                  "@Q-200"
+                ]
+              },
+              {
+                "method": "ConnectReboilerDuty",
+                "args": [
+                  "@Q-201"
+                ]
+              },
+              {
+                "method": "SetCondenserSpec",
+                "args": [
+                  "Reflux_Ratio",
+                  2.5,
+                  ""
+                ]
+              },
+              {
+                "method": "SetReboilerSpec",
+                "args": [
+                  "Product_Molar_Flow_Rate",
+                  96.7,
+                  "mol/s"
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "PROPANE",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "C4+",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "Q-200",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "Q-201",
+            "type": "EnergyStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "C3+",
+            "to": "VLV-100"
+          },
+          {
+            "from": "VLV-100",
+            "to": "S-1"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Natural gas processing unit",
+          "sample": "Natural Gas Processing Unit.dwxmz"
+        },
+        {
+          "title": "Natural gas processing (tutorial)",
+          "sample": "Tutorial 11 - Natural Gas Processing.dwxmz"
+        }
+      ]
+    },
+    {
+      "id": "steam-methane-reforming",
+      "name": "Hydrogen by steam methane reforming",
+      "description": "Natural gas and steam reformed to syngas at equilibrium in a Gibbs reactor, the CO shifted to hydrogen in an equilibrium reactor, then cooled and flashed to take the condensate out of the raw hydrogen.",
+      "processType": "Transformation",
+      "compounds": [
+        "Methane",
+        "Water",
+        "Hydrogen",
+        "Carbon monoxide",
+        "Carbon dioxide"
+      ],
+      "keyCompounds": [
+        "Hydrogen"
+      ],
+      "reactants": [
+        "Methane",
+        "Water"
+      ],
+      "products": [
+        "Hydrogen",
+        "Carbon dioxide"
+      ],
+      "propertyPackage": {
+        "name": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "reactions": [
+        {
+          "type": "Equilibrium",
+          "name": "Water-gas shift",
+          "stoichiometry": {
+            "Carbon monoxide": -1,
+            "Water": -1,
+            "Carbon dioxide": 1,
+            "Hydrogen": 1
+          },
+          "baseCompound": "Carbon monoxide",
+          "phase": "Vapor",
+          "basis": "Fugacity",
+          "units": "Pa"
+        }
+      ],
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "FEED",
+            "type": "MaterialStream",
+            "temperature": 723.15,
+            "pressure": 2500000,
+            "molarFlow": 400,
+            "composition": {
+              "Methane": 0.25,
+              "Water": 0.75
+            }
+          },
+          {
+            "tag": "E-100",
+            "type": "Heater",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 1123.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-1",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "R-100",
+            "type": "RCT_Gibbs",
+            "properties": {
+              "ReactorOperationMode": "Isothermic",
+              "DeltaP": 0,
+              "ComponentIDs": [
+                "Methane",
+                "Water",
+                "Hydrogen",
+                "Carbon monoxide",
+                "Carbon dioxide"
+              ]
+            },
+            "calls": [
+              {
+                "method": "CreateElementMatrix",
+                "args": []
+              }
+            ]
+          },
+          {
+            "tag": "Q-101",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-2",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "S-2L",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-101",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 623.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-102",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-3",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "R-101",
+            "type": "RCT_Equilibrium",
+            "properties": {
+              "ReactorOperationMode": "Isothermic",
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-103",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-4",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "S-4L",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-102",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 313.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-104",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-5",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "V-100",
+            "type": "Vessel"
+          },
+          {
+            "tag": "RAW HYDROGEN",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "CONDENSATE",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "FEED",
+            "to": "E-100"
+          },
+          {
+            "from": "Q-100",
+            "to": "E-100"
+          },
+          {
+            "from": "E-100",
+            "to": "S-1"
+          },
+          {
+            "from": "S-1",
+            "to": "R-100"
+          },
+          {
+            "from": "Q-101",
+            "to": "R-100",
+            "toPort": 1
+          },
+          {
+            "from": "R-100",
+            "to": "S-2",
+            "fromPort": 0
+          },
+          {
+            "from": "R-100",
+            "to": "S-2L",
+            "fromPort": 1
+          },
+          {
+            "from": "S-2",
+            "to": "E-101"
+          },
+          {
+            "from": "E-101",
+            "to": "S-3"
+          },
+          {
+            "from": "E-101",
+            "to": "Q-102"
+          },
+          {
+            "from": "S-3",
+            "to": "R-101"
+          },
+          {
+            "from": "Q-103",
+            "to": "R-101",
+            "toPort": 1
+          },
+          {
+            "from": "R-101",
+            "to": "S-4",
+            "fromPort": 0
+          },
+          {
+            "from": "R-101",
+            "to": "S-4L",
+            "fromPort": 1
+          },
+          {
+            "from": "S-4",
+            "to": "E-102"
+          },
+          {
+            "from": "E-102",
+            "to": "S-5"
+          },
+          {
+            "from": "E-102",
+            "to": "Q-104"
+          },
+          {
+            "from": "S-5",
+            "to": "V-100"
+          },
+          {
+            "from": "V-100",
+            "to": "RAW HYDROGEN",
+            "fromPort": 0
+          },
+          {
+            "from": "V-100",
+            "to": "CONDENSATE",
+            "fromPort": 1
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Steam methane reforming to hydrogen",
+          "case": "reaction-systems/steam-methane-reforming-h2"
+        },
+        {
+          "title": "Hydrogen by catalytic steam reforming",
+          "sample": "Hydrogen production through Methane Catalytic Steam Reforming.dwxml"
+        }
+      ]
+    },
+    {
+      "id": "gas-compression",
+      "name": "Gas compression with intercooling",
+      "description": "Low-pressure gas compressed in three stages from about 1 bar to 64 bar, with a cooler after each stage that brings the gas back to 40 C.",
+      "processType": "Transportation",
+      "compounds": [
+        "Methane",
+        "Ethane",
+        "Propane",
+        "Carbon dioxide"
+      ],
+      "keyCompounds": [
+        "Methane"
+      ],
+      "propertyPackage": {
+        "name": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "GAS",
+            "type": "MaterialStream",
+            "temperature": 303.15,
+            "pressure": 101325,
+            "massFlow": 5,
+            "composition": {
+              "Methane": 0.9,
+              "Ethane": 0.05,
+              "Propane": 0.03,
+              "Carbon dioxide": 0.02
+            }
+          },
+          {
+            "tag": "K-100",
+            "type": "Compressor",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "POut": 400000,
+              "AdiabaticEfficiency": 75
+            }
+          },
+          {
+            "tag": "W-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-1a",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-100",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 313.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-100",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-1b",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "K-200",
+            "type": "Compressor",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "POut": 1600000,
+              "AdiabaticEfficiency": 75
+            }
+          },
+          {
+            "tag": "W-200",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-2a",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-200",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 313.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-200",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-2b",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "K-300",
+            "type": "Compressor",
+            "properties": {
+              "CalcMode": "OutletPressure",
+              "POut": 6400000,
+              "AdiabaticEfficiency": 75
+            }
+          },
+          {
+            "tag": "W-300",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "S-3a",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "E-300",
+            "type": "Cooler",
+            "properties": {
+              "CalcMode": "OutletTemperature",
+              "OutletTemperature": 313.15,
+              "DeltaP": 0
+            }
+          },
+          {
+            "tag": "Q-300",
+            "type": "EnergyStream"
+          },
+          {
+            "tag": "HP GAS",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "GAS",
+            "to": "K-100"
+          },
+          {
+            "from": "W-100",
+            "to": "K-100"
+          },
+          {
+            "from": "K-100",
+            "to": "S-1a"
+          },
+          {
+            "from": "S-1a",
+            "to": "E-100"
+          },
+          {
+            "from": "E-100",
+            "to": "S-1b"
+          },
+          {
+            "from": "E-100",
+            "to": "Q-100"
+          },
+          {
+            "from": "S-1b",
+            "to": "K-200"
+          },
+          {
+            "from": "W-200",
+            "to": "K-200"
+          },
+          {
+            "from": "K-200",
+            "to": "S-2a"
+          },
+          {
+            "from": "S-2a",
+            "to": "E-200"
+          },
+          {
+            "from": "E-200",
+            "to": "S-2b"
+          },
+          {
+            "from": "E-200",
+            "to": "Q-200"
+          },
+          {
+            "from": "S-2b",
+            "to": "K-300"
+          },
+          {
+            "from": "W-300",
+            "to": "K-300"
+          },
+          {
+            "from": "K-300",
+            "to": "S-3a"
+          },
+          {
+            "from": "S-3a",
+            "to": "E-300"
+          },
+          {
+            "from": "E-300",
+            "to": "HP GAS"
+          },
+          {
+            "from": "E-300",
+            "to": "Q-300"
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Compressor performance map",
+          "case": "gas-processing/compressor-performance-map"
+        }
+      ]
+    },
+    {
+      "id": "three-phase-separation",
+      "name": "Three-phase separation of well fluid",
+      "description": "A well stream separated at 30 bar into gas, oil and water in a three-phase separator, the first step of an oil and gas production facility.",
+      "processType": "PhysicalSeparation",
+      "compounds": [
+        "Methane",
+        "Ethane",
+        "Propane",
+        "N-hexane",
+        "N-decane",
+        "Water"
+      ],
+      "keyCompounds": [
+        "Methane",
+        "N-decane",
+        "Water"
+      ],
+      "propertyPackage": {
+        "name": "Peng-Robinson (PR)"
+      },
+      "unitSystem": "SI",
+      "skeleton": {
+        "objects": [
+          {
+            "tag": "WELL FLUID",
+            "type": "MaterialStream",
+            "temperature": 333.15,
+            "pressure": 3000000,
+            "massFlow": 20,
+            "composition": {
+              "Methane": 0.3,
+              "Ethane": 0.05,
+              "Propane": 0.04,
+              "N-hexane": 0.11,
+              "N-decane": 0.2,
+              "Water": 0.3
+            }
+          },
+          {
+            "tag": "V-100",
+            "type": "Vessel"
+          },
+          {
+            "tag": "GAS",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "OIL",
+            "type": "MaterialStream"
+          },
+          {
+            "tag": "WATER",
+            "type": "MaterialStream"
+          }
+        ],
+        "connections": [
+          {
+            "from": "WELL FLUID",
+            "to": "V-100"
+          },
+          {
+            "from": "V-100",
+            "to": "GAS",
+            "fromPort": 0
+          },
+          {
+            "from": "V-100",
+            "to": "OIL",
+            "fromPort": 1
+          },
+          {
+            "from": "V-100",
+            "to": "WATER",
+            "fromPort": 2
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "Three-phase separator",
+          "sample": "Three Phase Separator.dwxmz"
+        },
+        {
+          "title": "Reservoir oil two-stage separation",
+          "case": "separation-processes/reservoir-oil-pvt-two-stage-separation"
+        }
+      ]
+    },
+    {
+      "id": "crude-distillation",
+      "name": "Crude oil distillation",
+      "industry": "Oil, Gas and Refining",
+      "description": "Crude oil characterized from its assay and distilled in an atmospheric tower with side strippers into naphtha, kerosene, diesel and residue. Open one of the ready-made simulations to start from it.",
+      "processType": "PhysicalSeparation",
+      "propertyPackage": {
+        "name": ""
+      },
+      "examples": [
+        {
+          "title": "Atmospheric crude tower (inside-out solver)",
+          "case": "crude-distillation/atmospheric-crude-tower-inside-out"
+        },
+        {
+          "title": "Atmospheric crude tower with steam stripping",
+          "case": "crude-distillation/atmospheric-crude-tower-steam-stripping"
+        },
+        {
+          "title": "Petroleum distillation",
+          "sample": "Petroleum Distillation.dwxml"
+        }
+      ]
+    }
+  ]
+}
