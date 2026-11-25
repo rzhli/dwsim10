@@ -1310,8 +1310,8 @@ Namespace Reactors
             els = e
             comps = c
 
-            If e < 0 Then Throw New Exception("The Element Matrix is not defined.")
-            If c < 0 Then Throw New Exception("The list of reacting compounds is not defined.")
+            If c < 0 Then Throw New Exception("The list of reacting compounds is empty. Open the reactor's editor, go to the Compounds tab and check the compounds that take part in the equilibrium, so that DWSIM can build the element matrix from their formulas.")
+            If e < 0 Then Throw New Exception("The element matrix is empty because the reacting compounds don't have any elements in their formulas. Check the formulas of the compounds checked on the Compounds tab.")
 
             tms = ims.Clone()
             tms.DefinedFlow = FlowSpec.Mass
@@ -1574,19 +1574,19 @@ Namespace Reactors
 
                             Catch ex As Exception
 
-                                If Settings.AIAssistedConvergenceLevel = Settings.AIAssistedConvergenceMode.Provide_Initial_Estimates_and_Solutions Or
+                                'without a solution from the convergence assistant, a failed minimization stops here:
+                                'NFv would stay at zero and the outlet would be flashed at the last point the
+                                'objective function evaluated, which does not satisfy the element balance
+                                If (Settings.AIAssistedConvergenceLevel = Settings.AIAssistedConvergenceMode.Provide_Initial_Estimates_and_Solutions Or
                                     Settings.AIAssistedConvergenceLevel = Settings.AIAssistedConvergenceMode.Provide_Solutions Or
-                                    Settings.AIAssistedConvergenceLevel = Settings.AIAssistedConvergenceMode.Provide_Initial_Estimates_and_Solutions_2Pass Then
+                                    Settings.AIAssistedConvergenceLevel = Settings.AIAssistedConvergenceMode.Provide_Initial_Estimates_and_Solutions_2Pass) AndAlso
+                                    estimate IsNot Nothing Then
 
-                                    If estimate IsNot Nothing Then
+                                    NFv = estimate.MixtureMolarFlows2
 
-                                        NFv = estimate.MixtureMolarFlows2
+                                Else
 
-                                    Else
-
-                                        Throw ex
-
-                                    End If
+                                    Throw
 
                                 End If
 
@@ -2051,8 +2051,8 @@ Namespace Reactors
             els = e
             comps = c
 
-            If e < 0 Then Throw New Exception("The Element Matrix is not defined.")
-            If c < 0 Then Throw New Exception("The list of reacting compounds is not defined.")
+            If c < 0 Then Throw New Exception("The list of reacting compounds is empty. Open the reactor's editor, go to the Compounds tab and check the compounds that take part in the equilibrium, so that DWSIM can build the element matrix from their formulas.")
+            If e < 0 Then Throw New Exception("The element matrix is empty because the reacting compounds don't have any elements in their formulas. Check the formulas of the compounds checked on the Compounds tab.")
 
             tms = ims.Clone()
             tms.DefinedFlow = FlowSpec.Mass
