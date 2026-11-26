@@ -52,9 +52,24 @@ Version 10.3.1
 - [NEW] Percolation Extractor, Desolventizer-Toaster and Meal Dryer-Cooler (Plus): hexane extraction of oilseed flakes on ideal stages, desolventizing and toasting with sparge steam, and drying and cooling of the meal with air
 - [NEW] Oil Degummer, Caustic Neutralizer, Oil Bleacher and Oil Deodorizer (Plus): water or acid degumming, caustic neutralization with washing and the heats of reaction, bleaching with a Freundlich isotherm, and steam stripping on cross-flow trays or counter-current stages with the trans fatty acids formed
 - [NEW] Soybean crushing plant with an oil refinery in the Case Library, tutorial A14 and a User Guide part on the soybean tools
+- [NEW] Corn compounds in the additional compounds folder: corn starch, protein and ash, corn dextrins, maltotriose and succinic acid, with carbohydrate enthalpies that give the measured heat of starch hydrolysis
+- [NEW] Sugar Solutions package (Plus): corn mashes, beers and stillages, with maltose, maltotriose and dextrins as dissolved solids, starch, protein and fibre as solids, and the Corn Stream Analysis quantities as stream properties
+- [NEW] Corn Stream Analysis (Plus): reads and writes corn, mash, liquefact, beer, stillage, syrup, wet cake and DDG streams in the quantities of a dry-grind plant (solids, starch, DE, ethanol g/L and % v/v, oil, protein, fibre), with ten presets
+- [NEW] Starch Liquefaction, SSF Fermenter and DDG Rotary Drum Dryer (Plus): jet cook and liquefaction to a set DE, simultaneous saccharification and fermentation in batch or cascade, and direct-fired drying of wet cake and syrup into DDG
+- [NEW] Corn-only dry-grind ethanol plant in the Case Library, tutorial A15 and a User Guide part on the corn ethanol tools
+- [NEW] Export 3D Plant Model: a general arrangement drawing (plan and two elevations, item tags, title block) is drawn in SolidCraft and saved as PDF
+- [NEW] Export 3D Plant Model: optional glTF model of the plant (.glb)
 - [CHG] Update check at startup: reads the latest published release of the running edition on GitHub (open edition or Patreon Edition), skips release candidates and shows its list of changes; opens the release page when download and install is off
 - [CHG] Help and Tutorials site: the forum links point to the GitHub Discussions
 - [CHG] Bayer, Pulp, Sugar and Soybean Stream Analysis: Copy table puts the table of the stream on the clipboard, Export... writes it to a CSV or tab-separated text file, and Export all streams... writes one table with a column for each material stream
+- [CHG] Bayer, Pulp, Sugar and Soybean Stream Analysis: flows of 100,000 and more show as whole numbers instead of exponent notation
+- [CHG] Update 3D Plant Model Data: the labels in the 3D model show the new temperatures and pressures (models exported from 10.3.1 on)
+- [CHG] Sugar Solutions package: the yeast biomass compounds are insoluble solids instead of NRTL liquids
+- [CHG] Export 3D Plant Model: the labels are flat lettering, which takes a second to build where solid lettering took over a minute, and halves the design file
+- [CHG] 3D plant model: each line carries the composition of its stream in mol %, in SolidCraft, the web viewer and the line list
+- [CHG] Update 3D Plant Model Data: a line whose size the current flow changes keeps its drawn size, with the new size in its data and a message
+- [CHG] 3D plant model: the pipe rack uses standard steel sections (SHS columns, PFC beams), listed with their mass in the material take-off
+- [CHG] Drawings: the title block logo can be a PNG, JPEG or BMP picture
 - [FIX] SRK and the Peng-Robinson family: a fugacity coefficient that overflowed came back as infinity and failed the flash or the Gibbs reactor
 - [FIX] PT flash: a two-phase split that didn't add up to the feed was returned with a mass balance error; it is now solved again with three phases
 - [FIX] Conversion reactor: parallel reactions that asked for more of a compound than the feed had gave it a negative outlet flow
@@ -66,6 +81,8 @@ Version 10.3.1
 - [FIX] Three-phase flash: an answer of vapour and nearly pure water dropped the third phase, so water and hexane at 100 C and 5 bar stayed a vapour above the vapor pressure of hexane
 - [FIX] Heat of vaporization of additional compounds with an equation and of ChemSep compounds without one, and the CAPE-OPEN heat of vaporization at the normal boiling point
 - [FIX] Bayer, Pulp, Sugar and Soybean Stream Analysis: the windows showed the default window icon
+- [FIX] 3D plant model picture: with SolidCraft 0.40 and later the render environment step failed and the metal parts came out nearly black; the picture is now lit by a sky, and the camera frames the plant to fill the picture
+- [FIX] PH flash with solids: a liquid just below its bubble point could fail and leave the fail-safe calculation, which drops the solids, to return a hot vapour with the wrong enthalpy (a mixer of cake and syrup at 108 C gave 338 C)
 
 Version 10.3.0
 

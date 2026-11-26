@@ -373,6 +373,20 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>Operating conditions of the stream, saved as properties of the line.</summary>
         public Dictionary<string, string> Properties = new Dictionary<string, string>();
 
+        /// <summary>
+        /// The stream's composition, mol %: the compounds from <see cref="CompositionMinimum"/> up,
+        /// largest first and at most <see cref="CompositionCount"/>; the rest, when there is any, as
+        /// <see cref="OtherCompounds"/>.
+        /// </summary>
+        public List<KeyValuePair<string, double>> Composition = new List<KeyValuePair<string, double>>();
+
+        public const double CompositionMinimum = 0.1;
+        public const int CompositionCount = 10;
+        public const string OtherCompounds = "Other compounds";
+
+        /// <summary>The name of a compound's property on the line (SolidCraft lists properties by name, so the prefix keeps them together).</summary>
+        public static string CompositionKey(string compound) => "Composition: " + compound + " (mol %)";
+
         /// <summary>The 3D label along the line; null for none.</summary>
         public string Label;
 
@@ -403,7 +417,16 @@ namespace DWSIM.Extensions.SolidCraft
         public double X0, X1, Y0, Width, Top;
 
         public const double BayLength = 6000;
-        public const double BeamHeight = 250;
+
+        /// <summary>
+        /// The steel, by its standard names (BS EN 10210-2 hollow sections, BS 4-1 parallel flange
+        /// channels), and the mass of each per metre, kg/m, as SolidCraft works it out at 7850 kg/m3.
+        /// </summary>
+        public const string ColumnProfile = "SHS 200x200x8", CrossBeamProfile = "PFC 260x90x35", SideBeamProfile = "PFC 200x90x30";
+        public const double ColumnMass = 47.7, CrossBeamMass = 34.8, SideBeamMass = 29.7;
+
+        /// <summary>The depth of the cross beams, which carry the lines on their top.</summary>
+        public const double BeamHeight = 260;
     }
 
     public class PlantModel
@@ -415,6 +438,9 @@ namespace DWSIM.Extensions.SolidCraft
 
         /// <summary>The pipe rack, when a line runs on it.</summary>
         public PipeRack Rack;
+
+        /// <summary>The simulation's compounds, so a data update can clear the ones a line no longer carries.</summary>
+        public List<string> Compounds = new List<string>();
 
         /// <summary>What the export draws.</summary>
         public ExportOptions Options = new ExportOptions();

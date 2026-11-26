@@ -32,7 +32,6 @@ namespace DWSIM.Extensions.SolidCraft
     public static class LineReports
     {
         const double SteelDensity = 7850;     // kg/m3
-        const double RackBeamMass = 42.5;     // kg/m, the 250 x 150 x 8 x 12 I-beam of the rack
 
         public static void WriteLineList(PlantModel model, string path, CultureInfo culture)
         {
@@ -40,7 +39,7 @@ namespace DWSIM.Extensions.SolidCraft
             csv.Row("Line", "From", "To", "Size", "OD (mm)", "Wall (mm)", "Phase", "Temperature (C)", "Pressure (bar)",
                 "Mass flow (kg/h)", "Density (kg/m3)", "Viscosity (cP)", "Velocity (m/s)", "Length (m)", "Bends", "Flanges", "Insulation (mm)",
                 "Rise (m)", "Reynolds", "Friction factor", "Friction and fittings dP (bar)", "Static dP (bar)", "Total dP (bar)",
-                "dP per 100 m (bar)", "On pipe rack", "Check");
+                "dP per 100 m (bar)", "On pipe rack", "Check", "Composition (mol %)");
             foreach (var run in model.Pipes)
             {
                 var h = run.Hydraulics ?? new LineHydraulics.Result { Reynolds = double.NaN, FrictionFactor = double.NaN, Friction = double.NaN, Static = double.NaN, Total = double.NaN };
@@ -49,7 +48,8 @@ namespace DWSIM.Extensions.SolidCraft
                     Num(run.MassFlow * 3600, 2), Num(run.Density, 2), Num(run.Viscosity * 1000, 4), Num(run.Velocity, 2),
                     Num(h.Length, 1), h.Bends, run.Flanges.Count, run.Insulation > 0 ? run.Insulation.ToString("0", culture) + " " + run.InsulationService : "", Num(h.Rise, 1), Num(h.Reynolds, 0), Num(h.FrictionFactor, 4),
                     Num(h.Friction, 4), Num(h.Static, 4), Num(h.Total, 4), Num(h.Length > 0 ? h.Friction / h.Length * 100 : double.NaN, 3),
-                    run.OnRack ? "yes" : "no", h.Check);
+                    run.OnRack ? "yes" : "no", h.Check,
+                    string.Join("; ", run.Composition.Select(c => c.Key + " " + c.Value.ToString(c.Value >= 10 ? "0.0" : c.Value >= 1 ? "0.00" : "0.000", culture))));
             }
             csv.Save(path);
         }
@@ -98,9 +98,9 @@ namespace DWSIM.Extensions.SolidCraft
                 csv.Row();
                 csv.Row("Pipe rack");
                 csv.Row("Member", "Count", "Length (m)", "Mass (kg)");
-                csv.Row("Columns (I-beam 250 x 150)", 2 * (bays + 1), Num(columns, 1), Num(columns * RackBeamMass, 0));
-                csv.Row("Cross beams (I-beam 250 x 150)", bays + 1, Num(crossBeams, 1), Num(crossBeams * RackBeamMass, 0));
-                csv.Row("Side beams (I-beam 250 x 150)", 2, Num(sideBeams, 1), Num(sideBeams * RackBeamMass, 0));
+                csv.Row("Columns (" + PipeRack.ColumnProfile + ")", 2 * (bays + 1), Num(columns, 1), Num(columns * PipeRack.ColumnMass, 0));
+                csv.Row("Cross beams (" + PipeRack.CrossBeamProfile + ")", bays + 1, Num(crossBeams, 1), Num(crossBeams * PipeRack.CrossBeamMass, 0));
+                csv.Row("Side beams (" + PipeRack.SideBeamProfile + ")", 2, Num(sideBeams, 1), Num(sideBeams * PipeRack.SideBeamMass, 0));
             }
 
             csv.Row();

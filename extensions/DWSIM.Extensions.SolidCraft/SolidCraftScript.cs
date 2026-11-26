@@ -18,6 +18,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace DWSIM.Extensions.SolidCraft
@@ -41,9 +42,6 @@ namespace DWSIM.Extensions.SolidCraft
             /// </summary>
             public string Subject;
         }
-
-        // thickness of the 3D label lettering, mm
-        const double LabelDepth = 15;
 
         public static string LineComponent(PipeRun run) => "Line " + run.Tag;
 
@@ -69,7 +67,10 @@ namespace DWSIM.Extensions.SolidCraft
                                 ["y"] = Math.Round(e.Origin.Y),
                                 ["z"] = Math.Round(e.Origin.Z),
                                 ["rot"] = e.Rotation
-                            })))
+                            }))),
+                        // the size each line is drawn at, so a data update can tell when the
+                        // flow now asks for another one
+                        ["line_sizes"] = new JObject(model.Pipes.Where(r => !string.IsNullOrEmpty(r.Tag)).GroupBy(r => r.Tag).Select(g => new JProperty(g.Key, g.First().Size)))
                     }
                 }
             });
@@ -246,11 +247,16 @@ namespace DWSIM.Extensions.SolidCraft
             return cmds;
         }
 
+        public const string SizeForFlow = "Size for the current flow";
+
         /// <summary>
         /// The operating data of every item and line as component properties: what a data update
-        /// sends to the open model, without building anything again.
+        /// sends to the open model, without building anything again. A line whose flow now asks for
+        /// another size than the one it is drawn at (<paramref name="drawnSizes"/>, by tag) keeps the
+        /// drawn size in its properties and label, gets the new one as <see cref="SizeForFlow"/>, and
+        /// is listed in <paramref name="resized"/> as "tag (drawn, new)".
         /// </summary>
-        public static List<Command> DataCommands(PlantModel model)
+        public static List<Command> DataCommands(PlantModel model, IDictionary<string, string> drawnSizes = null, List<string> resized = null)
         {
             var cmds = new List<Command>();
             foreach (var item in model.Equipment.Where(e => e.Visible))
@@ -259,24 +265,104 @@ namespace DWSIM.Extensions.SolidCraft
                 foreach (var kv in item.Properties) props[kv.Key] = kv.Value;
                 Add(cmds, "component.metadata.set", item.Tag, new JObject { ["component"] = item.Tag, ["description"] = item.Description, ["properties"] = props });
             }
+            var lineLabels = new Dictionary<PipeRun, string>();
             foreach (var run in model.Pipes)
             {
                 var props = new JObject();
                 foreach (var kv in run.Properties) props[kv.Key] = kv.Value;
+                // a compound the line no longer shows: null takes its old value off the component
+                foreach (var c in model.Compounds.Concat(new[] { PipeRun.OtherCompounds }))
+                    if (!run.Properties.ContainsKey(PipeRun.CompositionKey(c))) props[PipeRun.CompositionKey(c)] = JValue.CreateNull();
+                var size = run.Size;
+                var label = run.Label;
+                if (drawnSizes != null && run.Tag != null && drawnSizes.TryGetValue(run.Tag, out var drawn) && !string.IsNullOrEmpty(drawn) && drawn != run.Size)
+                {
+                    // the pipe stays at its drawn size until the model is exported again
+                    size = drawn;
+                    props["Size"] = drawn;
+                    props[SizeForFlow] = run.Size;
+                    if (label != null && label.StartsWith(run.Tag + " " + run.Size)) label = run.Tag + " " + drawn + label.Substring((run.Tag + " " + run.Size).Length);
+                    resized?.Add(run.Tag + " (" + drawn + " drawn, " + run.Size + " for the current flow)");
+                }
+                else props[SizeForFlow] = JValue.CreateNull();
+                lineLabels[run] = label;
                 Add(cmds, "component.metadata.set", "line " + run.Tag, new JObject
                 {
                     ["component"] = LineComponent(run),
-                    ["description"] = "Line " + run.Tag + " (" + run.Size + ", " + run.Phase.ToLowerInvariant() + ")",
+                    ["description"] = "Line " + run.Tag + " (" + size + ", " + run.Phase.ToLowerInvariant() + ")",
                     ["properties"] = props
                 });
             }
+
+            // the labels' words, all in one change so the model rebuilds once; the design may hold
+            // only some of them (see KeepLabels)
+            var parameters = LabelParameters(model);
+            var changes = new JObject();
+            foreach (var item in model.Equipment.Where(e => e.Visible && !string.IsNullOrEmpty(e.Label)))
+                changes[parameters[ItemKey(item)]] = item.Label;
+            foreach (var run in model.Pipes.Where(r => !string.IsNullOrEmpty(lineLabels[r])))
+                changes[parameters[LineKey(run)]] = lineLabels[run];
+            if (changes.Count > 0) Add(cmds, "parameters.change", LabelsSubject, new JObject { ["changes"] = changes });
             return cmds;
+        }
+
+        /// <summary>The subject of the data update's command that rewrites the labels.</summary>
+        public const string LabelsSubject = "the labels";
+
+        static string ItemKey(EquipmentItem item) => "item " + item.Tag;
+
+        static string LineKey(PipeRun run) => "line " + run.Tag;
+
+        /// <summary>
+        /// The text parameter that holds each label's words, by item and by line: "label_" and the
+        /// tag with what a parameter name can't hold turned into underscores, numbered when two tags
+        /// come out the same. The export and the data update both take the names from here.
+        /// </summary>
+        static Dictionary<string, string> LabelParameters(PlantModel model)
+        {
+            var names = new Dictionary<string, string>();
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Name(string key, string prefix, string tag)
+            {
+                var stem = prefix + Regex.Replace(tag ?? "", "[^A-Za-z0-9_]", "_");
+                var name = stem;
+                for (var i = 2; !used.Add(name); i++) name = stem + "_" + i;
+                names[key] = name;
+            }
+            foreach (var item in model.Equipment.Where(e => e.Visible)) Name(ItemKey(item), "label_", item.Tag);
+            foreach (var run in model.Pipes) Name(LineKey(run), "label_line_", run.Tag);
+            return names;
+        }
+
+        /// <summary>
+        /// Keeps in the data update only the labels the design has a parameter for: a design exported
+        /// before the labels followed parameters has none, and a line whose label did not fit has none
+        /// either. Returns how many labels are left to rewrite.
+        /// </summary>
+        public static int KeepLabels(List<Command> cmds, ICollection<string> parameters)
+        {
+            var c = cmds.FirstOrDefault(x => x.Subject == LabelsSubject);
+            if (c == null) return 0;
+            var changes = (JObject)c.Params["changes"];
+            foreach (var p in changes.Properties().ToList())
+                if (!parameters.Contains(p.Name)) p.Remove();
+            if (changes.Count == 0) cmds.Remove(c);
+            return changes.Count;
+        }
+
+        /// <summary>The names of the text parameters among a parameters.list reply.</summary>
+        public static HashSet<string> TextParameters(JToken list)
+        {
+            var names = new HashSet<string>();
+            foreach (var p in (list?["parameters"] as JArray) ?? new JArray())
+                if ((string)p["unit"] == "text" && (string)p["name"] is string n) names.Add(n);
+            return names;
         }
 
         public const string RenderSetup = "DWSIM Plant";
 
         /// <summary>
-        /// A render setup for a picture of the whole plant: path tracing on the GPU in a plant HDR
+        /// A render setup for a picture of the whole plant: path tracing on the GPU under a sky
         /// environment, the camera at the view chosen in the options, fitted to the model.
         /// </summary>
         public static List<Command> CreateRenderSetup(PlantModel model) => CreateRenderSetup(model, model.Options?.RenderSamples ?? 0);
@@ -287,29 +373,52 @@ namespace DWSIM.Extensions.SolidCraft
             var cmds = new List<Command>();
             var camera = RenderCamera(model, model.Options?.RenderView);
             if (camera == null) return cmds;
-            // the samples belong to the saved setup: the render command refuses --samples next to --setup
-            var job = new JObject { ["method"] = "gpu_path" };
-            if (samples > 0) job["options"] = new JObject { ["samples"] = samples };
+            // the samples belong to the saved setup: the render command refuses --samples next to --setup.
+            // The light comes from SolidCraft's procedural sky, so the metals have something to reflect
+            // even when the build doesn't carry the HDR environments of the render library.
+            var jobOptions = new JObject
+            {
+                ["environment"] = new JObject
+                {
+                    ["kind"] = "sky",
+                    ["gradient"] = new JObject
+                    {
+                        ["zenith"] = new JArray(0.16, 0.32, 0.7),
+                        ["horizon"] = new JArray(0.8, 0.9, 1.0),
+                        ["ground"] = new JArray(0.12, 0.1, 0.08)
+                    },
+                    ["rotation_rad"] = 0,
+                    ["intensity"] = 1
+                }
+            };
+            if (samples > 0) jobOptions["samples"] = samples;
             Add(cmds, "render.settings.set", "the render", new JObject
             {
                 ["name"] = RenderSetup,
-                ["set"] = new JObject { ["job"] = job, ["camera"] = camera }
+                ["set"] = new JObject { ["job"] = new JObject { ["method"] = "gpu_path", ["options"] = jobOptions }, ["camera"] = camera }
             });
-            Add(cmds, "render.library.environment.apply", "the render", new JObject { ["id"] = "HDR-008", ["name"] = RenderSetup });
             return cmds;
         }
 
         /// <summary>
-        /// The camera of a view (<see cref="CadTools.RenderViews"/>) aimed at the middle of the plant, far
-        /// enough to take it all in with its labels; null for a model with nothing in it.
+        /// The camera of a view (<see cref="CadTools.RenderViews"/>) that frames the plant with its labels
+        /// in the picture: the plant's corners are projected on the picture plane, the target goes to
+        /// the middle of what they cover, and the camera comes as close as it can while every corner
+        /// stays inside the picture's width and height. Null for a model with nothing in it.
         /// </summary>
         public static JObject RenderCamera(PlantModel model, string view)
         {
             var pts = new List<Vec3>();
+            void Box(Vec3 lo, Vec3 hi)
+            {
+                foreach (var x in new[] { lo.X, hi.X })
+                    foreach (var y in new[] { lo.Y, hi.Y })
+                        foreach (var z in new[] { lo.Z, hi.Z })
+                            pts.Add(new Vec3(x, y, z));
+            }
             foreach (var e in model.Equipment.Where(e => e.Visible))
             {
-                pts.Add(e.FootprintCentre + new Vec3(-e.FootprintX, -e.FootprintY, 0));
-                pts.Add(e.FootprintCentre + new Vec3(e.FootprintX, e.FootprintY, e.Envelope.ZTop));
+                Box(e.FootprintCentre + new Vec3(-e.FootprintX, -e.FootprintY, 0), e.FootprintCentre + new Vec3(e.FootprintX, e.FootprintY, e.Envelope.ZTop));
                 if (model.Options.Labels && !string.IsNullOrEmpty(e.Label))
                 {
                     // the label over the item (see CreateLabels)
@@ -321,15 +430,59 @@ namespace DWSIM.Extensions.SolidCraft
                 }
             }
             foreach (var r in model.Pipes) pts.AddRange(r.Path);
+            if (model.Rack != null) Box(new Vec3(model.Rack.X0, model.Rack.Y0, 0), new Vec3(model.Rack.X1, model.Rack.Y0 + model.Rack.Width, model.Rack.Top));
             if (pts.Count == 0) return null;
-            var lo = new Vec3(pts.Min(p => p.X), pts.Min(p => p.Y), pts.Min(p => p.Z));
-            var hi = new Vec3(pts.Max(p => p.X), pts.Max(p => p.Y), pts.Max(p => p.Z));
-            var centre = (lo + hi) * 0.5;
-            const double fov = 0.7;
-            var distance = (hi - lo).Length / 2 / Math.Tan(fov / 2) * 1.1;
+
             var v = CadTools.RenderViews.FirstOrDefault(x => x.Id == view);
             if (v.Id == null) v = CadTools.RenderViews[0];
-            return new JObject { ["target"] = new JArray(centre.ToArray()), ["yaw"] = v.Yaw, ["pitch"] = v.Pitch, ["distance"] = Math.Round(distance), ["fov"] = fov };
+            const double fov = 0.7;
+            const double fill = 0.9;
+            var aspect = model.Options != null && model.Options.RenderHeight > 0 ? (double)model.Options.RenderWidth / model.Options.RenderHeight : 1.6;
+
+            // SolidCraft's camera: with yaw 0 it looks along +Y from the -Y side, Z is up, and the
+            // field of view is the picture's height
+            var back = new Vec3(-Math.Sin(v.Yaw) * Math.Cos(v.Pitch), -Math.Cos(v.Yaw) * Math.Cos(v.Pitch), Math.Sin(v.Pitch));
+            var forward = back * -1;
+            var right = new Vec3(Math.Cos(v.Yaw), -Math.Sin(v.Yaw), 0);
+            var up = new Vec3(right.Y * forward.Z - right.Z * forward.Y, right.Z * forward.X - right.X * forward.Z, right.X * forward.Y - right.Y * forward.X);
+            double Dot(Vec3 a, Vec3 b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+            var tanV = Math.Tan(fov / 2) * fill;
+            var tanH = tanV * aspect;
+
+            var target = new Vec3(pts.Average(p => p.X), pts.Average(p => p.Y), pts.Average(p => p.Z));
+            // the nearest the camera can be with every corner inside the picture
+            double Fit()
+            {
+                double nearest = 0;
+                foreach (var p in pts)
+                {
+                    var d = p - target;
+                    nearest = Math.Max(nearest, Math.Max(Math.Abs(Dot(d, right)) / tanH, Math.Abs(Dot(d, up)) / tanV) - Dot(d, forward));
+                }
+                return nearest;
+            }
+            double distance = 0;
+            // the projection depends on the distance and the distance on where the target is, so
+            // centre and fit a few times; it settles in two or three passes
+            for (var pass = 0; pass < 4; pass++)
+            {
+                distance = Fit();
+                double xMin = double.MaxValue, xMax = double.MinValue, yMin = double.MaxValue, yMax = double.MinValue;
+                foreach (var p in pts)
+                {
+                    var d = p - target;
+                    var depth = distance + Dot(d, forward);
+                    if (depth <= 1) continue;
+                    var sx = Dot(d, right) / depth;
+                    var sy = Dot(d, up) / depth;
+                    xMin = Math.Min(xMin, sx); xMax = Math.Max(xMax, sx);
+                    yMin = Math.Min(yMin, sy); yMax = Math.Max(yMax, sy);
+                }
+                if (xMin > xMax) break;
+                target = target + right * ((xMin + xMax) / 2 * distance) + up * ((yMin + yMax) / 2 * distance);
+            }
+            distance = Math.Max(Fit(), 1000);
+            return new JObject { ["target"] = new JArray(target.ToArray()), ["yaw"] = v.Yaw, ["pitch"] = v.Pitch, ["distance"] = Math.Round(distance), ["fov"] = fov };
         }
 
         /// <summary>
@@ -341,6 +494,7 @@ namespace DWSIM.Extensions.SolidCraft
         {
             var cmds = new List<Command>();
             var sketches = new List<string>();
+            var parameters = LabelParameters(model);
 
             foreach (var item in model.Equipment.Where(e => e.Visible && !string.IsNullOrEmpty(e.Label)))
             {
@@ -352,7 +506,7 @@ namespace DWSIM.Extensions.SolidCraft
                 var origin = item.Origin + new Vec3(0, 0, item.Envelope.ZTop + (item.IsInstrument ? 250 : 1500) + (lines - 1) * 1.6 * height);
                 var name = "Label " + item.Tag;
                 Add(cmds, "component.activate", subject, new JObject { ["component"] = item.Tag });
-                AddLabel(cmds, subject, name, item.Label, origin, Vec3.PlusX, height, item.Tag + " label");
+                AddLabel(cmds, subject, name, parameters[ItemKey(item)], item.Label, origin, Vec3.PlusX, height, item.Tag + " label");
                 sketches.Add(name);
             }
 
@@ -360,7 +514,7 @@ namespace DWSIM.Extensions.SolidCraft
             foreach (var run in model.Pipes)
             {
                 n++;
-                var label = LineLabel(cmds, run, n);
+                var label = LineLabel(cmds, run, n, parameters[LineKey(run)]);
                 if (label != null) sketches.Add(label);
             }
 
@@ -375,7 +529,7 @@ namespace DWSIM.Extensions.SolidCraft
         /// A label along the longest horizontal run of a line, just above the pipe, written so it
         /// reads left to right from the iso view. Null when no run is long enough to carry it.
         /// </summary>
-        static string LineLabel(List<Command> cmds, PipeRun run, int n)
+        static string LineLabel(List<Command> cmds, PipeRun run, int n, string parameter)
         {
             if (string.IsNullOrEmpty(run.Label)) return null;
 
@@ -396,13 +550,18 @@ namespace DWSIM.Extensions.SolidCraft
             var mid = (a + b) * 0.5 + new Vec3(0, 0, run.OuterDiameter / 2 + 80);
             var name = "Label " + n + " " + run.Tag;
             Add(cmds, "component.activate", "label " + run.Tag, new JObject { ["component"] = LineComponent(run) });
-            AddLabel(cmds, "label " + run.Tag, name, run.Label, mid, dir, height, run.Tag + " label");
+            AddLabel(cmds, "label " + run.Tag, name, parameter, run.Label, mid, dir, height, run.Tag + " label");
             return name;
         }
 
-        /// <summary>Lettering of 3D text in a vertical plane through <paramref name="origin"/>, centred on it.</summary>
-        static void AddLabel(List<Command> cmds, string subject, string sketch, string text, Vec3 origin, Vec3 xDir, double height, string body)
+        /// <summary>
+        /// Lettering of 3D text in a vertical plane through <paramref name="origin"/>, centred on it.
+        /// The words come from the text parameter <paramref name="parameter"/>, so changing the
+        /// parameter (<see cref="DataCommands"/>) rewrites the label in place.
+        /// </summary>
+        static void AddLabel(List<Command> cmds, string subject, string sketch, string parameter, string text, Vec3 origin, Vec3 xDir, double height, string body)
         {
+            Add(cmds, "parameters.add", subject, new JObject { ["name"] = parameter, ["expression"] = text, ["unit"] = "text" });
             Add(cmds, "sketch.create", subject, new JObject
             {
                 ["name"] = sketch,
@@ -415,12 +574,15 @@ namespace DWSIM.Extensions.SolidCraft
             });
             Add(cmds, "sketch.text", subject, new JObject
             {
-                ["text"] = text,
-                ["at"] = new JArray(Round(-TextWidth(text, height) / 2), 0),
-                ["height"] = Round(height)
+                ["text_expression"] = parameter,
+                ["at"] = new JArray(0, 0),
+                ["height"] = Round(height),
+                ["align"] = "center"
             });
             Add(cmds, "sketch.finish", subject, new JObject());
-            Add(cmds, "solid.extrude", subject, new JObject { ["sketch"] = sketch, ["distance"] = LabelDepth, ["body_name"] = body });
+            // flat letters: a planar face per letter is a fraction of the work of an extruded solid
+            // and of its size in the design, and it reads the same in the pictures
+            Add(cmds, "surface.patch", subject, new JObject { ["sketch"] = sketch, ["body_name"] = body });
         }
 
         /// <summary>Approximate width of the longest line of a text, for a sans-serif face.</summary>
@@ -560,33 +722,54 @@ namespace DWSIM.Extensions.SolidCraft
         /// </summary>
         static void AddRack(List<Command> cmds, PipeRack rack, List<string> sketches)
         {
-            const string subject = "the pipe rack", name = "Pipe Rack", sketch = "Pipe Rack frame";
+            const string subject = "the pipe rack", name = "Pipe Rack";
             var zb = rack.Top - PipeRack.BeamHeight / 2;
             double ya = rack.Y0, yb = rack.Y0 + rack.Width;
             var bays = Math.Max(1, (int)Math.Ceiling((rack.X1 - rack.X0) / PipeRack.BayLength));
             var bay = (rack.X1 - rack.X0) / bays;
 
             Add(cmds, "component.create", subject, new JObject { ["name"] = name, ["parent"] = "root", ["grounded"] = true });
-            Add(cmds, "sketch.create", subject, new JObject { ["plane"] = "XY", ["name"] = sketch });
-            Add(cmds, "sketch.options", subject, new JObject { ["sketch_3d"] = true });
-            for (var i = 0; i <= bays; i++)
+            // the columns, the cross beams and the side beams, each a frame member of its standard section
+            // on a 3D sketch of its own, centred on the lines
+            void Members(string what, string profile, Action<Action<Vec3, Vec3>> lines)
             {
-                var x = rack.X0 + i * bay;
-                Line(cmds, subject, new Vec3(x, ya, 0), new Vec3(x, ya, zb));
-                Line(cmds, subject, new Vec3(x, yb, 0), new Vec3(x, yb, zb));
-                Line(cmds, subject, new Vec3(x, ya, zb), new Vec3(x, yb, zb));
+                var sketch = "Pipe Rack " + what;
+                Add(cmds, "sketch.create", subject, new JObject { ["plane"] = "XY", ["name"] = sketch });
+                Add(cmds, "sketch.options", subject, new JObject { ["sketch_3d"] = true });
+                lines((a, b) => Line(cmds, subject, a, b));
+                Add(cmds, "sketch.finish", subject, new JObject());
+                Add(cmds, "frame.member", subject, new JObject
+                {
+                    ["sketch"] = sketch,
+                    ["profile"] = new JObject { ["size"] = profile },
+                    ["anchor"] = "center",
+                    ["body_name"] = "Pipe Rack " + what.TrimEnd('s') + " " + profile
+                });
+                sketches.Add(sketch);
             }
-            Line(cmds, subject, new Vec3(rack.X0, ya, zb), new Vec3(rack.X1, ya, zb));
-            Line(cmds, subject, new Vec3(rack.X0, yb, zb), new Vec3(rack.X1, yb, zb));
-            Add(cmds, "sketch.finish", subject, new JObject());
-            Add(cmds, "frame.member", subject, new JObject
+            Members("columns", PipeRack.ColumnProfile, line =>
             {
-                ["sketch"] = sketch,
-                ["profile"] = new JObject { ["kind"] = "i_beam", ["height"] = PipeRack.BeamHeight, ["width"] = 150, ["web"] = 8, ["flange"] = 12 },
-                ["body_name"] = "Pipe Rack beam"
+                for (var i = 0; i <= bays; i++)
+                {
+                    var x = rack.X0 + i * bay;
+                    line(new Vec3(x, ya, 0), new Vec3(x, ya, zb));
+                    line(new Vec3(x, yb, 0), new Vec3(x, yb, zb));
+                }
+            });
+            Members("cross beams", PipeRack.CrossBeamProfile, line =>
+            {
+                for (var i = 0; i <= bays; i++)
+                {
+                    var x = rack.X0 + i * bay;
+                    line(new Vec3(x, ya, zb), new Vec3(x, yb, zb));
+                }
+            });
+            Members("side beams", PipeRack.SideBeamProfile, line =>
+            {
+                line(new Vec3(rack.X0, ya, zb), new Vec3(rack.X1, ya, zb));
+                line(new Vec3(rack.X0, yb, zb), new Vec3(rack.X1, yb, zb));
             });
             Add(cmds, "appearance.assign", subject, new JObject { ["components"] = new JArray(name), ["color"] = EquipmentTemplates.Skirt });
-            sketches.Add(sketch);
         }
 
         static int Line(List<Command> cmds, string subject, Vec3 from, Vec3 to)
