@@ -57,6 +57,11 @@ Version 10.3.1
 - [NEW] Corn Stream Analysis (Plus): reads and writes corn, mash, liquefact, beer, stillage, syrup, wet cake and DDG streams in the quantities of a dry-grind plant (solids, starch, DE, ethanol g/L and % v/v, oil, protein, fibre), with ten presets
 - [NEW] Starch Liquefaction, SSF Fermenter and DDG Rotary Drum Dryer (Plus): jet cook and liquefaction to a set DE, simultaneous saccharification and fermentation in batch or cascade, and direct-fired drying of wet cake and syrup into DDG
 - [NEW] Corn-only dry-grind ethanol plant in the Case Library, tutorial A15 and a User Guide part on the corn ethanol tools
+- [NEW] Orange juice compounds in the additional compounds folder: d-limonene, alpha-pinene, myrcene, valencene, linalool, ethyl butyrate, citric acid, the juice non-sugars and the pulp solids
+- [NEW] Sugar Solutions package (Plus): orange juices, with citric acid and the juice non-sugars fitted to the water activity of citric acid and the boiling point rise of orange juice, the aroma compounds as Henry solutes, and the Orange Juice Stream Analysis quantities as stream properties
+- [NEW] Orange Juice Stream Analysis (Plus): reads and writes fruit, juice, FCOJ, essence, oil, emulsion, peel residue and pellet streams in the quantities of a juice plant (Brix, acidity, ratio, insoluble solids, recoverable oil, aroma), with nine presets
+- [NEW] TASTE Evaporator, Essence Recovery and Peel Oil Recovery (Plus): multiple-effect juice evaporation to a set Brix with preheaters, pasteurization and condensate flash, distillation of the first effect condensate into the water phase essence and the essence oil, and cold-pressed peel oil with a d-limonene stripper
+- [NEW] Orange juice plant in the Case Library, tutorial A16 and a User Guide part on the orange juice tools
 - [NEW] Export 3D Plant Model: a general arrangement drawing (plan and two elevations, item tags, title block) is drawn in SolidCraft and saved as PDF
 - [NEW] Export 3D Plant Model: optional glTF model of the plant (.glb)
 - [CHG] Update check at startup: reads the latest published release of the running edition on GitHub (open edition or Patreon Edition), skips release candidates and shows its list of changes; opens the release page when download and install is off
@@ -83,6 +88,7 @@ Version 10.3.1
 - [FIX] Bayer, Pulp, Sugar and Soybean Stream Analysis: the windows showed the default window icon
 - [FIX] 3D plant model picture: with SolidCraft 0.40 and later the render environment step failed and the metal parts came out nearly black; the picture is now lit by a sky, and the camera frames the plant to fill the picture
 - [FIX] PH flash with solids: a liquid just below its bubble point could fail and leave the fail-safe calculation, which drops the solids, to return a hot vapour with the wrong enthalpy (a mixer of cake and syrup at 108 C gave 338 C)
+- [FIX] Drawings: the revision and status of the CAD settings replaced the ones of the document in the title block (a fire water drawing of revision A came out as revision 0)
 
 Version 10.3.0
 
