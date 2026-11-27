@@ -102,6 +102,7 @@ namespace DWSIM.Extensions.SolidCraft
                     var run = RouteStream(model, byGraphic, obj as IMaterialStream, go, index);
                     if (run != null)
                     {
+                        run.Name = obj.Name;
                         model.Pipes.Add(run);
                         index++;
                     }
@@ -180,7 +181,7 @@ namespace DWSIM.Extensions.SolidCraft
         /// <summary>What the build in progress draws.</summary>
         [ThreadStatic] static ExportOptions Options;
 
-        static EquipmentItem CreateItem(ISimulationObject obj, ObjectType type, List<string> warnings)
+        internal static EquipmentItem CreateItem(ISimulationObject obj, ObjectType type, List<string> warnings)
         {
             var tag = obj.GraphicObject.Tag;
 
@@ -225,6 +226,7 @@ namespace DWSIM.Extensions.SolidCraft
                         if (type == ObjectType.Heater && q > 5000)
                         {
                             var fired = EquipmentTemplates.FiredHeater(Clamp(Math.Pow(q / 10000, 1.0 / 3), 0.7, 2.5));
+                            fired.Style = "fired";
                             Describe(fired, "Duty (kW)", q, false);
                             return fired;
                         }
@@ -623,7 +625,7 @@ namespace DWSIM.Extensions.SolidCraft
         /// The operating conditions of an item, from its first outlet stream (its first inlet when it
         /// has none): saved as properties and shown on its label.
         /// </summary>
-        static void AddOperatingData(EquipmentItem item, ISimulationObject obj)
+        internal static void AddOperatingData(EquipmentItem item, ISimulationObject obj)
         {
             item.Label = item.Tag;
             var go = obj.GraphicObject;
@@ -718,7 +720,7 @@ namespace DWSIM.Extensions.SolidCraft
             return q;
         }
 
-        static PipeRun SizePipe(IMaterialStream ms, string tag)
+        internal static PipeRun SizePipe(IMaterialStream ms, string tag)
         {
             double q = 0, vf = 0;
             if (ms != null)
@@ -1038,7 +1040,7 @@ namespace DWSIM.Extensions.SolidCraft
         }
 
         /// <summary>World position and outward direction of the nozzle for a connector of an icon.</summary>
-        static void Nozzle(EquipmentItem item, IGraphicObject go, IConnectionPoint cp, int index, int count, bool output, out Vec3 position, out Vec3 direction)
+        internal static void Nozzle(EquipmentItem item, IGraphicObject go, IConnectionPoint cp, int index, int count, bool output, out Vec3 position, out Vec3 direction)
         {
             double u = double.NaN, v = double.NaN;
             if (go.Width > 0 && go.Height > 0)
@@ -1213,7 +1215,7 @@ namespace DWSIM.Extensions.SolidCraft
                 item.Origin = ToWorld(model, item.CanvasX, item.CanvasY) - new Vec3(item.FootprintOffsetX, item.FootprintOffsetY, 0);
         }
 
-        static Vec3 ToWorld(PlantModel model, double cx, double cy)
+        internal static Vec3 ToWorld(PlantModel model, double cx, double cy)
         {
             if (model.MapCanvasX != null && model.MapCanvasX.Length > 0)
                 return new Vec3(Math.Round(Map(model.MapCanvasX, model.MapWorldX, model.MapHalfX, cx)),

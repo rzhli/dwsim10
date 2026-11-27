@@ -1,6 +1,6 @@
 ==================================================
 DWSIM - Open Source Process Simulator
-Version 10.3.0
+Version 10.4.0
 Copyright (c) 2017-2026 Daniel Wagner and contributors
 Copyright (c) 2008-2016 Daniel Wagner, Gregor Reichert, Gustavo Leon
 ==================================================
@@ -39,7 +39,7 @@ VERSION HISTORY / CHANGELOG
 
 The full changelog including souce code changes can be viewed at https://github.com/DanWBR/dwsim10/commits/windows
 
-Version 10.3.1
+Version 10.4.0
 
 - [NEW] Download and install of new versions (Options in the classic interface, Preferences in the cross-platform one): when the startup check finds a newer version, DWSIM offers to download the installer of its edition and platform, checks it against the checksum of the release and installs it when DWSIM closes; the installer wizard on Windows, the new DWSIM.app over the installed one on macOS, the Debian package with the system password dialog on Linux, and DWSIM starts again on macOS and Linux; a portable copy opens the release page
 - [NEW] Sulfuric Acid (H2O-H2SO4-SO3) property package: water, sulfuric acid and sulfur trioxide from dilute acid to oleum, with H2SO4, H2O and SO3 in the vapour at their equilibrium and the heats of absorption and dilution in the enthalpy
@@ -62,13 +62,15 @@ Version 10.3.1
 - [NEW] Orange Juice Stream Analysis (Plus): reads and writes fruit, juice, FCOJ, essence, oil, emulsion, peel residue and pellet streams in the quantities of a juice plant (Brix, acidity, ratio, insoluble solids, recoverable oil, aroma), with nine presets
 - [NEW] TASTE Evaporator, Essence Recovery and Peel Oil Recovery (Plus): multiple-effect juice evaporation to a set Brix with preheaters, pasteurization and condensate flash, distillation of the first effect condensate into the water phase essence and the essence oil, and cold-pressed peel oil with a d-limonene stripper
 - [NEW] Orange juice plant in the Case Library, tutorial A16 and a User Guide part on the orange juice tools
+- [NEW] Ethanol Dehydration Reactor and Caustic Wash Tower (Plus): fixed bed dehydration of ethanol to ethylene on alumina as an adiabatic bed, an isothermal bed or a heated multitubular reactor, with by-products, the inhibition by fusel propanols and pellet effectiveness factors; and caustic washing of CO2 on stages with the carbonate speciation of the caustic
+- [NEW] Green ethylene plant in the Case Library, tutorial A17 and a User Guide part on the green ethylene tools
 - [NEW] Export 3D Plant Model: a general arrangement drawing (plan and two elevations, item tags, title block) is drawn in SolidCraft and saved as PDF
 - [NEW] Export 3D Plant Model: optional glTF model of the plant (.glb)
 - [CHG] Update check at startup: reads the latest published release of the running edition on GitHub (open edition or Patreon Edition), skips release candidates and shows its list of changes; opens the release page when download and install is off
 - [CHG] Help and Tutorials site: the forum links point to the GitHub Discussions
 - [CHG] Bayer, Pulp, Sugar and Soybean Stream Analysis: Copy table puts the table of the stream on the clipboard, Export... writes it to a CSV or tab-separated text file, and Export all streams... writes one table with a column for each material stream
 - [CHG] Bayer, Pulp, Sugar and Soybean Stream Analysis: flows of 100,000 and more show as whole numbers instead of exponent notation
-- [CHG] Update 3D Plant Model Data: the labels in the 3D model show the new temperatures and pressures (models exported from 10.3.1 on)
+- [CHG] Update 3D Plant Model Data: the labels in the 3D model show the new temperatures and pressures (models exported from 10.4.0 on)
 - [CHG] Sugar Solutions package: the yeast biomass compounds are insoluble solids instead of NRTL liquids
 - [CHG] Export 3D Plant Model: the labels are flat lettering, which takes a second to build where solid lettering took over a minute, and halves the design file
 - [CHG] 3D plant model: each line carries the composition of its stream in mol %, in SolidCraft, the web viewer and the line list
@@ -89,6 +91,12 @@ Version 10.3.1
 - [FIX] 3D plant model picture: with SolidCraft 0.40 and later the render environment step failed and the metal parts came out nearly black; the picture is now lit by a sky, and the camera frames the plant to fill the picture
 - [FIX] PH flash with solids: a liquid just below its bubble point could fail and leave the fail-safe calculation, which drops the solids, to return a hot vapour with the wrong enthalpy (a mixer of cake and syrup at 108 C gave 338 C)
 - [FIX] Drawings: the revision and status of the CAD settings replaced the ones of the document in the title block (a fire water drawing of revision A came out as revision 0)
+- [FIX] PFR: when the reactions ran on the liquid or the vapour of a two-phase stream and the flash left that phase with slightly more of a compound than the whole stream, every volume step added the difference to the outlet, so the products came out above the reactants consumed and the duty carried the excess
+- [FIX] Flowsheet: in the dark theme, the property table that shows when the pointer rests on an object had a white panel behind light text
+- [FIX] Drawings: when the document's revision differed from the CAD settings, the revision table took the description of the settings ("ORIGINAL ISSUE"); the fire water documents now have their own revision description. The ISO title block also cut identification numbers longer than 24 characters
+- [FIX] PC-SAFT: when the flowsheet listed a compound without PC-SAFT parameters, every PC-SAFT stream failed, also the ones that didn't carry it, so a PC-SAFT section couldn't share the flowsheet with a section that uses another package for that compound (elemental sulfur in a Claus unit next to an acid gas absorber)
+- [FIX] Shortcut Claus SRU: when the combustion air carried no Oxygen, for example because it was given as the Air compound, the unit recovered no sulfur and didn't report an error; it now stops with a message that explains how to specify the air
+- [FIX] Claus SRU, FCC, Coker, Hydrocracker, HDS, Reformer, Isomerization, Alkylation and Blender editors: the Outlet Ports grid offered only material streams, so an energy port such as Waste Heat couldn't be connected from the grid and didn't show the energy stream attached to it; an energy port now lists the energy streams, and the column is headed Stream
 
 Version 10.3.0
 

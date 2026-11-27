@@ -263,6 +263,13 @@ namespace DWSIM.Extensions.SolidCraft
         public string Tag;
         public string Description;
 
+        /// <summary>
+        /// What the 3D window adds to the item's body: "fired" for a fired heater (smoke from the
+        /// stack, a glow at the burners), "flare" (a flame) or "coolingtower" (a plume of steam);
+        /// null for none.
+        /// </summary>
+        public string Style;
+
         /// <summary>Centre of the item on the ground, in world coordinates.</summary>
         public Vec3 Origin;
 
@@ -346,6 +353,8 @@ namespace DWSIM.Extensions.SolidCraft
     /// <summary>A pipe between two nozzles, or from a nozzle to the battery limit.</summary>
     public class PipeRun
     {
+        /// <summary>The name (id) of the material stream the line carries; null for an item's own line.</summary>
+        public string Name;
         public string Tag;
         public string Phase;
         public string Size;
