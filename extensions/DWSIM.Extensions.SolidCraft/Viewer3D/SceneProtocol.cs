@@ -104,6 +104,45 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
         /// <summary>{terrain: {x0, y0, cell, nx, ny, h, w}} or {terrain: null}: the relief of the ground (see <see cref="SiteLayout.Terrain"/>).</summary>
         public const string Terrain = "terrain";
 
+        /// <summary>
+        /// {path}: imports a 3D model of the plant (glTF, FBX, OBJ, STL, PLY, 3D DWF) as the scenery of
+        /// the flowsheet; DWSIM reads it in the background, answers at once and tells how it went with
+        /// <see cref="ModelStatus"/>.
+        /// </summary>
+        public const string ModelImport = "model.import";
+
+        /// <summary>
+        /// Proposes again the flowsheet objects for the equipment groups of the plant model (after the
+        /// flowsheet changed); runs apart, like <see cref="ModelImport"/>.
+        /// </summary>
+        public const string ModelSuggest = "model.suggest";
+
+        /// <summary>
+        /// Asks for every group of the plant model (window to DWSIM, no fields), or brings them (DWSIM
+        /// to the window: {groups: [{id, name, tag, role, kind, islands, c, length, diameter, user,
+        /// object, suggested, score, why}], units: [{name, tag, kind}]}); DWSIM sends them again after
+        /// each change of the groups.
+        /// </summary>
+        public const string ModelGroups = "model.groups";
+
+        /// <summary>{group, object}: the group stands for the flowsheet object (null for none); {group, accept: true} takes the proposal.</summary>
+        public const string ModelAssign = "model.assign";
+
+        /// <summary>{group, role}: equipment, piping, structure, scenery or hidden.</summary>
+        public const string ModelRole = "model.role";
+
+        /// <summary>{groups}: the groups become one.</summary>
+        public const string ModelMerge = "model.merge";
+
+        /// <summary>{group, islands}: those islands of the group become a group of their own.</summary>
+        public const string ModelSplit = "model.split";
+
+        /// <summary>{group, objectType}: DWSIM adds a flowsheet object for the group (by default of the group's kind), where the group stands, and the group stands for it.</summary>
+        public const string ModelCreate = "model.create";
+
+        /// <summary>The flowsheet stops using its 3D model of the plant (the file and the cache stay).</summary>
+        public const string ModelRemove = "model.remove";
+
         /// <summary>{ids}: removes objects from the simulation.</summary>
         public const string Delete = "delete";
 
@@ -138,6 +177,9 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
 
         /// <summary>{id}: the object a <see cref="Add"/> or <see cref="Connect"/> made.</summary>
         public const string Added = "added";
+
+        /// <summary>{state: importing, done or failed, message}: how an import of a 3D model of the plant goes.</summary>
+        public const string ModelStatus = "model.status";
 
         /// <summary>The command went through.</summary>
         public const string Ack = "ack";

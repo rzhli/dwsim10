@@ -307,6 +307,7 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             if (delta != null) Send(delta);
             if (values != null) Send(values);
             if (select != null) Send(select);
+            if (delta != null) RebuildModelCache();
         }
 
         /// <summary>
@@ -330,6 +331,336 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             m["scene"] = s;
             return m;
         }
+
+        #region Plant model
+
+        int importing;
+
+        /// <summary>{state, message}: how an import goes, for the window's status line.</summary>
+        void ModelStatus(string state, string message)
+        {
+            var m = SceneProtocol.Message(SceneProtocol.ModelStatus);
+            m["state"] = state;
+            m["message"] = message;
+            Send(m);
+        }
+
+        /// <summary>True while a plant model is read in the background.</summary>
+        public bool ImportingModel => Volatile.Read(ref importing) != 0;
+
+        /// <summary>
+        /// Imports a plant model off the interface thread; once it is read, the flowsheet takes it
+        /// (one step of the window's undo) and the window gets it with the scene.
+        /// </summary>
+        JObject StartImport(JObject m)
+        {
+            var path = (string)m["path"];
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return Error("the model file '" + path + "' was not found", SceneProtocol.ModelImport);
+            if (Interlocked.CompareExchange(ref importing, 1, 0) != 0) return Error("a plant model is being imported already", SceneProtocol.ModelImport);
+            string flowsheetPath = null;
+            try { flowsheetPath = fs.FilePath; } catch (Exception) { }
+            ModelStatus("importing", "Reading " + Path.GetFileName(path) + "...");
+            Task.Run(() =>
+            {
+                try
+                {
+                    var r = ModelImport.ModelImporter.Import(path, null, flowsheetPath);
+                    var stored = new ModelImport.PlantModelImport { Model = r.Reference };
+                    List<ModelImport.SegmentGroup> segments;
+                    stored.Groups = ModelImport.ModelAnalysis.Analyze(null, r, FlowsheetUnits(), out segments);
+                    OnUi(() =>
+                    {
+                        lock (gate)
+                        {
+                            Remember();
+                            ModelImport.ModelStore.Save(fs, stored);
+                        }
+                    });
+                    wake.Set();
+                    ModelStatus("done", Summary(r) + " " + ModelImport.ModelAnalysis.Summary(stored.Groups, segments));
+                }
+                catch (Exception ex)
+                {
+                    ModelStatus("failed", "DWSIM could not import " + Path.GetFileName(path) + ": " + (ex.InnerException?.Message ?? ex.Message));
+                }
+                finally { Interlocked.Exchange(ref importing, 0); }
+            });
+            return null;
+        }
+
+        /// <summary>The flowsheet's unit operations as the matching sees them, read on the interface thread.</summary>
+        List<ModelImport.FlowsheetUnit> FlowsheetUnits()
+        {
+            List<ModelImport.FlowsheetUnit> units = null;
+            OnUi(() =>
+            {
+                lock (gate) units = ModelImport.ModelMatching.Units(fs, SceneBuilder.Model(fs));
+            });
+            return units ?? new List<ModelImport.FlowsheetUnit>();
+        }
+
+        /// <summary>
+        /// Proposes again, for the equipment groups of the flowsheet's plant model, the objects
+        /// they stand for (after the flowsheet changed); the objects the user chose stay.
+        /// </summary>
+        JObject StartSuggest()
+        {
+            if (Interlocked.CompareExchange(ref importing, 1, 0) != 0) return Error("the plant model is busy", SceneProtocol.ModelSuggest);
+            ModelImport.PlantModelImport stored = null;
+            try { OnUi(() => stored = ModelImport.ModelStore.Load(fs)); }
+            catch (Exception) { }
+            if (stored == null)
+            {
+                Interlocked.Exchange(ref importing, 0);
+                return Error("the flowsheet does not have a plant model", SceneProtocol.ModelSuggest);
+            }
+            var index = ModelImport.ModelImporter.Cached(stored.Model);
+            if (index == null)
+            {
+                Interlocked.Exchange(ref importing, 0);
+                return Error("the plant model is not ready yet", SceneProtocol.ModelSuggest);
+            }
+            ModelStatus("importing", "Matching the plant model with the flowsheet...");
+            Task.Run(() =>
+            {
+                try
+                {
+                    List<ModelImport.SegmentGroup> segments;
+                    var groups = ModelImport.ModelAnalysis.Analyze(stored, index, FlowsheetUnits(), out segments);
+                    OnUi(() =>
+                    {
+                        lock (gate)
+                        {
+                            Remember();
+                            stored.Groups = groups;
+                            ModelImport.ModelStore.Save(fs, stored);
+                        }
+                    });
+                    wake.Set();
+                    ModelStatus("done", ModelImport.ModelAnalysis.Summary(groups, segments));
+                }
+                catch (Exception ex)
+                {
+                    ModelStatus("failed", "DWSIM could not match the plant model: " + (ex.InnerException?.Message ?? ex.Message));
+                }
+                finally { Interlocked.Exchange(ref importing, 0); }
+            });
+            return null;
+        }
+
+        static readonly HashSet<string> ModelEdits = new HashSet<string>
+        {
+            SceneProtocol.ModelGroups, SceneProtocol.ModelAssign, SceneProtocol.ModelRole,
+            SceneProtocol.ModelMerge, SceneProtocol.ModelSplit, SceneProtocol.ModelCreate
+        };
+
+        /// <summary>Set by a test: the model edits run on the calling thread, so the test sees their end.</summary>
+        public bool ModelEditsInline;
+
+        /// <summary>
+        /// The window's review of the plant model: sends the groups, or changes them (an object for a
+        /// group, a role, a join, a split, a new flowsheet object) as one step of the window's undo,
+        /// matches again keeping the choices, and sends the groups again.
+        /// </summary>
+        JObject StartModelEdit(string type, JObject m)
+        {
+            if (Interlocked.CompareExchange(ref importing, 1, 0) != 0) return Error("the plant model is busy", type);
+            ModelImport.PlantModelImport stored = null;
+            try { OnUi(() => stored = ModelImport.ModelStore.Load(fs)); }
+            catch (Exception) { }
+            var index = stored == null ? null : ModelImport.ModelImporter.Cached(stored.Model);
+            if (index == null)
+            {
+                Interlocked.Exchange(ref importing, 0);
+                return Error(stored == null ? "the flowsheet does not have a plant model" : "the plant model is not ready yet", type);
+            }
+            Action work = () =>
+            {
+                try
+                {
+                    var units = FlowsheetUnits();
+                    List<ModelImport.SegmentGroup> segments;
+                    var groups = ModelImport.ModelAnalysis.Analyze(stored, index, units, out segments);
+                    string problem = null;
+                    var changed = true;
+                    var id = (string)m["group"];
+                    switch (type)
+                    {
+                        case SceneProtocol.ModelGroups:
+                            changed = false;
+                            break;
+                        case SceneProtocol.ModelAssign:
+                            {
+                                var obj = (string)m["object"];
+                                if ((bool?)m["accept"] == true) problem = ModelImport.ModelAnalysis.Accept(groups, segments, id);
+                                else if (obj != null && !units.Any(u => u.Name == obj)) problem = "there is no flowsheet object '" + obj + "' to choose";
+                                else problem = ModelImport.ModelAnalysis.Assign(groups, segments, id, obj, (bool?)m["add"] == true);
+                                break;
+                            }
+                        case SceneProtocol.ModelRole:
+                            problem = ModelImport.ModelAnalysis.SetRole(groups, segments, id, (string)m["role"]);
+                            break;
+                        case SceneProtocol.ModelMerge:
+                            problem = ModelImport.ModelAnalysis.Merge(groups, segments, (m["groups"] as JArray ?? new JArray()).Select(t => (string)t).ToList());
+                            break;
+                        case SceneProtocol.ModelSplit:
+                            problem = ModelImport.ModelAnalysis.Split(groups, segments, id, (m["islands"] as JArray ?? new JArray()).Select(t => (int)t).ToList());
+                            break;
+                        case SceneProtocol.ModelCreate:
+                            {
+                                var seg = segments.FirstOrDefault(x => x.Id == id);
+                                if (seg == null) { problem = "there is no group '" + id + "'"; break; }
+                                var tag = seg.Tag;
+                                if (tag != null && units.Any(u => string.Equals(u.Tag, tag, StringComparison.OrdinalIgnoreCase))) tag = null;
+                                var add = new JObject
+                                {
+                                    ["objectType"] = (string)m["objectType"] ?? ModelImport.ModelAnalysis.ObjectTypeFor(seg.Category),
+                                    ["tag"] = tag,
+                                    ["x"] = Math.Round(seg.Center[0] * 1000),
+                                    ["y"] = Math.Round(seg.Center[1] * 1000)
+                                };
+                                OnUi(() =>
+                                {
+                                    lock (gate)
+                                    {
+                                        // the new object and the group's choice are one step of the undo
+                                        var answer = Add(add);
+                                        if (SceneProtocol.TypeOf(answer) == SceneProtocol.Error) { problem = (string)answer["message"]; return; }
+                                        var made = (string)answer["id"];
+                                        units = ModelImport.ModelMatching.Units(fs, SceneBuilder.Model(fs));
+                                        problem = ModelImport.ModelAnalysis.Assign(groups, segments, id, made);
+                                        if (problem == null)
+                                        {
+                                            stored.Groups = groups;
+                                            stored.Groups = ModelImport.ModelAnalysis.Analyze(stored, index, units, out segments);
+                                            ModelImport.ModelStore.Save(fs, stored);
+                                            PlaceFromModel(stored);
+                                        }
+                                    }
+                                });
+                                changed = false;
+                                if (problem == null) wake.Set();
+                                break;
+                            }
+                        default:
+                            problem = "unknown command '" + type + "'";
+                            break;
+                    }
+                    if (problem != null)
+                    {
+                        var e = Error(problem, type);
+                        Send(e);
+                    }
+                    else if (changed)
+                    {
+                        stored.Groups = groups;
+                        var again = ModelImport.ModelAnalysis.Analyze(stored, index, units, out segments);
+                        OnUi(() =>
+                        {
+                            lock (gate)
+                            {
+                                Remember();
+                                stored.Groups = again;
+                                ModelImport.ModelStore.Save(fs, stored);
+                                PlaceFromModel(stored);
+                            }
+                        });
+                        groups = again;
+                        wake.Set();
+                    }
+                    else if (type == SceneProtocol.ModelCreate)
+                        groups = stored.Groups;
+                    Send(ModelImport.ModelAnalysis.Payload(segments, groups, units));
+                }
+                catch (Exception ex)
+                {
+                    Send(Error("the plant model could not be changed: " + (ex.InnerException?.Message ?? ex.Message), type));
+                }
+                finally { Interlocked.Exchange(ref importing, 0); }
+            };
+            if (ModelEditsInline) work();
+            else Task.Run(work);
+            return null;
+        }
+
+        /// <summary>
+        /// Puts the objects the plant model's groups stand for where their groups are (the 3D layout):
+        /// the middle of the group's plan and its bottom. Their turn stays.
+        /// </summary>
+        void PlaceFromModel(ModelImport.PlantModelImport stored)
+        {
+            var places = ModelImport.ModelAnalysis.Placements(stored?.Groups);
+            if (places.Count == 0) return;
+            var layout = PlantLayout.Load(fs);
+            foreach (var kv in places)
+            {
+                if (!fs.SimulationObjects.ContainsKey(kv.Key)) continue;
+                Placement before;
+                layout.TryGetValue(kv.Key, out before);
+                layout[kv.Key] = new Placement { X = kv.Value[0], Y = kv.Value[1], Z = kv.Value[2], Rot = before?.Rot ?? 0 };
+            }
+            PlantLayout.Save(fs, layout);
+        }
+
+        static string Summary(ModelImport.ModelImportResult r)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var text = Path.GetFileName(r.Reference.Path) + ": " + r.Triangles.ToString("N0", inv) + " triangles in " + r.Parts.ToString("N0", inv) + " parts.";
+            if (r.Warnings.Count > 0) text += " " + string.Join(" ", r.Warnings);
+            return text;
+        }
+
+        /// <summary>
+        /// Makes the cache of the flowsheet's plant model again when it is missing (another
+        /// computer, a cleaned folder, a newer DWSIM) and the model file is found; the window gets
+        /// the model when it is ready.
+        /// </summary>
+        void RebuildModelCache()
+        {
+            JObject info;
+            lock (gate) info = scene?["model"] as JObject;
+            if (info == null || info["glb"]?.Type == JTokenType.String || (bool?)info["found"] != true) return;
+            if (Interlocked.CompareExchange(ref importing, 1, 0) != 0) return;
+            ModelImport.PlantModelImport stored = null;
+            string flowsheetPath = null;
+            try
+            {
+                OnUi(() =>
+                {
+                    stored = ModelImport.ModelStore.Load(fs);
+                    flowsheetPath = fs.FilePath;
+                });
+            }
+            catch (Exception) { }
+            var file = stored == null ? null : ModelImport.ModelImporter.Locate(stored.Model, flowsheetPath);
+            if (file == null) { Interlocked.Exchange(ref importing, 0); return; }
+            ModelStatus("importing", "Preparing " + Path.GetFileName(file) + "...");
+            Task.Run(() =>
+            {
+                try
+                {
+                    var r = ModelImport.ModelImporter.Import(file, stored.Model, flowsheetPath);
+                    if (r.Reference.Sha256 != stored.Model.Sha256)
+                        OnUi(() =>
+                        {
+                            lock (gate)
+                            {
+                                stored.Model = r.Reference;
+                                ModelImport.ModelStore.Save(fs, stored);
+                            }
+                        });
+                    Refresh();
+                    ModelStatus("done", Summary(r));
+                }
+                catch (Exception ex)
+                {
+                    ModelStatus("failed", "DWSIM could not read the plant model " + Path.GetFileName(file) + ": " + (ex.InnerException?.Message ?? ex.Message));
+                }
+                finally { Interlocked.Exchange(ref importing, 0); }
+            });
+        }
+
+        #endregion
 
         /// <summary>Asks the window for a picture of a view ("IsoSE", "Plan" and so on); the task ends with the PNG.</summary>
         public Task<byte[]> Capture(string view, int width = 1280, int height = 800, int timeoutMs = 30000)
@@ -369,6 +700,16 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             {
                 Captured(message);
                 return null;
+            }
+            if (type == SceneProtocol.ModelImport || type == SceneProtocol.ModelSuggest || ModelEdits.Contains(type))
+            {
+                // reading a plant model takes seconds: it runs apart, and the window hears of it
+                answer = (type == SceneProtocol.ModelImport ? StartImport(message) : type == SceneProtocol.ModelSuggest ? StartSuggest() : StartModelEdit(type, message))
+                    ?? SceneProtocol.Message(SceneProtocol.Ack);
+                if (message["ref"] != null) answer["ref"] = message["ref"].DeepClone();
+                if (answer["for"] == null) answer["for"] = type;
+                Send(answer);
+                return answer;
             }
             try
             {
@@ -410,6 +751,10 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
                 case SceneProtocol.SiteRemove: return SiteRemove(m);
                 case SceneProtocol.SiteAdopt: return SiteAdopt(m);
                 case SceneProtocol.Terrain: return SetTerrain(m);
+                case SceneProtocol.ModelRemove:
+                    Remember();
+                    ModelImport.ModelStore.Save(fs, null);
+                    return null;
                 case SceneProtocol.SceneFull:
                     scene = null;
                     selection = null;
@@ -427,6 +772,17 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             var list = m["items"] as JArray ?? new JArray(m.DeepClone());
             var places = new List<KeyValuePair<string, Placement>>();
             var site = SiteLayout.Load(fs);
+            var held = ModelImport.ModelAnalysis.Placements(ModelImport.ModelStore.Load(fs)?.Groups);
+            foreach (var t in list.OfType<JObject>())
+            {
+                var hid = (string)t["id"];
+                if (hid != null && held.ContainsKey(hid))
+                {
+                    ISimulationObject o;
+                    fs.SimulationObjects.TryGetValue(hid, out o);
+                    return Error((o?.GraphicObject?.Tag ?? hid) + " stands where the plant model puts it; clear its group in the review to move it", SceneProtocol.Place);
+                }
+            }
             var siteRot = new Dictionary<string, int>();
             foreach (var t in list.OfType<JObject>())
             {
@@ -486,6 +842,7 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             public string Layout;
             public string Site;
             public string Terrain;
+            public string Model;
             public System.Xml.Linq.XDocument Flowsheet;
         }
 
@@ -500,7 +857,7 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
 
         Step Capture(bool flowsheet)
         {
-            var step = new Step { Layout = LayoutText(), Site = SiteLayout.Text(fs), Terrain = SiteLayout.TerrainText(fs) };
+            var step = new Step { Layout = LayoutText(), Site = SiteLayout.Text(fs), Terrain = SiteLayout.TerrainText(fs), Model = ModelImport.ModelStore.Text(fs) };
             if (flowsheet)
                 try { step.Flowsheet = fs.GetSnapshot(SnapshotType.ObjectAddedOrRemoved); }
                 catch (Exception) { step.Flowsheet = null; }
@@ -528,6 +885,7 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             }
             SiteLayout.SetText(fs, step.Site);
             SiteLayout.SetTerrainText(fs, step.Terrain);
+            ModelImport.ModelStore.SetText(fs, step.Model);
             return null;
         }
 

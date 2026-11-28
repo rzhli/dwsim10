@@ -82,6 +82,7 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
 
             if (fs != null)
             {
+                MarkModelled(items, fs);
                 AddBadges(items, ids, model, fs);
                 AddSite(items, ids, fs);
                 AddEnergyStreams(items, ids, model, fs);
@@ -122,10 +123,16 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
             };
             if (fs != null)
             {
+                // a line between two items that the plant model shows runs in the model's own pipes
+                var modelled = new HashSet<string>(items.OfType<JObject>().Where(i => i["model"] != null).Select(i => (string)i["tag"]).Where(t => t != null));
+                if (modelled.Count > 0)
+                    foreach (var ln in lines.OfType<JObject>())
+                        if (modelled.Contains((string)ln["from"]) && modelled.Contains((string)ln["to"])) ln["replaced"] = true;
                 var site = SiteLayout.LoadSite(fs);
                 scene["site"] = new JObject { ["adopted"] = site.Adopted, ["budget"] = SiteCatalog.Budget(site.Items, SiteLayout.LoadTerrain(fs)) };
                 var terrain = SiteLayout.LoadTerrain(fs);
                 scene["terrain"] = terrain == null ? null : JObject.FromObject(terrain);
+                scene["model"] = PlantModelInfo(fs);
             }
             if (model.Rack != null)
                 scene["rack"] = new JObject
@@ -141,6 +148,70 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
                     Math.Round(s.Item1.X), Math.Round(s.Item1.Y), Math.Round(s.Item1.Z), Math.Round(s.Item2.X, 3), Math.Round(s.Item2.Y, 3), Math.Round(s.Item2.Z))));
             }
             return scene;
+        }
+
+        /// <summary>
+        /// The 3D model of the plant the flowsheet uses (see <see cref="ModelImport.ModelStore"/>), for
+        /// the window to draw: the file's name, its view in the cache ("glb", null until the cache is
+        /// made), whether the file is found, and its hash. Null when the flowsheet has none.
+        /// </summary>
+        /// <summary>
+        /// The items whose objects a group of the plant model stands for get the group's box
+        /// ("model": {group, min, max}, mm, Z up): the window shows the model there instead of the
+        /// equipment DWSIM draws. Only when the model's view is ready; otherwise the items stay.
+        /// </summary>
+        static void MarkModelled(JArray items, IFlowsheet fs)
+        {
+            var m = ModelImport.ModelStore.Load(fs);
+            if (m == null || m.Groups.Count == 0) return;
+            try { if (!System.IO.File.Exists(ModelImport.ModelImporter.ViewPathOf(m.Model))) return; }
+            catch (Exception) { return; }
+            var byObject = new Dictionary<string, ModelImport.ModelGroup>();
+            foreach (var g in m.Groups)
+                if (g.Min != null && g.Max != null)
+                    foreach (var o in g.Objects()) byObject[o] = g;
+            foreach (var it in items.OfType<JObject>())
+            {
+                ModelImport.ModelGroup g;
+                if (!byObject.TryGetValue((string)it["id"] ?? "", out g)) continue;
+                it["model"] = new JObject
+                {
+                    ["group"] = g.Id,
+                    ["min"] = new JArray(g.Min.Select(x => Math.Round(x * 1000))),
+                    ["max"] = new JArray(g.Max.Select(x => Math.Round(x * 1000)))
+                };
+            }
+        }
+
+        static string IslandsPath(ModelImport.ModelReference r)
+        {
+            try
+            {
+                var p = ModelImport.ModelImporter.IslandsPathOf(r);
+                return System.IO.File.Exists(p) ? p.Replace(System.IO.Path.DirectorySeparatorChar, '/') : null;
+            }
+            catch (Exception) { return null; }
+        }
+
+        public static JObject PlantModelInfo(IFlowsheet fs)
+        {
+            var m = ModelImport.ModelStore.Load(fs);
+            if (m == null) return null;
+            string view = null;
+            try { view = ModelImport.ModelImporter.ViewPathOf(m.Model); } catch (Exception) { }
+            string file = null;
+            try { file = ModelImport.ModelImporter.Locate(m.Model, fs.FilePath); } catch (Exception) { }
+            return new JObject
+            {
+                ["name"] = System.IO.Path.GetFileName(m.Model.Path ?? ""),
+                ["sha"] = m.Model.Sha256,
+                ["glb"] = view != null && System.IO.File.Exists(view) ? view.Replace(System.IO.Path.DirectorySeparatorChar, '/') : null,
+                ["found"] = file != null,
+                ["islands"] = IslandsPath(m.Model),
+                ["equipment"] = m.Groups.Count(g => g.Role == "equipment"),
+                ["proposed"] = m.Groups.Count(g => g.Suggested != null),
+                ["chosen"] = m.Groups.Count(g => g.Object != null)
+            };
         }
 
         /// <summary>

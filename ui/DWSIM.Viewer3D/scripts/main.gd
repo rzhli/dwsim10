@@ -8,6 +8,10 @@
 ## middle drag (or Shift + right drag) moves it, the wheel zooms. Keys: see SHORTCUTS.
 extends Node3D
 
+const _ModelConvert = preload("res://scripts/model_convert.gd")
+const _PlantModel = preload("res://scripts/plant_model.gd")
+const _ModelReview = preload("res://scripts/model_review.gd")
+
 ## The width of the panels at the sides; the Rounds panel at the bottom is wider.
 const PANEL_W := 280.0
 const FONT_SIZE := 12
@@ -83,6 +87,11 @@ var _hud_before := {}
 var world_env: Environment
 
 var world: Node3D
+## The 3D model of the plant DWSIM imported, drawn under the equipment (plant_model.gd).
+var plant_model: Node3D
+## The review of the plant model's groups (model_review.gd).
+var model_review: Node3D
+var _model_fitted := ""
 var items_root: Node3D
 var lines_root: Node3D
 var insulation_root: Node3D
@@ -123,6 +132,15 @@ var _fitted := false
 
 
 func _ready() -> void:
+	var convert: PackedStringArray = _ModelConvert.requested()
+	if convert.size() == 2:
+		# started by the model import of DWSIM only to convert a file: nothing else is built
+		set_process(false)
+		set_physics_process(false)
+		set_process_input(false)
+		set_process_unhandled_input(false)
+		get_tree().quit(_ModelConvert.run(convert[0], convert[1]))
+		return
 	get_window().title = "DWSIM 3D"
 	_build_world()
 	terrain = SiteTerrain.new(self)
@@ -157,7 +175,12 @@ func _ready() -> void:
 	var env_panel := surroundings.build_panel(_panel_style())
 	_glass(env_panel)
 	env_panel.name = "environment_panel"
+	plant_model.add_rows(env_panel.get_child(0) as GridContainer, self)
 	hud.add_child(env_panel)
+	var review_panel: PanelContainer = model_review.build_panel(_panel_style())
+	_glass(review_panel, 0.0)
+	review_panel.name = "review_panel"
+	hud.add_child(review_panel)
 	crew = PlantCrew.new(self)
 	add_child(crew)
 	maintenance = PlantMaintenance.new(self)
@@ -303,6 +326,15 @@ func _build_world() -> void:
 	labels_root = world.get_node("labels")
 	values_root = world.get_node("values")
 	values_root.visible = false
+	plant_model = _PlantModel.new()
+	plant_model.name = "plant_model"
+	world.add_child(plant_model)
+	plant_model.loaded.connect(_on_model_loaded)
+	model_review = _ModelReview.new()
+	model_review.name = "model_review"
+	model_review.main = self
+	world.add_child(model_review)
+	model_review.loaded.connect(_on_model_loaded)
 
 	ground = MeshInstance3D.new()
 	ground.mesh = PlaneMesh.new()
@@ -352,7 +384,7 @@ func _fit_ground() -> void:
 ## The corners of every solid of the plant, for a tight fit of the view.
 func _corners() -> PackedVector3Array:
 	var pts := PackedVector3Array()
-	for root in [items_root, lines_root, rack_root]:
+	for root in _drawn_roots():
 		for mi in root.find_children("*", "MeshInstance3D", true, false):
 			var b: AABB = mi.global_transform * mi.get_aabb()
 			for i in 8:
@@ -364,10 +396,25 @@ func _corners() -> PackedVector3Array:
 	return pts
 
 
+## The roots whose solids make the plant's bounds: the equipment, the lines and the rack when
+## they are shown, and the imported plant model when there is one and it is shown.
+func _drawn_roots() -> Array:
+	var roots := []
+	if items_root.visible:
+		roots.append_array([items_root, lines_root, rack_root])
+	if plant_model != null and plant_model.has_model() and plant_model.visible:
+		roots.append(plant_model)
+	if model_review != null and model_review.has_view():
+		roots.append(model_review)
+	if roots.is_empty():
+		roots = [items_root, lines_root, rack_root]
+	return roots
+
+
 func _bounds() -> AABB:
 	var box := AABB()
 	var first := true
-	for root in [items_root, lines_root, rack_root]:
+	for root in _drawn_roots():
 		for mi in root.find_children("*", "MeshInstance3D", true, false):
 			var b: AABB = mi.global_transform * mi.get_aabb()
 			if first:
@@ -407,6 +454,15 @@ func _on_message(m: Dictionary) -> void:
 				_pending_select = str(m.get("id", ""))
 		"error":
 			_show_toast("DWSIM: " + str(m.get("message", "")))
+		"model.status":
+			plant_model.on_status(m)
+		"model.groups":
+			model_review.on_groups(m)
+		"review.open":
+			# window-only, from a messages file of the offline mode: open the review on some groups
+			model_review.enter()
+			if m.has("select"):
+				model_review.select(m["select"])
 		"bye":
 			get_tree().quit()
 
@@ -432,6 +488,7 @@ func _load_scene(scene: Dictionary) -> void:
 			_add_item(it)
 	_set_lines(scene.get("lines", []))
 	_set_rack(scene.get("rack", null))
+	plant_model.set_info(scene.get("model"))
 	warnings = scene.get("warnings", [])
 	terrain.rebuild_all()
 	_after_change()
@@ -469,6 +526,8 @@ func _apply_delta(m: Dictionary) -> void:
 		_set_lines(m["lines"])
 	if m.has("rack"):
 		_set_rack(m["rack"])
+	if m.has("model"):
+		plant_model.set_info(m["model"])
 	if m.has("name"):
 		scene_name = str(m["name"])
 	if m.has("warnings"):
@@ -524,7 +583,33 @@ func _read_site(site) -> void:
 		site_builder.set_budget(site.get("budget", {}) if site is Dictionary else {})
 
 
+## The model came (or went): the ground, the shadows and the site fit the plant again, and the
+## view takes in the whole model the first time it is shown.
+func _on_model_loaded() -> void:
+	apply_model_replacement()
+	if props != null:
+		props.refresh()
+	_fit_ground()
+	if plant_model.has_model() and _model_fitted != plant_model.glb:
+		_model_fitted = plant_model.glb
+		rig.fit_points(_corners(), _aspect())
+	_update_title()
+
+
+func refit_ground() -> void:
+	_fit_ground()
+
+
+## Shows or hides what DWSIM builds from the flowsheet: the equipment, the lines, the rack and
+## their labels, so an imported plant model can be seen alone.
+func set_equipment_visible(on: bool) -> void:
+	for root in [items_root, lines_root, insulation_root, rack_root, labels_root]:
+		root.visible = on
+	_fit_ground()
+
+
 func _after_change() -> void:
+	apply_model_replacement()
 	# the items were built again: the hover marks a node that may be gone
 	_hover_id = ""
 	_hover_box.visible = false
@@ -580,6 +665,79 @@ func _add_item(it: Dictionary) -> void:
 	labels_root.add_child(label)
 	entries[id] = {"node": node, "data": it, "kind": "item", "label": label}
 	label.visible = _label_shown(id)
+	_apply_model_item(id)
+
+
+## Whether the imported plant model stands in for the equipment it shows.
+func model_replaces() -> bool:
+	return plant_model != null and plant_model.has_model() and plant_model.show_model
+
+
+var _proxy_mat: StandardMaterial3D
+
+
+## An item whose object a group of the plant model stands for: the model shows it, so the item's
+## own solids hide and an invisible box of the group's size takes their place, for picking, the
+## label, the values and the selection. Without the model, the item draws itself again.
+func _apply_model_item(id: String) -> void:
+	var e: Dictionary = entries.get(id, {})
+	if e.is_empty() or e["kind"] != "item":
+		return
+	var info = e["data"].get("model")
+	var node: Node3D = e["node"]
+	var proxy: MeshInstance3D = node.get_node_or_null("model_proxy")
+	if not (info is Dictionary):
+		if proxy != null:
+			proxy.queue_free()
+		return
+	var replace := model_replaces()
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		if mi != proxy:
+			mi.visible = not replace
+	if proxy == null:
+		if _proxy_mat == null:
+			_proxy_mat = StandardMaterial3D.new()
+			_proxy_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_proxy_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_proxy_mat.albedo_color = Color(1, 1, 1, 0)
+		proxy = MeshInstance3D.new()
+		proxy.name = "model_proxy"
+		proxy.mesh = BoxMesh.new()
+		proxy.material_override = _proxy_mat
+		proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.add_child(proxy)
+	var lo: Vector3 = SceneBuilder.vec(info.get("min", [0, 0, 0]))
+	var hi: Vector3 = SceneBuilder.vec(info.get("max", [0, 0, 0]))
+	var box := AABB(lo, Vector3.ZERO).expand(hi)
+	(proxy.mesh as BoxMesh).size = box.size.max(Vector3(0.05, 0.05, 0.05))
+	proxy.global_transform = Transform3D(Basis(), box.get_center())
+	proxy.visible = replace
+	var label: Label3D = e.get("label")
+	if label != null:
+		if replace:
+			# the objects of one group (the two sides of an exchanger) stack their labels
+			var same := []
+			for other in entries.keys():
+				var od = entries[other]["data"].get("model")
+				if entries[other]["kind"] == "item" and od is Dictionary and str(od.get("group", "")) == str(info.get("group", "")):
+					same.append(str(other))
+			same.sort()
+			var k := same.find(id)
+			label.position = Vector3(box.get_center().x, box.end.y + 0.6 + 0.9 * maxi(k, 0), box.get_center().z)
+		else:
+			var b := _node_bounds(node)
+			label.position = Vector3(b.get_center().x, b.end.y + 0.6, b.get_center().z)
+
+
+## Every item and line again, after the model came, went, or was shown or hidden.
+func apply_model_replacement() -> void:
+	var replace := model_replaces()
+	for id in entries.keys():
+		var e: Dictionary = entries[id]
+		if e["kind"] == "item":
+			_apply_model_item(id)
+		elif e["kind"] == "line" and bool(e["data"].get("replaced", false)):
+			(e["node"] as Node3D).visible = not replace
 
 
 func _remove_entry(id: String) -> void:
@@ -762,7 +920,11 @@ func _pick(screen: Vector2) -> String:
 		var node = entries[id]["node"]
 		if node == null or not is_instance_valid(node):
 			continue
+		if not node.is_visible_in_tree():
+			continue
 		for mi in node.find_children("*", "MeshInstance3D", true, false):
+			if not mi.is_visible_in_tree():
+				continue
 			var box: AABB = mi.global_transform * mi.get_aabb()
 			var hit = box.intersects_ray(from, dirv)
 			if hit != null:
@@ -792,6 +954,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_mouse = (event as InputEventMouseMotion).position
 		_mouse_dirty = true
+	if model_review != null and model_review.handle(event):
+		return
 	if site_builder != null and site_builder.handle(event):
 		return
 	if tools != null and tools.handle(event):
@@ -1185,6 +1349,8 @@ func _build_hud() -> void:
 
 func _process(delta: float) -> void:
 	var size := _viewport_size()
+	if model_review != null and model_review.panel != null and model_review.panel.visible:
+		model_review.panel.position = Vector2(size.x - model_review.panel.size.x - 12, 12)
 	card.position = Vector2(size.x - card.size.x - 12, 12)
 	info_panel.position = Vector2(size.x - info_panel.size.x - 12, card.position.y + (card.size.y + 12 if card.visible else 0))
 	toast.position = Vector2(14, size.y - 34)
@@ -1245,6 +1411,17 @@ func _update_title() -> void:
 			n_lines += 1
 	var state := link.state if link != null else "offline"
 	var text := "%d items, %d lines" % [n_items, n_lines]
+	if plant_model != null and not plant_model.info.is_empty():
+		text += ", plant model " + str(plant_model.info.get("name", ""))
+		if plant_model.loading:
+			text += " (loading)"
+		elif not bool(plant_model.info.get("found", true)) and str(plant_model.info.get("glb", "")) == "":
+			text += " (file not found)"
+		var c: String = plant_model.counts()
+		if c != "":
+			text += " (" + c + ")"
+	if plant_model != null and plant_model.status != "":
+		text += "\n" + plant_model.status
 	if state != "connected":
 		text += "  (" + state + ")"
 	if warnings.size() > 0:
@@ -1331,6 +1508,28 @@ func _capture_for_link(m: Dictionary) -> void:
 
 
 ## Without DWSIM: draws a saved scene and, when asked, saves pictures of it and quits.
+func _measure(seconds: float) -> void:
+	OS.low_processor_usage_mode = false
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	for i in 30:
+		await get_tree().process_frame
+	var frames := Engine.get_frames_drawn()
+	var start := Time.get_ticks_msec()
+	var worst := 0.0
+	var last := start
+	while Time.get_ticks_msec() - start < seconds * 1000.0:
+		await get_tree().process_frame
+		var now := Time.get_ticks_msec()
+		worst = maxf(worst, now - last)
+		last = now
+	var elapsed := (Time.get_ticks_msec() - start) / 1000.0
+	var fps := (Engine.get_frames_drawn() - frames) / maxf(elapsed, 0.001)
+	print("measure: %.1f fps, slowest frame %.1f ms, %d draw calls, %d primitives, video memory %.0f MB" % [
+		fps, worst, Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+		Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),
+		Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0])
+
+
 func _run_offline() -> void:
 	var scene_file := ""
 	var capture_dir := ""
@@ -1357,6 +1556,12 @@ func _run_offline() -> void:
 		return
 	var scene: Dictionary = parsed.get("scene", parsed) if parsed.get("type", "") == "scene.full" else parsed
 	_load_scene(scene)
+	if plant_model.loading:
+		await plant_model.loaded
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--hide-equipment":
+			set_equipment_visible(false)
+			rig.fit_points(_corners(), _aspect())
 	# more messages, as DWSIM would send them (values, a selection), from "--dwsim-messages=file"
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--dwsim-messages="):
@@ -1365,9 +1570,22 @@ func _run_offline() -> void:
 				for msg in more:
 					if msg is Dictionary:
 						_on_message(msg)
+	if model_review.loading:
+		await model_review.loaded
+	if model_review.active:
+		for arg in OS.get_cmdline_user_args():
+			if arg == "--review-frame" and not model_review.selected_groups.is_empty():
+				model_review.frame(model_review.selected_groups[0])
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--rounds":
 			crew.panel.visible = true
+	# "--measure=<s>": draws without vsync for that long, prints the frame rate, the draw calls,
+	# the triangles and the video memory, and quits (a check of how heavy a scene is)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--measure="):
+			await _measure(float(arg.get_slice("=", 1)))
+			get_tree().quit()
+			return
 	if capture_dir == "":
 		return
 	# "--capture-after=<s>": let the plant live a while first (the rounds, the flow)
