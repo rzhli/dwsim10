@@ -87,11 +87,17 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
                 AddEnergyStreams(items, ids, model, fs);
             }
 
+            // a line of an item's own (a column's overhead line, a pipe of a network) belongs to that
+            // item: the window selects and edits the item when the line is clicked
+            var owners = new Dictionary<string, string>();
+            foreach (var item in model.Equipment)
+                if (item.Tag != null && !owners.ContainsKey(item.Tag)) owners[item.Tag] = item.Name;
             var lines = new JArray();
             foreach (var run in model.Pipes.Where(r => r.Path.Count > 1))
                 lines.Add(new JObject
                 {
                     ["id"] = run.Name,
+                    ["owner"] = run.Name == null && run.From == run.To && run.From != null && owners.TryGetValue(run.From, out var owner) ? owner : null,
                     ["tag"] = run.Tag,
                     ["desc"] = "Line " + run.Tag + " (" + run.Size + ", " + (run.Phase ?? "").ToLowerInvariant() + "), " + run.From + " to " + run.To,
                     ["c"] = run.Color,
@@ -114,12 +120,26 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
                 ["rack"] = null,
                 ["warnings"] = new JArray(model.Warnings)
             };
+            if (fs != null)
+            {
+                var site = SiteLayout.LoadSite(fs);
+                scene["site"] = new JObject { ["adopted"] = site.Adopted, ["budget"] = SiteCatalog.Budget(site.Items, SiteLayout.LoadTerrain(fs)) };
+                var terrain = SiteLayout.LoadTerrain(fs);
+                scene["terrain"] = terrain == null ? null : JObject.FromObject(terrain);
+            }
             if (model.Rack != null)
                 scene["rack"] = new JObject
                 {
                     ["x0"] = model.Rack.X0, ["x1"] = model.Rack.X1, ["y0"] = model.Rack.Y0, ["w"] = model.Rack.Width,
                     ["top"] = model.Rack.Top, ["bay"] = PipeRack.BayLength, ["beam"] = PipeRack.BeamHeight
                 };
+            // the posts under the lines that run overhead off the rack: [x, y, z of the lowest pipe bottom, dx, dy, crossbar width]
+            if (model.Supports.Count > 0)
+            {
+                if (scene["rack"] == null || scene["rack"].Type == JTokenType.Null) scene["rack"] = new JObject();
+                scene["rack"]["supports"] = new JArray(model.Supports.Select(s => new JArray(
+                    Math.Round(s.Item1.X), Math.Round(s.Item1.Y), Math.Round(s.Item1.Z), Math.Round(s.Item2.X, 3), Math.Round(s.Item2.Y, 3), Math.Round(s.Item2.Z))));
+            }
             return scene;
         }
 
@@ -203,15 +223,18 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
         }
 
         /// <summary>
-        /// The buildings of the site (control rooms) as items without solids ("site": the kind):
-        /// the window draws them, and they move, turn and go like any item.
+        /// The objects of the site (see <see cref="SiteCatalog"/>) as items without solids: "site"
+        /// (the kind), "cat", "shape", and "points", "variant" and "scale" when they have them. The
+        /// window draws them, and they move, turn and go like any item. The scene also says whether
+        /// the site was adopted ("site") and carries the relief of the ground ("terrain").
         /// </summary>
         static void AddSite(JArray items, HashSet<string> ids, IFlowsheet fs)
         {
             foreach (var b in SiteLayout.Load(fs))
             {
                 if (b?.Id == null) continue;
-                items.Add(new JObject
+                var e = SiteCatalog.Find(b.Kind);
+                var item = new JObject
                 {
                     ["id"] = Unique(ids, b.Id),
                     ["tag"] = SiteLayout.NameOf(b.Kind),
@@ -225,8 +248,14 @@ namespace DWSIM.Extensions.SolidCraft.Viewer3D
                     ["label"] = SiteLayout.NameOf(b.Kind),
                     ["props"] = new JObject(),
                     ["parts"] = new JArray(),
-                    ["ports"] = new JArray()
-                });
+                    ["ports"] = new JArray(),
+                    ["cat"] = e?.Category,
+                    ["shape"] = (e?.Shape ?? SiteCatalog.Shape.Point).ToString().ToLowerInvariant()
+                };
+                if (b.Points != null) item["points"] = new JArray(b.Points.Select(p => new JArray(p[0], p[1])));
+                if (b.Variant != null) item["variant"] = b.Variant;
+                if (b.Scale != 1.0) item["scale"] = b.Scale;
+                items.Add(item);
             }
         }
 

@@ -21,6 +21,8 @@ func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	if item_id == "build":
 		_run_build()
+	elif item_id == "site":
+		_run_site()
 	elif item_id.begins_with("edit:"):
 		_run_edit(item_id.substr(5))
 	else:
@@ -137,6 +139,257 @@ func _run_build() -> void:
 	main.link.send({"type": "select", "ids": [cooler]})
 
 
+## The build bar self-test ("site"): opens the bar (the window's own site becomes objects), picks
+## categories and objects with clicks, builds two trees (the second turned with R), a car and an
+## administration building, checks that the ghost turns red over the equipment, deletes a tree with
+## Delete and undoes it, draws a road, gravel, a parking lot and a fence, tries a road across the
+## equipment, demolishes a car and the drums with the bulldozer, and writes what the site holds to
+## selftest_site.json.
+func _run_site() -> void:
+	OS.low_processor_usage_mode = false
+	for i in 600:
+		if not main.entries.is_empty():
+			break
+		await _wait(0.1)
+	await _wait(1.0)
+	_key(KEY_ESCAPE)
+	_key(KEY_F1)
+	await _shot("site_0_before")
+	_key(KEY_U)
+	for i in 100:
+		if main.site_adopted:
+			break
+		await _wait(0.1)
+	await _wait(1.0)
+	await _shot("site_1_adopted")
+	var cam: Camera3D = main.rig.camera
+	var box: AABB = main._bounds()
+	var y := box.position.y
+	var c := box.get_center()
+	var sb: SiteBuilder = main.site_builder
+
+	await _click((sb._cat_buttons["Nature"] as Button).get_global_rect().get_center())
+	await _wait(3.0)
+	await _shot("site_2_nature", false)
+	await _click((sb._grid.get_node("site_tree") as Button).get_global_rect().get_center())
+	await _wait(0.3)
+	var spot := Vector3(c.x - 8.0, y, box.end.z + 10.0)
+	_mouse_move(cam.unproject_position(spot), 0)
+	await _wait(0.5)
+	await _shot("site_3_ghost", false)
+	await _click(cam.unproject_position(spot))
+	await _wait(1.5)
+	_key(KEY_R)
+	var spot2 := Vector3(c.x - 14.0, y, box.end.z + 10.0)
+	_mouse_move(cam.unproject_position(spot2), 0)
+	await _wait(0.3)
+	await _click(cam.unproject_position(spot2))
+	await _wait(1.5)
+	# over the equipment the ghost turns red and the click builds nothing
+	_mouse_move(cam.unproject_position(c), 0)
+	await _wait(0.3)
+	var red: bool = not sb._ok
+	await _shot("site_4_red", false)
+	await _click(cam.unproject_position(c))
+	await _wait(1.0)
+	_key(KEY_ESCAPE)
+
+	await _click((sb._cat_buttons["Vehicles"] as Button).get_global_rect().get_center())
+	await _wait(2.0)
+	await _click((sb._grid.get_node("site_suv") as Button).get_global_rect().get_center())
+	var spot3 := Vector3(c.x - 20.0, y, box.end.z + 10.0)
+	_mouse_move(cam.unproject_position(spot3), 0)
+	await _wait(0.3)
+	await _click(cam.unproject_position(spot3))
+	await _wait(1.5)
+	_key(KEY_ESCAPE)
+	await _click((sb._cat_buttons["Buildings"] as Button).get_global_rect().get_center())
+	await _wait(3.0)
+	await _shot("site_5_buildings", false)
+	await _click((sb._grid.get_node("site_admin") as Button).get_global_rect().get_center())
+	var spot4 := Vector3(box.end.x + 30.0, y, c.z)
+	_mouse_move(cam.unproject_position(spot4), 0)
+	await _wait(0.3)
+	await _click(cam.unproject_position(spot4))
+	_mouse_move(Vector2(700, 20), 0)
+	# the building rises out of a cloud of dust
+	for i in 40:
+		if main.effects.events.any(func(e): return str(e).begins_with("built site:admin")):
+			break
+		await get_tree().process_frame
+	await _close_up(spot4, 45.0, 0.25, "site_6a_dust")
+	await _wait(1.5)
+	_key(KEY_ESCAPE)
+	await _wait(0.5)
+	await _shot("site_6_built")
+
+	# lines and areas: a road dragged in one run, a fence clicked point by point and finished with
+	# Enter, gravel dragged as a rectangle, a parking lot clicked corner by corner and finished with a
+	# double click, and a road across the equipment, which is refused
+	await _click((sb._cat_buttons["Roads and paving"] as Button).get_global_rect().get_center())
+	await _wait(3.0)
+	await _click((sb._grid.get_node("site_road") as Button).get_global_rect().get_center())
+	var r0 := Vector3(box.position.x - 25.0, y, box.end.z + 25.0)
+	var r1 := Vector3(box.end.x + 25.0, y, box.end.z + 25.0)
+	await _drag(cam.unproject_position(r0), cam.unproject_position(r1))
+	await _wait(1.5)
+	await _drag(cam.unproject_position(Vector3(box.position.x - 5.0, y, c.z)), cam.unproject_position(Vector3(box.end.x + 5.0, y, c.z)))
+	await _wait(1.0)
+	await _click((sb._grid.get_node("site_gravel") as Button).get_global_rect().get_center())
+	await _drag(cam.unproject_position(Vector3(box.position.x - 30.0, y, c.z - 10.0)), cam.unproject_position(Vector3(box.position.x - 20.0, y, c.z + 5.0)))
+	await _wait(1.5)
+	await _click((sb._grid.get_node("site_parking") as Button).get_global_rect().get_center())
+	var lot := [Vector3(c.x + 5.0, y, box.end.z + 30.0), Vector3(c.x + 25.0, y, box.end.z + 30.0),
+		Vector3(c.x + 25.0, y, box.end.z + 40.0), Vector3(c.x + 5.0, y, box.end.z + 40.0)]
+	for i in 3:
+		_mouse_move(cam.unproject_position(lot[i]), 0)
+		await _click(cam.unproject_position(lot[i]))
+		await _wait(0.2)
+	_mouse_move(cam.unproject_position(lot[3]), 0)
+	await _wait(0.3)
+	await _shot("site_8_drawing", false)
+	_double_click(cam.unproject_position(lot[3]))
+	await _wait(1.5)
+	await _click((sb._cat_buttons["Fences and barriers"] as Button).get_global_rect().get_center())
+	await _wait(3.0)
+	await _click((sb._grid.get_node("site_fence") as Button).get_global_rect().get_center())
+	for q in [Vector3(box.end.x + 25.0, y, c.z - 10.0), Vector3(box.end.x + 25.0, y, c.z + 10.0), Vector3(box.end.x + 35.0, y, c.z + 10.0)]:
+		_mouse_move(cam.unproject_position(q), 0)
+		await _click(cam.unproject_position(q))
+		await _wait(0.2)
+	_key(KEY_ENTER)
+	await _wait(1.5)
+	_key(KEY_ESCAPE)
+	_key(KEY_ESCAPE)
+	await _wait(0.3)
+	await _shot("site_9_drawn")
+	await _click(sb._budget_button.get_global_rect().get_center())
+	await _wait(0.5)
+	await _shot("site_9b_budget")
+	await _click(sb._budget_button.get_global_rect().get_center())
+
+	# the bulldozer: a click on the car built above, and a rectangle over the drums of the storage corner
+	await _click(sb._demolish_button.get_global_rect().get_center())
+	await _wait(0.3)
+	await _click(cam.unproject_position(spot3 + Vector3(0, 0.8, 0)))
+	for i in 40:
+		if main.effects.events.any(func(e): return str(e).begins_with("demolished site:suv")):
+			break
+		await get_tree().process_frame
+	await _close_up(spot3, 22.0, 0.35, "site_10a_rubble")
+	await _wait(1.5)
+	var drums := AABB()
+	var first := true
+	for id in main.entries.keys():
+		if str(main.entries[id]["data"].get("site", "")) == "barrel":
+			var at: Vector3 = (main.entries[id]["node"] as Node3D).position
+			drums = AABB(at, Vector3.ZERO) if first else drums.expand(at)
+			first = false
+	drums = drums.grow(0.6)
+	await _drag(cam.unproject_position(Vector3(drums.position.x, y, drums.position.z)), cam.unproject_position(Vector3(drums.end.x, y, drums.end.z)))
+	await _wait(1.5)
+	_key(KEY_ESCAPE)
+	await _shot("site_10_demolished")
+	var shapes := {}
+	for id in main.entries.keys():
+		var d: Dictionary = main.entries[id]["data"]
+		var k := str(d.get("site", ""))
+		if k in ["road", "fence", "gravel", "parking"]:
+			if not shapes.has(k):
+				shapes[k] = []
+			shapes[k].append((d.get("points", []) as Array).size())
+
+	# the terrain: a hill in the woods to the east with a tree on top, a pond in the woods to the
+	# west, the hill smoothed, and a try at the middle of the plant, which stays flat
+	await _click((sb._cat_buttons["Terrain"] as Button).get_global_rect().get_center())
+	await _wait(0.5)
+	await _click((sb._grid.get_node("size_large") as Button).get_global_rect().get_center())
+	await _wait(0.3)
+	await _click((sb._grid.get_node("terrain_raise") as Button).get_global_rect().get_center())
+	var hill := Vector3(box.end.x + 40.0, y, c.z + 30.0)
+	await _hold(cam.unproject_position(hill), 2.0)
+	await _wait(1.5)
+	await _click((sb._grid.get_node("terrain_smooth") as Button).get_global_rect().get_center())
+	await _hold(cam.unproject_position(hill + Vector3(0, main.terrain.height_at(hill.x, hill.z), 0)), 0.6)
+	await _wait(1.0)
+	await _click((sb._grid.get_node("terrain_raise") as Button).get_global_rect().get_center())
+	await _hold(cam.unproject_position(c), 0.8)
+	await _wait(1.0)
+	await _click((sb._grid.get_node("terrain_pond") as Button).get_global_rect().get_center())
+	var pond := Vector3(box.position.x - 40.0, y, c.z + 20.0)
+	await _hold(cam.unproject_position(pond), 2.0)
+	await _wait(1.5)
+	_key(KEY_ESCAPE)
+	await _click((sb._cat_buttons["Nature"] as Button).get_global_rect().get_center())
+	await _wait(2.0)
+	await _click((sb._grid.get_node("site_tree") as Button).get_global_rect().get_center())
+	var top := hill + Vector3(0, main.terrain.height_at(hill.x, hill.z), 0)
+	_mouse_move(cam.unproject_position(top), 0)
+	await _wait(0.3)
+	await _click(cam.unproject_position(top))
+	await _wait(2.0)
+	_key(KEY_ESCAPE)
+	var tree_y := -1.0
+	for id in main.entries.keys():
+		var n: Node3D = main.entries[id]["node"]
+		if str(main.entries[id]["data"].get("site", "")) == "tree" and Vector2(n.position.x, n.position.z).distance_to(Vector2(hill.x, hill.z)) < 3.0:
+			tree_y = n.position.y - y
+	var terrain_summary := {"hill": main.terrain.height_at(hill.x, hill.z), "middle": main.terrain.height_at(c.x, c.z),
+		"pond_depth": 0.0, "tree_on_hill": tree_y}
+	var t: SiteTerrain = main.terrain
+	var pi := int((pond.x - t.x0) / t.CELL)
+	var pj := int((-pond.z - t.y0) / t.CELL)
+	if t.has_grid():
+		terrain_summary["pond_depth"] = t.w[pj * t.nx + pi]
+	sb.close()
+	main.hud.visible = false
+	var keep: float = main.rig.view_size
+	main.rig.view_size *= 2.2
+	main.rig.apply()
+	await _wait(1.0)
+	await _shot("site_12_terrain", false)
+	main.rig.view_size = keep
+	main.rig.apply()
+	main.hud.visible = true
+	sb.open()
+
+	# Delete takes a tree away, Ctrl+Z brings it back
+	var tree := ""
+	for id in main.entries.keys():
+		if str(main.entries[id]["data"].get("site", "")) == "tree":
+			tree = id
+	main._set_selection([tree], true)
+	_key(KEY_DELETE)
+	await _wait(2.0)
+	var after_delete: bool = main.entries.has(tree)
+	_key(KEY_Z, true)
+	await _wait(2.0)
+	var counts := {}
+	for id in main.entries.keys():
+		var k := str(main.entries[id]["data"].get("site", ""))
+		if k != "":
+			counts[k] = int(counts.get(k, 0)) + 1
+	var rots := []
+	for id in main.entries.keys():
+		if str(main.entries[id]["data"].get("site", "")) == "tree":
+			rots.append(int(main.entries[id]["data"].get("rot", 0)))
+	var f := FileAccess.open(out_dir.path_join("selftest_site.json"), FileAccess.WRITE)
+	f.store_string(JSON.stringify({"adopted": main.site_adopted, "counts": counts, "red_over_equipment": red,
+		"deleted": not after_delete, "back_after_undo": main.entries.has(tree), "tree_rots": rots, "shapes": shapes,
+		"cash": sb._cash.text, "budget_total": float(sb._budget.get("total", -1.0)), "terrain": terrain_summary,
+		"effects": main.effects.events}))
+	f.close()
+	await _shot("site_7_done")
+	# the whole site from further away, without the panels
+	sb.close()
+	main.hud.visible = false
+	main.rig.view_size *= 2.0
+	main.rig.apply()
+	await _wait(1.0)
+	await _shot("site_11_overview", false)
+	main.hud.visible = true
+
+
 func _port(id: String, kind: String) -> Node3D:
 	for mi in main.tools._ports_root.get_children():
 		var p: Dictionary = mi.get_meta("port")
@@ -223,6 +476,58 @@ func _mouse_move(at: Vector2, mask: int = MOUSE_BUTTON_MASK_LEFT) -> void:
 	e.global_position = at
 	e.button_mask = mask
 	Input.parse_input_event(e)
+
+
+## A picture of a place from close by, without the panels, a moment after something happened there.
+func _close_up(at: Vector3, size: float, after: float, name: String) -> void:
+	var rig: CameraRig = main.rig
+	var keep_target := rig.target
+	var keep_size := rig.view_size
+	main.hud.visible = false
+	rig.target = at
+	rig.view_size = size
+	rig.apply()
+	await _wait(after)
+	await _shot(name, false)
+	rig.target = keep_target
+	rig.view_size = keep_size
+	rig.apply()
+	main.hud.visible = true
+
+
+## Presses the left button at one place, moves with it held and lets go at another.
+func _drag(from: Vector2, to: Vector2) -> void:
+	_mouse_move(from, 0)
+	await get_tree().process_frame
+	_mouse_button(from, true)
+	await get_tree().process_frame
+	for i in range(1, 11):
+		_mouse_move(from.lerp(to, i / 10.0))
+		await get_tree().process_frame
+	_mouse_button(to, false)
+	await get_tree().process_frame
+
+
+## Presses the left button at a place and holds it for a while (a brush of the terrain).
+func _hold(at: Vector2, seconds: float) -> void:
+	_mouse_move(at, 0)
+	await get_tree().process_frame
+	_mouse_button(at, true)
+	await _wait(seconds)
+	_mouse_button(at, false)
+	await get_tree().process_frame
+
+
+func _double_click(at: Vector2) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_LEFT
+	e.pressed = true
+	e.double_click = true
+	e.position = at
+	e.global_position = at
+	e.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(e)
+	_mouse_button(at, false)
 
 
 func _key(code: Key, ctrl := false) -> void:

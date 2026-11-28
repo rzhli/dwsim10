@@ -18,7 +18,7 @@ const SHORTCUTS := [
 	["6 / 7", "Front / right side"],
 	["Q / E", "Turn 90 degrees"],
 	["F", "Fit the plant"],
-	["L", "Labels"],
+	["L", "All labels (else the selected ones)"],
 	["I", "Insulation"],
 	["R", "Pipe rack"],
 	["G", "Grid"],
@@ -36,6 +36,7 @@ const SHORTCUTS := [
 	["V", "Values on the plant"],
 	["B", "Flyby of the plant (Esc stops)"],
 	["O", "The site around the plant"],
+	["U", "Build bar of the site"],
 	["K", "Rounds and maintenance log"],
 	["N", "Noon / night"],
 	["W", "Next weather"],
@@ -50,6 +51,16 @@ var rig: CameraRig
 var builder := SceneBuilder.new()
 var editor: LayoutEditor
 var tools: BuildTools
+var site_builder: SiteBuilder
+## The look and sound of building and demolishing (effects.gd).
+var effects: SiteEffects
+## Whether the site is made of objects the user can change (DWSIM's scene says it).
+var site_adopted := false
+var site_root: Node3D
+## The relief of the ground (terrain.gd).
+var terrain: SiteTerrain
+## The heights the window last sent to DWSIM, so their echo in the scene is not loaded again.
+var _terrain_sent := ""
 var title_panel: PanelContainer
 var _pending_select := ""
 var animate := true
@@ -84,6 +95,8 @@ var sun: DirectionalLight3D
 ## id -> {node, data, kind ("item" or "line"), label}
 var entries := {}
 var scene_name := ""
+## How many full scenes the window has drawn (a flowsheet of streams alone has no items, but has a scene).
+var scenes_loaded := 0
 var warnings: Array = []
 var selected: Array = []
 
@@ -112,6 +125,9 @@ var _fitted := false
 func _ready() -> void:
 	get_window().title = "DWSIM 3D"
 	_build_world()
+	terrain = SiteTerrain.new(self)
+	world.add_child(terrain)
+	SiteObjects.terrain = terrain
 	_build_hud()
 	editor = LayoutEditor.new(self)
 	add_child(editor)
@@ -154,6 +170,17 @@ func _ready() -> void:
 	var palette := tools.build_panel(_panel_style())
 	_glass(palette)
 	hud.add_child(palette)
+	site_builder = SiteBuilder.new(self)
+	add_child(site_builder)
+	effects = SiteEffects.new(self)
+	add_child(effects)
+	var site_bar := site_builder.build_bar(_panel_style())
+	_glass(site_bar, 0.0)
+	hud.add_child(site_bar)
+	_glass(site_builder.flyout, 0.0)
+	hud.add_child(site_builder.flyout)
+	_glass(site_builder.budget_panel)
+	hud.add_child(site_builder.budget_panel)
 	rig = CameraRig.new()
 	add_child(rig)
 	link = DwsimLink.new()
@@ -170,9 +197,12 @@ func _ready() -> void:
 	_hover_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_hover_mat.albedo_color = Color(1.0, 0.78, 0.25, 0.22)
 	_alarm_mat = StandardMaterial3D.new()
-	_alarm_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_alarm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_alarm_mat.albedo_color = Color(1.0, 0.12, 0.08, 0.55)
+	# an alarm shines, and blooms
+	_alarm_mat.emission_enabled = true
+	_alarm_mat.emission = Color(1.0, 0.1, 0.06)
+	_alarm_mat.emission_energy_multiplier = 3.0
 	_error_mat = StandardMaterial3D.new()
 	_error_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_error_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -205,6 +235,13 @@ func _ready() -> void:
 		test_out = OS.get_environment("DWSIM_VIEWER3D_SELFTEST_OUT")
 	if test_item != "" and test_out != "":
 		add_child(SelfTest.new(self, test_item, test_out))
+	# "--bake-site": the 3D view of a sample, made once and saved with it (see SiteBake)
+	if "--bake-site" in OS.get_cmdline_user_args():
+		var bake_out := ""
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("--bake-out="):
+				bake_out = arg.get_slice("=", 1)
+		add_child(SiteBake.new(self, bake_out))
 
 
 # --- world -----------------------------------------------------------------------------------
@@ -223,12 +260,22 @@ func _build_world() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.8
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
-	env.tonemap_mode = Environment.TONE_MAPPER_AGX
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.ssao_enabled = true
 	env.ssao_radius = 1.5
 	env.ssao_intensity = 1.6
+	# bloom: only what is brighter than the lit scene (lamps, flames, the arc, alarms) glows; the
+	# scene is drawn in HDR and the glow takes the light above the threshold before tone mapping
 	env.glow_enabled = true
-	env.glow_intensity = 0.25
+	env.glow_intensity = 0.9
+	env.glow_strength = 1.0
+	env.glow_bloom = 0.0
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
+	env.glow_hdr_threshold = 1.3
+	env.glow_hdr_scale = 2.0
+	env.glow_hdr_luminance_cap = 16.0
+	for lv in 7:
+		env.set_glow_level(lv, [0.0, 1.0, 1.0, 0.9, 0.7, 0.4, 0.0][lv])
 	var we := WorldEnvironment.new()
 	we.environment = env
 	world_env = env
@@ -244,11 +291,12 @@ func _build_world() -> void:
 
 	world = Node3D.new()
 	add_child(world)
-	for n in ["items", "lines", "insulation", "rack", "labels", "values"]:
+	for n in ["items", "site", "lines", "insulation", "rack", "labels", "values"]:
 		var node := Node3D.new()
 		node.name = n
 		world.add_child(node)
 	items_root = world.get_node("items")
+	site_root = world.get_node("site")
 	lines_root = world.get_node("lines")
 	insulation_root = world.get_node("insulation")
 	rack_root = world.get_node("rack")
@@ -339,6 +387,7 @@ func _on_message(m: Dictionary) -> void:
 		"welcome":
 			scene_name = str(m.get("name", ""))
 			tools.set_palette(m.get("palette", []))
+			site_builder.set_catalog(m.get("site", []))
 			_update_title()
 		"scene.full":
 			_load_scene(m.get("scene", {}))
@@ -353,7 +402,9 @@ func _on_message(m: Dictionary) -> void:
 		"capture":
 			_capture_for_link(m)
 		"added":
-			_pending_select = str(m.get("id", ""))
+			# what the build bar builds is not selected: the tool stays for the next one
+			if str(m.get("for", "")) != "site.add":
+				_pending_select = str(m.get("id", ""))
 		"error":
 			_show_toast("DWSIM: " + str(m.get("message", "")))
 		"bye":
@@ -371,13 +422,18 @@ func _load_scene(scene: Dictionary) -> void:
 	for id in entries.keys():
 		_remove_entry(id)
 	entries.clear()
+	scenes_loaded += 1
 	scene_name = str(scene.get("name", scene_name))
+	_read_site(scene.get("site"))
+	# the relief first, so the objects of the site sit on it
+	terrain.load_from(scene.get("terrain"), false)
 	for it in scene.get("items", []):
 		if it is Dictionary:
 			_add_item(it)
 	_set_lines(scene.get("lines", []))
 	_set_rack(scene.get("rack", null))
 	warnings = scene.get("warnings", [])
+	terrain.rebuild_all()
 	_after_change()
 	if not _fitted:
 		_fitted = true
@@ -389,9 +445,21 @@ func _load_scene(scene: Dictionary) -> void:
 
 
 func _apply_delta(m: Dictionary) -> void:
-	for id in m.get("remove", []):
-		_remove_entry(str(id))
-		entries.erase(str(id))
+	var removed: Array = m.get("remove", [])
+	var fresh := []
+	for it in m.get("upsert", []):
+		if it is Dictionary and not entries.has(str(it.get("id", ""))):
+			fresh.append(str(it.get("id", "")))
+	# a few objects built or taken away play their effects; a change of many passes quietly
+	var loud := effects != null and not SiteEffects.quiet(fresh.size() + removed.size())
+	for id in removed:
+		var key := str(id)
+		if loud and entries.has(key) and _shows_effects(entries[key]):
+			var node: Node3D = entries[key]["node"]
+			entries[key]["node"] = null
+			effects.demolished(key, node)
+		_remove_entry(key)
+		entries.erase(key)
 	for it in m.get("upsert", []):
 		if it is Dictionary:
 			var id := str(it.get("id", ""))
@@ -405,7 +473,55 @@ func _apply_delta(m: Dictionary) -> void:
 		scene_name = str(m["name"])
 	if m.has("warnings"):
 		warnings = m["warnings"]
+	if loud:
+		for id in fresh:
+			if entries.has(id) and _shows_effects(entries[id]):
+				effects.built(id)
+	if m.has("site"):
+		_read_site(m["site"])
+	if m.has("terrain"):
+		var t = m["terrain"]
+		var sent: bool = t is Dictionary and str(t.get("h", "")) == _terrain_sent and _terrain_sent != ""
+		if not sent:
+			terrain.load_from(t)
+			redrape()
 	_after_change()
+
+
+## Whether an item rises and falls with effects: the objects of the site and the equipment, not the
+## badges of logical blocks, the instruments or the lines.
+func _shows_effects(e: Dictionary) -> bool:
+	if e.get("kind") != "item" or e.get("node") == null or not is_instance_valid(e["node"]):
+		return false
+	var d: Dictionary = e["data"]
+	return not bool(d.get("badge", false)) and not bool(d.get("inst", false))
+
+
+## Draws the objects of the site again, on the relief as it is now.
+func redrape() -> void:
+	for id in entries.keys():
+		var d: Dictionary = entries[id]["data"]
+		if entries[id]["kind"] == "item" and d.has("site"):
+			_remove_entry(id)
+			_add_item(d)
+
+
+## Sends the relief to DWSIM after a stroke of a brush, and puts the site back on it.
+func send_terrain() -> void:
+	var t := terrain.to_dict()
+	_terrain_sent = str(t["h"])
+	link.send({"type": "terrain", "terrain": t})
+	redrape()
+	if props != null:
+		props.refresh()
+	if surroundings != null:
+		surroundings.relight()
+
+
+func _read_site(site) -> void:
+	site_adopted = site is Dictionary and bool(site.get("adopted", false))
+	if site_builder != null:
+		site_builder.set_budget(site.get("budget", {}) if site is Dictionary else {})
 
 
 func _after_change() -> void:
@@ -426,6 +542,8 @@ func _after_change() -> void:
 		life.refresh()
 	if props != null:
 		props.refresh()
+	if surroundings != null:
+		surroundings.relight()
 	if crew != null:
 		crew.clear()
 	if maintenance != null:
@@ -437,22 +555,31 @@ func _after_change() -> void:
 func _add_item(it: Dictionary) -> void:
 	var id := str(it.get("id", ""))
 	var node := builder.item(it)
-	items_root.add_child(node)
+	var on_site := it.has("site")
+	(site_root if on_site else items_root).add_child(node)
+	if on_site and str(it.get("cat", "")) != "Buildings":
+		# a tree, a road or a car has no label
+		entries[id] = {"node": node, "data": it, "kind": "item", "label": null}
+		return
 	var label := Label3D.new()
 	label.text = str(it.get("tag", ""))
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.fixed_size = true
-	label.pixel_size = 0.0009
-	label.font_size = 26
-	label.outline_size = 8
+	# dark text with a white border; below 32 px the letters of the distance-field font go thin and
+	# the border swallows them
+	label.pixel_size = 0.0011
+	label.font_size = 32
+	label.outline_size = 6
 	label.modulate = Color(0.08, 0.1, 0.13)
-	label.outline_modulate = Color(1, 1, 1, 0.85)
+	label.outline_modulate = Color(1, 1, 1, 0.9)
 	label.no_depth_test = true
 	label.render_priority = 10
+	label.outline_render_priority = 9
 	var b := _node_bounds(node)
 	label.position = Vector3(b.get_center().x, b.end.y + 0.6, b.get_center().z)
 	labels_root.add_child(label)
 	entries[id] = {"node": node, "data": it, "kind": "item", "label": label}
+	label.visible = _label_shown(id)
 
 
 func _remove_entry(id: String) -> void:
@@ -488,7 +615,10 @@ func _set_rack(k) -> void:
 	for c in rack_root.get_children():
 		c.queue_free()
 	if k is Dictionary:
-		rack_root.add_child(builder.rack(k))
+		if k.has("x0"):
+			rack_root.add_child(builder.rack(k))
+		if k.has("supports"):
+			rack_root.add_child(builder.supports(k["supports"]))
 
 
 func _node_bounds(node: Node3D) -> AABB:
@@ -516,9 +646,24 @@ func _set_selection(ids: Array, tell_dwsim: bool) -> void:
 			selected.append(s)
 			_tint(s, true)
 	_show_info()
+	refresh_labels()
 	if tell_dwsim:
 		var real := selected.filter(func(id): return not str(id).begins_with("line#"))
 		link.send({"type": "select", "ids": real})
+
+
+## The tags of the items: all of them when the panel says so (L), else only those of the selection,
+## so that the tags do not crowd the plant.
+func refresh_labels() -> void:
+	for id in entries.keys():
+		var label = entries[id].get("label")
+		if label != null and is_instance_valid(label):
+			label.visible = _label_shown(id)
+
+
+func _label_shown(id: String) -> bool:
+	var all := surroundings != null and surroundings.all_labels
+	return all or selected.has(id)
 
 
 func _tint(id: String, on: bool) -> void:
@@ -582,6 +727,9 @@ func _set_hover(id: String) -> void:
 	_hover_box.visible = true
 	var d: Dictionary = entries[id]["data"]
 	var size := "%.1f x %.1f x %.1f m" % [box.size.x, box.size.z, box.size.y] if entries[id]["kind"] == "item" else ""
+	if d.has("site"):
+		# an object of the site: its estimated cost instead of its bounds
+		size = "about " + SiteBuilder.money(SiteObjects.cost_of(d))
 	_hover_tip.text = str(d.get("tag", "")) + ("
 " + size if size != "" else "")
 	_hover_tip.size = Vector2.ZERO
@@ -592,7 +740,7 @@ func _update_hover() -> void:
 	if not _mouse_dirty:
 		return
 	_mouse_dirty = false
-	var busy := _drag_button != MOUSE_BUTTON_NONE or (editor != null and editor._dragging)
+	var busy := _drag_button != MOUSE_BUTTON_NONE or (editor != null and editor._dragging) 		or (site_builder != null and site_builder.kind != "")
 	_set_hover("" if busy or _mouse.x < 0 else _pick(_mouse))
 	if _hover_tip.visible:
 		_hover_tip.position = _mouse + Vector2(16, 14)
@@ -622,6 +770,11 @@ func _pick(screen: Vector2) -> String:
 				if t < best:
 					best = t
 					best_id = id
+	# a line of an item's own (a column's overhead line, a pipe of a network) stands for its item
+	if entries.has(best_id) and entries[best_id]["kind"] == "line":
+		var owner = entries[best_id]["data"].get("owner")
+		if owner != null and entries.has(str(owner)):
+			return str(owner)
 	return best_id
 
 
@@ -639,6 +792,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_mouse = (event as InputEventMouseMotion).position
 		_mouse_dirty = true
+	if site_builder != null and site_builder.handle(event):
+		return
 	if tools != null and tools.handle(event):
 		return
 	if editor != null and editor.handle(event):
@@ -710,9 +865,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					props.visible = not props.visible
 					crew.visible = props.visible
 					maintenance.visible = props.visible
+					site_root.visible = props.visible
 				KEY_K:
 					crew.panel.visible = not crew.panel.visible
-				KEY_L: labels_root.visible = not labels_root.visible
+				KEY_L:
+					surroundings.set_all_labels(not surroundings.all_labels)
+					surroundings.save_settings()
 				KEY_I: insulation_root.visible = not insulation_root.visible
 				KEY_R: rack_root.visible = not rack_root.visible
 				KEY_G: grid.visible = not grid.visible
@@ -794,13 +952,14 @@ func _value_tags() -> void:
 		l.text = text
 		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		l.fixed_size = true
-		l.pixel_size = 0.0007
-		l.font_size = 22
+		l.pixel_size = 0.0009
+		l.font_size = 32
 		l.outline_size = 6
 		l.modulate = Color(0.05, 0.3, 0.55)
-		l.outline_modulate = Color(1, 1, 1, 0.85)
+		l.outline_modulate = Color(1, 1, 1, 0.9)
 		l.no_depth_test = true
 		l.render_priority = 9
+		l.outline_render_priority = 8
 		l.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 		l.position = at
 		values_root.add_child(l)
@@ -939,7 +1098,10 @@ func _light_theme() -> Theme:
 	t.set_stylebox("normal", "Button", box.call(Color(0.95, 0.96, 0.97), Color(0.78, 0.81, 0.85)))
 	t.set_stylebox("hover", "Button", box.call(Color(0.9, 0.93, 0.97), Color(0.24, 0.5, 0.84)))
 	t.set_stylebox("pressed", "Button", box.call(Color(0.84, 0.89, 0.96), Color(0.24, 0.5, 0.84)))
-	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+	t.set_stylebox("hover_pressed", "Button", box.call(Color(0.8, 0.86, 0.95), Color(0.24, 0.5, 0.84)))
+	t.set_stylebox("disabled", "Button", box.call(Color(0.93, 0.94, 0.95, 0.6), Color(0.85, 0.87, 0.9)))
+	t.set_color("font_disabled_color", "Button", Color(0.55, 0.58, 0.62))
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		t.set_color(c, "Button", dark)
 	return t
 
@@ -1035,11 +1197,20 @@ func _process(delta: float) -> void:
 	if animate:
 		var t := Time.get_ticks_msec() / 1000.0
 		for n in get_tree().get_nodes_in_group("spin"):
-			(n as Node3D).rotate_object_local(Vector3.UP, float(n.get_meta("spin", 1.0)) * delta)
+			(n as Node3D).rotate_object_local(n.get_meta("spin_axis", Vector3.UP), float(n.get_meta("spin", 1.0)) * delta)
 		for n in get_tree().get_nodes_in_group("blink"):
 			(n as Node3D).visible = fmod(t * float(n.get_meta("rate", 1.0)) + float(n.get_meta("phase", 0.0)), 1.0) < 0.6
 	if crew != null and crew.panel != null:
-		crew.panel.position = Vector2((size.x - crew.panel.size.x) / 2.0, size.y - crew.panel.size.y - 12)
+		var above := 12.0
+		if site_builder != null and site_builder.bar.visible:
+			var sb := site_builder.bar
+			sb.position = Vector2((size.x - sb.size.x) / 2.0, size.y - sb.size.y - 12)
+			above = sb.size.y + 24.0
+			var fo := site_builder.flyout
+			fo.position = Vector2((size.x - fo.size.x) / 2.0, size.y - above - fo.size.y)
+			if fo.visible:
+				above += fo.size.y + 12.0
+		crew.panel.position = Vector2((size.x - crew.panel.size.x) / 2.0, size.y - crew.panel.size.y - above)
 	var ep := hud.get_node_or_null("environment_panel") as Control
 	if ep != null:
 		ep.position = Vector2(12, size.y - ep.size.y - 12)
@@ -1047,6 +1218,12 @@ func _process(delta: float) -> void:
 		tools.palette_panel.position = Vector2(12, title_panel.position.y + title_panel.size.y + 12)
 	if editor != null and editor.panel != null:
 		editor.panel.position = Vector2(size.x - editor.panel.size.x - 12, size.y - editor.panel.size.y - 12)
+	if site_builder != null and site_builder.budget_panel != null:
+		var bp := site_builder.budget_panel
+		var below := 12.0
+		if editor != null and editor.panel != null and editor.panel.visible:
+			below += editor.panel.size.y + 12.0
+		bp.position = Vector2(size.x - bp.size.x - 12, size.y - bp.size.y - below)
 	if _toast_time > 0.0:
 		_toast_time -= delta
 		if _toast_time <= 0.0:
@@ -1061,7 +1238,9 @@ func _update_title() -> void:
 	var n_lines := 0
 	for e in entries.values():
 		if e["kind"] == "item":
-			n_items += 1
+			# the objects of the site are not items of the plant
+			if not (e["data"] as Dictionary).has("site"):
+				n_items += 1
 		else:
 			n_lines += 1
 	var state := link.state if link != null else "offline"

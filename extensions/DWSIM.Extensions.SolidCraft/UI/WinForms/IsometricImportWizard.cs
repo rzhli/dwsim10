@@ -37,10 +37,14 @@ namespace DWSIM.Extensions.SolidCraft
         WorkIndicator work;
         bool loading;
 
-        public IsometricImportWizard(IFlowsheet fs)
+        /// <summary>The pipe segment the last profile went into, null before one.</summary>
+        internal ISimulationObject Applied => session.Applied;
+
+        public IsometricImportWizard(IFlowsheet fs, string pipeTag = null)
         {
-            session = new IsometricImportSession(fs);
+            session = new IsometricImportSession(fs) { Target = pipeTag ?? "" };
             InitializeComponent();
+            if (session.Target != "") Text += " - " + session.Target;
         }
 
         private void IsometricImportWizard_Load(object sender, EventArgs e)
@@ -70,15 +74,16 @@ namespace DWSIM.Extensions.SolidCraft
 
         #region isometric
 
-        private void txtFile_TextChanged(object sender, EventArgs e) => btnRead.Enabled = File.Exists(txtFile.Text.Trim()) && reading == null;
+        private void txtFile_TextChanged(object sender, EventArgs e) => btnRead.Enabled = IsometricImport.FilesExist(txtFile.Text) && reading == null;
 
         private void btnBrowse_Click(object sender, EventArgs e)
         {
-            using (var d = new OpenFileDialog { Filter = "Isometrics (*.png, *.jpg, *.pdf, *.dxf, *.dwg)|" + string.Join(";", DrawingImportClient.Extensions.Select(x => "*" + x)) + "|All files|*.*" })
+            // a line drawn over several sheets: one PDF with a page per sheet, or a file per sheet
+            using (var d = new OpenFileDialog { Multiselect = true, Filter = "Isometrics (*.png, *.jpg, *.pdf, *.dxf, *.dwg)|" + string.Join(";", DrawingImportClient.Extensions.Select(x => "*" + x)) + "|All files|*.*" })
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
-                txtFile.Text = d.FileName;
-                ShowPreview(d.FileName);
+                txtFile.Text = string.Join("; ", d.FileNames);
+                ShowPreview(d.FileNames[0]);
             }
         }
 
@@ -139,7 +144,7 @@ namespace DWSIM.Extensions.SolidCraft
 
         void SetBusy(bool busy)
         {
-            btnRead.Enabled = !busy && File.Exists(txtFile.Text.Trim());
+            btnRead.Enabled = !busy && IsometricImport.FilesExist(txtFile.Text);
             btnCancelRead.Enabled = busy;
             btnOpenReading.Enabled = !busy;
             btnSaveReading.Enabled = !busy && session.Reading != null;
@@ -182,7 +187,7 @@ namespace DWSIM.Extensions.SolidCraft
         {
             if (session.Reading == null) return;
             if (wizard.SelectedPage == wpRoute) TakeRoute();
-            using (var d = new SaveFileDialog { Filter = "Isometric readings (*.json)|*.json", FileName = Path.GetFileNameWithoutExtension(session.File) + " - reading.json" })
+            using (var d = new SaveFileDialog { Filter = "Isometric readings (*.json)|*.json", FileName = Path.GetFileNameWithoutExtension(IsometricImport.Files(session.File).FirstOrDefault() ?? "isometric") + " - reading.json" })
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 session.SaveReading(d.FileName);
@@ -339,7 +344,7 @@ namespace DWSIM.Extensions.SolidCraft
                 dgvChecks.Rows[k].DefaultCellStyle.ForeColor = i.Level == ImportIssue.Levels.Error ? Color.DarkRed : i.Level == ImportIssue.Levels.Warning ? Color.DarkGoldenrod : SystemColors.ControlText;
             }
             var targets = session.Targets();
-            var keep = session.Applied?.GraphicObject.Tag ?? cbTarget.SelectedItem as string;
+            var keep = session.Applied?.GraphicObject.Tag ?? cbTarget.SelectedItem as string ?? (session.Target != "" ? session.Target : null);
             cbTarget.Items.Clear();
             cbTarget.Items.AddRange(targets.Cast<object>().ToArray());
             cbTarget.SelectedItem = keep != null && targets.Contains(keep) ? keep : targets[0];
@@ -371,9 +376,19 @@ namespace DWSIM.Extensions.SolidCraft
     /// <summary>Opens the isometric import in the Windows interface.</summary>
     internal static class IsometricImportPrompt
     {
-        internal static void Show(IFlowsheet fs)
+        internal static void Show(IFlowsheet fs) => Show(fs, null, null);
+
+        /// <summary>Opens the import for the pipe segment with this name (from its editor; null for any), and runs done
+        /// once it closes, with true when it wrote a hydraulic profile.</summary>
+        internal static void Show(IFlowsheet fs, string pipeName, Action<bool> done)
         {
-            using (var wizard = new IsometricImportWizard(fs)) wizard.ShowDialog(Form.ActiveForm);
+            bool applied;
+            using (var wizard = new IsometricImportWizard(fs, IsometricImportSession.TagOf(fs, pipeName)))
+            {
+                wizard.ShowDialog(Form.ActiveForm);
+                applied = wizard.Applied != null;
+            }
+            done?.Invoke(applied);
         }
     }
 }
